@@ -328,7 +328,10 @@ def cmd_eval(args: Any) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from . import __version__
+
     parser = argparse.ArgumentParser(prog="jinlin-agent", description="Jinlin Code Engineer Agent")
+    parser.add_argument("--version", action="version", version=f"jinlin-agent {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     def common(p: argparse.ArgumentParser) -> None:
