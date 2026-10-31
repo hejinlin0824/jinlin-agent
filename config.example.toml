@@ -1,0 +1,63 @@
+# Example user config: copy to ~/.jinlin-agent/config.toml
+# Project-level config (<repo>/.jinlin/config.toml) may only tighten security
+# settings; attempts to relax them are ignored and recorded as violations.
+
+[model]
+provider = "openai_compatible"
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-v4.1-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout_seconds = 180
+max_output_tokens = 8192
+context_window = 131072
+temperature = 0.0
+max_retries = 3
+
+[runtime]
+max_steps_per_turn = 40
+max_steps_per_session = 200
+max_model_calls = 120
+max_consecutive_tool_failures = 5
+max_tool_signature_repeats = 3
+default_tool_timeout_seconds = 120
+max_shell_timeout_seconds = 1800
+wall_clock_seconds = 14400
+max_total_tokens = 4000000
+checkpoint_every_steps = 5
+
+[workspace]
+allow_write = true
+allow_delete = false
+follow_symlinks = false
+max_file_bytes = 1048576
+
+[approval]
+shell_medium = "ask"
+shell_high = "ask"
+shell_destructive = "deny"
+network = "ask"
+file_delete = "ask"
+file_outside_workspace = "deny"
+install_dependencies = "ask"
+git_commit = "ask"
+git_push = "deny"
+
+[verification]
+require_for_code_changes = true
+run_baseline = true
+baseline_timeout_seconds = 300
+# Override the detected test command (argv array):
+# test_command = ["python", "-m", "pytest", "-q"]
+levels = ["L0", "L1", "L2", "L3", "L5"]
+
+[context]
+soft_threshold = 0.70
+hard_threshold = 0.85
+output_reserve_tokens = 8192
+max_recent_steps = 8
+max_file_tokens = 12000
+max_retrieval_tokens = 40000
+
+[sandbox]
+mode = "auto"     # auto | off | require
+level = "L1"

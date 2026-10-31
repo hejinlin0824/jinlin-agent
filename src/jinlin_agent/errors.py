@@ -1,0 +1,78 @@
+"""Stable error codes (spec §28)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+# Model
+MODEL_TIMEOUT = "MODEL_TIMEOUT"
+MODEL_RATE_LIMIT = "MODEL_RATE_LIMIT"
+MODEL_INVALID_RESPONSE = "MODEL_INVALID_RESPONSE"
+MODEL_CONTEXT_OVERFLOW = "MODEL_CONTEXT_OVERFLOW"
+MODEL_AUTH = "MODEL_AUTH"
+MODEL_CONNECTION = "MODEL_CONNECTION"
+
+# Tool
+TOOL_NOT_FOUND = "TOOL_NOT_FOUND"
+TOOL_SCHEMA_ERROR = "TOOL_SCHEMA_ERROR"
+TOOL_TIMEOUT = "TOOL_TIMEOUT"
+TOOL_EXECUTION_FAILED = "TOOL_EXECUTION_FAILED"
+TOOL_OUTPUT_TOO_LARGE = "TOOL_OUTPUT_TOO_LARGE"
+
+# Policy
+PATH_OUTSIDE_WORKSPACE = "PATH_OUTSIDE_WORKSPACE"
+PROTECTED_FILE_ACCESS = "PROTECTED_FILE_ACCESS"
+COMMAND_DENIED = "COMMAND_DENIED"
+APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+APPROVAL_DENIED = "APPROVAL_DENIED"
+SANDBOX_UNAVAILABLE = "SANDBOX_UNAVAILABLE"
+
+# Edit
+PATCH_CONFLICT = "PATCH_CONFLICT"
+PATCH_PARSE_ERROR = "PATCH_PARSE_ERROR"
+FILE_CHANGED_EXTERNALLY = "FILE_CHANGED_EXTERNALLY"
+WORKSPACE_DIRTY_CONFLICT = "WORKSPACE_DIRTY_CONFLICT"
+FILE_NOT_READ = "FILE_NOT_READ"
+
+# Context
+CONTEXT_BUILD_FAILED = "CONTEXT_BUILD_FAILED"
+CONTEXT_COMPACTION_FAILED = "CONTEXT_COMPACTION_FAILED"
+
+# Verification
+VERIFICATION_FAILED = "VERIFICATION_FAILED"
+COMPLETION_REJECTED = "COMPLETION_REJECTED"
+
+# Runtime
+BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+LOOP_DETECTED = "LOOP_DETECTED"
+SESSION_CORRUPTED = "SESSION_CORRUPTED"
+INTERRUPTED = "INTERRUPTED"
+CONFIG_INVALID = "CONFIG_INVALID"
+USER_CANCELLED = "USER_CANCELLED"
+RECOVERY_UNCERTAIN = "RECOVERY_UNCERTAIN"
+
+
+@dataclass
+class AgentError(Exception):
+    """An error that is safe to serialize into an event/tool result."""
+
+    code: str
+    message: str
+    retriable: bool = False
+    source: str = "runtime"
+    related_id: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        Exception.__init__(self, f"{self.code}: {self.message}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "retriable": self.retriable,
+            "source": self.source,
+            "related_id": self.related_id,
+            "details": self.details,
+        }
