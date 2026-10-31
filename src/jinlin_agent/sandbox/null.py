@@ -14,7 +14,7 @@ import threading
 import time
 from typing import Any
 
-from .base import ProcessHandle, RunResult, Sandbox
+from .base import ProcessHandle, RunResult, Sandbox, process_env
 
 _IS_WIN = os.name == "nt"
 
@@ -109,8 +109,7 @@ class NullSandbox(Sandbox):
     ) -> RunResult:
         t0 = time.monotonic()
         merged = dict(os.environ)
-        merged.setdefault("PYTHONUTF8", "1")
-        merged.setdefault("PYTHONIOENCODING", "utf-8:replace")
+        merged.update(process_env(self.workspace))
         if env:
             merged.update(env)
         kwargs: dict[str, Any] = {}
@@ -164,8 +163,7 @@ class NullSandbox(Sandbox):
         env: dict[str, str] | None = None,
     ) -> ProcessHandle:
         merged = dict(os.environ)
-        merged.setdefault("PYTHONUTF8", "1")
-        merged.setdefault("PYTHONIOENCODING", "utf-8:replace")
+        merged.update(process_env(self.workspace))
         if env:
             merged.update(env)
         kwargs: dict[str, Any] = {}

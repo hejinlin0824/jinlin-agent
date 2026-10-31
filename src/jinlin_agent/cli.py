@@ -319,7 +319,9 @@ def cmd_doctor(args: Any) -> int:
 def cmd_eval(args: Any) -> int:
     from .evalkit import run_suite
 
-    return run_suite(args.suite, Path(args.workspace or ".").resolve(), verbose=not args.quiet)
+    # eval never writes into the caller's directory unless one is given explicitly
+    base = Path(args.workspace).resolve() if args.workspace else None
+    return run_suite(args.suite, base, verbose=not args.quiet)
 
 
 # --------------------------------------------------------------------------- main
@@ -374,7 +376,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ev = sub.add_parser("eval", help="run the harness conformance / evaluation suite")
     ev.add_argument("--suite", default="all", choices=["all", "hcs", "e1e8"])
-    ev.add_argument("--workspace", default=".")
+    ev.add_argument("--workspace", default=None, help="optional base dir to keep probe fixtures (default: temp)")
     ev.add_argument("--quiet", action="store_true")
     ev.set_defaults(func=cmd_eval)
 

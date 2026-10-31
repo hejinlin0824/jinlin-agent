@@ -1,3 +1,0 @@
-# calc
-
-A tiny calculator.

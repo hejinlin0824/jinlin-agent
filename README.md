@@ -120,6 +120,8 @@ jinlin-agent --help
 | 沙箱 | `L1`：Windows Job Object 杀进程树 + 受限令牌（写限制）；不可用时**降级 `L0` 并在报告里如实标注**，绝不假装 |
 | 注入 | 仓库内容一律 `<untrusted>` 包装；权限由代码判定，提示词无法提权 |
 
+本机实测（Windows 11，标准用户）：`level=L1`、`engine=restricted-token+job-object`；workspace 内写成功；`C:\`、`C:\Windows\Temp`、用户 profile/Documents/AppData\Temp 写入均 `PermissionError`；超时/关停用 Job Object 杀整棵树。子进程的 `TMP/TEMP/TMPDIR` 被重定向到 `<workspace>/.jinlin/tmp`（L1 下系统临时目录不可写，否则 pytest/tempfile 会无故失败）。详见 `src/jinlin_agent/sandbox/windows.py` 头部注释与 `tests/test_sandbox_win.py`。
+
 > V1 的边界：网络访问没有防火墙级隔离（命令策略 + 审批控制），生产凭据不会被读取，但请把它当作"有守卫的本地工具"，而不是生产隔离环境。
 
 ---

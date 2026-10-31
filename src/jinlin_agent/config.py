@@ -105,6 +105,7 @@ DEFAULTS: dict[str, Any] = {
             ".git",
             ".hg",
             ".svn",
+            ".jinlin",
             "node_modules",
             ".venv",
             "venv",

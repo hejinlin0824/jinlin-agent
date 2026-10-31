@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from .domain import CompletionResult, VerificationLevel, VerificationRun, new_id, utcnow_iso
 from .errors import AgentError
+from .sandbox.base import process_env
 
 
 # --------------------------------------------------------------------------- detection
@@ -221,7 +222,10 @@ class Verifier:
             return None
         cmd = self.project.test_commands[0]
         result = self.sandbox.run(
-            cmd, str(self.workspace), timeout=int(self.config.verification.get("baseline_timeout_seconds", 300))
+            cmd,
+            str(self.workspace),
+            timeout=int(self.config.verification.get("baseline_timeout_seconds", 300)),
+            env=process_env(str(self.workspace)),
         )
         parsed = parse_test_output((result.stdout or "") + (result.stderr or ""), result.exit_code)
         self.baseline = {"command": cmd, "exit_code": result.exit_code, **parsed}
@@ -356,7 +360,7 @@ class Verifier:
             outputs = []
             failed = False
             for cmd in self.project.lint_commands[:2]:
-                res = self.sandbox.run(cmd, str(self.workspace), timeout=300)
+                res = self.sandbox.run(cmd, str(self.workspace), timeout=300, env=process_env(str(self.workspace)))
                 outputs.append(f"$ {' '.join(cmd)}\nexit={res.exit_code}\n{(res.stdout or '')[-4000:]}")
                 if res.exit_code != 0:
                     failed = True
@@ -384,7 +388,7 @@ class Verifier:
             targets = self._changed_test_targets()
             if targets and cmd and "-m" in cmd and "pytest" in cmd:
                 cmd = [*cmd, *targets]
-            res = self.sandbox.run(cmd, str(self.workspace), timeout=timeout)
+            res = self.sandbox.run(cmd, str(self.workspace), timeout=timeout, env=process_env(str(self.workspace)))
             combined = (res.stdout or "") + "\n" + (res.stderr or "")
             parsed = parse_test_output(combined, res.exit_code)
             run.command = cmd
@@ -418,7 +422,12 @@ class Verifier:
             run.reason_skipped = "no baseline (no test command or baseline disabled)"
         else:
             cmd = baseline["command"]
-            res = self.sandbox.run(cmd, str(self.workspace), timeout=int(self.config.runtime.get("max_shell_timeout_seconds", 1800)))
+            res = self.sandbox.run(
+                cmd,
+                str(self.workspace),
+                timeout=int(self.config.runtime.get("max_shell_timeout_seconds", 1800)),
+                env=process_env(str(self.workspace)),
+            )
             combined = (res.stdout or "") + "\n" + (res.stderr or "")
             now = parse_test_output(combined, res.exit_code)
             run.summary = {"baseline": baseline, "current": now}
@@ -589,8 +598,21 @@ class CompletionGate:
         out = []
         for line in (res.stdout or "").splitlines():
             if len(line) > 3:
-                out.append(line[3:].strip().strip('"'))
+                path = line[3:].strip().strip('"')
+                if self._is_scratch(path):
+                    continue
+                out.append(path)
         return out
+
+    def _is_scratch(self, path: str) -> bool:
+        """Generated files that are not agent edits: caches, bytecode, harness temp."""
+        norm = path.replace("\\", "/").strip("/")
+        if norm.endswith((".pyc", ".pyo")):
+            return True
+        ignored = set(self.config.project.get("ignore_dirs", []))
+        if any(segment in ignored for segment in norm.split("/")):
+            return True
+        return False
 
     def _ref_exists(self, ref: str) -> bool:
         s = self.state

@@ -138,3 +138,26 @@ def test_edit_file_unique_match(tmp_path):
     res = edit_file(ctx, {"path": "a.py", "old_string": "x = 1", "new_string": "x = 3"})
     assert res.ok
     assert target.read_text(encoding="utf-8").startswith("x = 3")
+
+
+def test_process_env_redirects_temp_into_workspace(tmp_path):
+    from jinlin_agent.sandbox.base import process_env
+
+    env = process_env(str(tmp_path))
+    assert env["TMP"].startswith(str(tmp_path))
+    assert Path(env["TMP"]).is_dir()
+    assert env["PYTHONUTF8"] == "1"
+
+
+def test_gate_ignores_generated_files_but_not_real_edits(tmp_path):
+    from jinlin_agent.sandbox.null import NullSandbox
+    from jinlin_agent.verify import CompletionGate
+
+    cfg = load_config(tmp_path)
+    gate = CompletionGate(tmp_path, cfg, state=None, sandbox=NullSandbox(str(tmp_path)))
+    assert gate._is_scratch("tests/__pycache__/")
+    assert gate._is_scratch("__pycache__/a.cpython-313.pyc")
+    assert gate._is_scratch(".jinlin/tmp/x.txt")
+    assert gate._is_scratch(".pytest_cache/v/cache/lastfailed")
+    assert not gate._is_scratch("src/app.py")
+    assert not gate._is_scratch("tests/test_calc.py")

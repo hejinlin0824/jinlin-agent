@@ -11,6 +11,7 @@ The harness never claims more containment than `engine`/`level` says.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -96,3 +97,25 @@ class Timer:
     @property
     def elapsed_ms(self) -> int:
         return int((time.monotonic() - self._t0) * 1000)
+
+
+def process_env(workspace: str) -> dict[str, str]:
+    """Environment for sandboxed child processes.
+
+    Encoding is forced to UTF-8 (Chinese Windows would otherwise hand us cp936
+    bytes), and TMP/TEMP are redirected inside the workspace: an L1 sandbox
+    cannot write the system temp directory, so tools that use tempfile (pytest,
+    installers, many libraries) would otherwise fail for an unrelated reason.
+    """
+    tmp = os.path.join(str(workspace), ".jinlin", "tmp")
+    try:
+        os.makedirs(tmp, exist_ok=True)
+    except OSError:
+        tmp = str(workspace)
+    return {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8:replace",
+        "TMP": tmp,
+        "TEMP": tmp,
+        "TMPDIR": tmp,
+    }

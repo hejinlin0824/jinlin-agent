@@ -83,7 +83,9 @@ def run_command(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         resolved = resolve_command(ctx, argv, cwd)
     except AgentError as exc:
         return ToolResult(ok=False, error=exc)
-    env = {"JINLIN_SESSION": str(getattr(ctx.state, "session_id", ""))}
+    from ..sandbox.base import process_env
+
+    env = {**process_env(str(ctx.workspace)), "JINLIN_SESSION": str(getattr(ctx.state, "session_id", ""))}
 
     if background:
         if len(ctx.processes) >= _MAX_JOBS:
