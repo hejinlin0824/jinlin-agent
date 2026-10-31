@@ -3,6 +3,8 @@
 > 一个**事件溯源、可验证、可恢复、带沙箱**的代码工程 Agent Harness。
 > CLI 直接可用，不是演示脚本：每条"完成"都有可复查的证据。
 
+📄 完整技术报告 + 产品手册（含评分建议与 DSH/ZCode 基线对比）：[`docs/REPORT-AND-HANDBOOK.md`](docs/REPORT-AND-HANDBOOK.md)
+
 ```bash
 python -m jinlin_agent doctor                      # 环境/模型/沙箱自检
 export DEEPSEEK_API_KEY=sk-...
