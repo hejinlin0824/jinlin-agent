@@ -53,9 +53,12 @@ Tool rules:
   '+', and each hunk needs at least one exact context or removed line.
 - edit_file replaces one exact old_string (must be unique) — include surrounding context.
 - run_command takes an argv array, never a shell string. Use background=true for servers.
+  Run the test command reported by get_project_summary as-is; do not invent flags to work
+  around tooling quirks (the harness already configures temp/cache for sandboxed commands).
 - update_plan is state: completing a step requires evidence (file path / test / artifact).
 - propose_completion ends your turn; if the gate rejects it you will be told why and must
-  continue working."""
+  continue working. Evidence refs must be file paths, ver_* ids, artifact ids, or
+  "L3 tests"-style references, not free prose alone."""
 
 
 def build_system_prompt(config: Any, state: Any, project_instructions: str = "") -> str:

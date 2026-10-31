@@ -281,7 +281,9 @@ def register(registry: ToolRegistry) -> ToolRegistry:
             description=(
                 "Propose that the task is done. This does not complete the session: the harness runs the "
                 "completion gate against the real workspace, diff, verification runs and every claim's "
-                "evidence. If anything fails the task continues."
+                "evidence. If anything fails the task continues. evidence_refs must anchor to something "
+                "real: a repository-relative file path, an artifact id, a verification id (ver_...), a "
+                "verification level+type (e.g. 'L3 tests'), or the verification command you ran."
             ),
             schema={
                 "type": "object",

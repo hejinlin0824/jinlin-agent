@@ -449,6 +449,14 @@ class Verifier:
         return targets[:5]
 
 
+def _command_stem(exe: str) -> str:
+    """'C:/Python313/python.exe' -> 'python', so prose like 'python -m pytest -q' matches."""
+    name = Path(str(exe)).name
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    return name
+
+
 def _looks_secret(path: Path) -> bool:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")[:20000]
@@ -572,7 +580,11 @@ class CompletionGate:
             if not refs:
                 reasons.append(f"claim has no evidence: {getattr(claim, 'statement', '')[:80]}")
             elif missing:
-                reasons.append(f"claim references unknown evidence: {', '.join(missing[:3])}")
+                reasons.append(
+                    f"claim references unknown evidence: {', '.join(missing[:3])} "
+                    "(cite a file path, a ver_* id, an artifact_* id, or the verification command "
+                    "instead of a tool name or free prose)"
+                )
             resolved.append({"statement": getattr(claim, "statement", ""), "evidence_refs": refs})
         evidence["claims"] = resolved
 
@@ -609,25 +621,62 @@ class CompletionGate:
         norm = path.replace("\\", "/").strip("/")
         if norm.endswith((".pyc", ".pyo")):
             return True
+        if Path(norm).name.startswith("pytest-cache-files-"):
+            return True
         ignored = set(self.config.project.get("ignore_dirs", []))
         if any(segment in ignored for segment in norm.split("/")):
             return True
         return False
 
     def _ref_exists(self, ref: str) -> bool:
+        """Resolve a claim's evidence reference.
+
+        Accepts a file path, artifact id, verification id, verification level+type
+        or a verification command — and also prose that *contains* one of those, so
+        a model can write "pytest -q exit 0" without the gate becoming decorative:
+        the anchor still has to exist in the real event/verification state.
+        """
         s = self.state
-        if not ref:
+        raw = str(ref or "").strip()
+        if not raw:
             return False
-        if ref in getattr(s, "read_hashes", {}):
-            return True
-        if ref in (getattr(s, "written_files", {}) or {}):
-            return True
+        low = raw.replace("\\", "/").lower()
+        state_paths = (
+            set(getattr(s, "read_hashes", {}) or {})
+            | set(getattr(s, "written_files", {}) or {})
+            | set(getattr(s, "deleted_files", []) or [])
+        )
+        for path in state_paths:
+            normalized = str(path).replace("\\", "/").lower()
+            if raw == path or (normalized and normalized in low):
+                return True
+        try:
+            if (self.workspace / raw).exists():
+                return True
+        except OSError:
+            pass
         for run in getattr(s, "verification_runs", []):
-            if ref == run.verification_id or ref == run.output_artifact_id:
+            if raw in (run.verification_id, run.output_artifact_id):
                 return True
+            if run.verification_id and run.verification_id.lower() in low:
+                return True
+            if run.output_artifact_id and run.output_artifact_id.lower() in low:
+                return True
+            if run.level.lower() in low and run.type.lower() in low:
+                return True
+            if run.command:
+                stem = " ".join([_command_stem(run.command[0])] + [str(x) for x in run.command[1:]]).lower()
+                tokens = stem.split()
+                aliases: set[str] = set()
+                # a claim may drop the interpreter, flags or the concrete test target
+                for i in range(len(tokens)):
+                    for j in range(i + 2, min(len(tokens), i + 6) + 1):
+                        aliases.add(" ".join(tokens[i:j]))
+                aliases.add(" ".join(t for t in tokens[1:] if t != "-m"))
+                if any(len(alias.split()) >= 2 and alias in low for alias in aliases if alias):
+                    return True
         for obs in getattr(s, "recent_observations", []):
-            if ref == obs.get("artifact_id"):
+            artifact = obs.get("artifact_id")
+            if raw == artifact or (artifact and str(artifact).lower() in low):
                 return True
-        if (self.workspace / ref).exists():
-            return True
         return False

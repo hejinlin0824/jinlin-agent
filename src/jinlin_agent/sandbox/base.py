@@ -112,10 +112,17 @@ def process_env(workspace: str) -> dict[str, str]:
         os.makedirs(tmp, exist_ok=True)
     except OSError:
         tmp = str(workspace)
-    return {
+    env = {
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8:replace",
         "TMP": tmp,
         "TEMP": tmp,
         "TMPDIR": tmp,
     }
+    # pytest >= 8 creates "pytest-cache-files-*" temp dirs next to the cache and
+    # atomically renames them; a restricted-token child can be denied that chmod /
+    # rename, leaving directories that are then collected as test packages. Turning
+    # the cache plugin off is the least invasive fix, and the cache is not evidence.
+    if "PYTEST_ADDOPTS" not in os.environ:
+        env["PYTEST_ADDOPTS"] = "-p no:cacheprovider"
+    return env

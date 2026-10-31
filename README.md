@@ -50,7 +50,7 @@ python -m jinlin_agent run --workspace ./my-repo -t "给查询接口加分页，
 git clone <this-repo> && cd jinlin-code-agent
 python -m jinlin_agent doctor
 
-# 模型：DeepSeek OpenAI-compatible（默认 deepseek-v4.1-flash）
+# 模型：DeepSeek OpenAI-compatible（默认 deepseek-flash）
 export DEEPSEEK_API_KEY=sk-...
 # 或写入 ~/.jinlin-agent/config.toml 的 [model]（key 只从环境变量/凭据读取）
 
@@ -178,6 +178,20 @@ python -m jinlin_agent eval --suite all
 
 每个探针都是"临时 fixture 仓库 + 脚本化模型 + 事件日志断言"，可离线重复运行。
 
+### 真实模型验证（DeepSeek-V4.1-Flash，2026-10-31）
+
+- 真实模型 id 是 **`deepseek-flash`**（`deepseek-chat` / `deepseek-reasoner` 是同一模型的别名）；context 1,048,576，`reasoning_effort` 支持 low/high/max，本项目默认 `high`、`temperature=0`。
+- 在临时 git 仓库上用真实 key 跑了多轮任务，全部到达 `completed`：
+  - **单文件 bugfix**：8 步 / 12 次工具调用，一次通过（读测试 → 读实现 → apply_patch → pytest → 完成门）。
+  - **跨文件 feature**（config.py + tests + 保留 load 接口）：10–21 步 / 16–27 次工具调用；模型会自己读 `AGENTS.md`、维护 plan、连续 `apply_patch`/`edit_file`，并在测试失败后自行修复。
+  - **False Success = 0**：模型未修复就声称"测试通过"时被完成门拒绝（与 HCS P4a 一致）。
+- 真实模型暴露并已修复的问题：
+  - pytest 9 在沙箱下创建 `pytest-cache-files-*` 目录（受限令牌对 chmod/rename 受限）→ 子进程强制 `-p no:cacheprovider`，TMP/TEMP 重定向到 `<repo>/.jinlin/tmp`；
+  - 非零退出的 `run_command` 之前只记 "tool failed" → 现在事件里记录 `COMMAND_FAILED` + exit_code；
+  - 完成门证据解析从"只认 id/路径"放宽到"文件路径 / ver_* / artifact_* / 验证命令片段"，但工具名和空泛描述仍会被拒绝。
+- 已知摩擦：模型偶尔把工具名（如 `get_git_diff`）当证据引用，会被门禁拒绝并提示改写；这是刻意的证据约束，代价是偶尔多 1 轮。
+- API key 只从环境变量读取；已用 grep 验证事件日志、artifact、报告里都不出现明文 key。
+
 ---
 
 ## 10. 目录
@@ -210,7 +224,7 @@ tests/           单元 + 18 个评测探针
 ```toml
 [model]
 base_url = "https://api.deepseek.com/v1"
-model = "deepseek-v4.1-flash"
+model = "deepseek-flash"
 api_key_env = "DEEPSEEK_API_KEY"
 
 [runtime]

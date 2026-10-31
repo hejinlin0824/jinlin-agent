@@ -17,6 +17,8 @@ from typing import Any, Callable
 from .domain import SideEffect, ToolCallRequest, dumps_compact, new_id
 from .errors import (
     APPROVAL_DENIED,
+    COMMAND_FAILED,
+    TOOL_EXECUTION_FAILED,
     TOOL_NOT_FOUND,
     TOOL_SCHEMA_ERROR,
     AgentError,
@@ -203,7 +205,7 @@ class ToolDispatcher:
                 events=events,
             )
 
-        error = result.error or AgentError("TOOL_EXECUTION_FAILED", "tool failed", source=call.name)
+        error = result.error or _failure_from_result(call.name, result)
         self.emit(
             "tool.failed",
             {
@@ -315,3 +317,16 @@ def _small(extra: dict[str, Any] | None) -> dict[str, Any]:
         else:
             out[key] = json.loads(json.dumps(value, default=str)[:2000])
     return out
+
+
+def _failure_from_result(tool: str, result: ToolResult) -> AgentError:
+    """A tool can fail without raising: keep the exit code in the event log so the
+    model (and the audit trail) can tell 'command failed' from 'tool crashed'."""
+    if result.exit_code is not None:
+        return AgentError(
+            COMMAND_FAILED,
+            f"{tool} exited with code {result.exit_code}",
+            source=tool,
+            details={"exit_code": result.exit_code, "timed_out": result.timed_out},
+        )
+    return AgentError(TOOL_EXECUTION_FAILED, f"{tool} returned an unsuccessful result", source=tool)

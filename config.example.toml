@@ -5,13 +5,14 @@
 [model]
 provider = "openai_compatible"
 base_url = "https://api.deepseek.com/v1"
-model = "deepseek-v4.1-flash"
+model = "deepseek-flash"          # deepseek-chat / deepseek-reasoner are aliases of the same model
 api_key_env = "DEEPSEEK_API_KEY"
 timeout_seconds = 180
-max_output_tokens = 8192
-context_window = 131072
+max_output_tokens = 16384
+context_window = 1048576
 temperature = 0.0
 max_retries = 3
+reasoning_effort = "high"         # low | high | max (empty string disables the field)
 
 [runtime]
 max_steps_per_turn = 40

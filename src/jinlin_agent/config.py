@@ -27,13 +27,14 @@ DEFAULTS: dict[str, Any] = {
     "model": {
         "provider": "openai_compatible",
         "base_url": "https://api.deepseek.com/v1",
-        "model": "deepseek-v4.1-flash",
+        "model": "deepseek-flash",
         "api_key_env": "DEEPSEEK_API_KEY",
         "timeout_seconds": 180,
-        "max_output_tokens": 8192,
-        "context_window": 131072,
+        "max_output_tokens": 16384,
+        "context_window": 1048576,
         "temperature": 0.0,
         "max_retries": 3,
+        "reasoning_effort": "high",
     },
     "runtime": {
         "max_steps_per_turn": 40,
@@ -171,6 +172,7 @@ class ModelConfig:
     context_window: int
     temperature: float
     max_retries: int
+    reasoning_effort: str = "high"
 
 
 @dataclass

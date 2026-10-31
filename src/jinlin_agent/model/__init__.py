@@ -35,6 +35,7 @@ def create_provider(config: Any, mock_script: Path | str | None = None) -> Provi
         ),
         max_retries=int(config.model.max_retries),
         timeout_seconds=float(config.model.timeout_seconds),
+        reasoning_effort=getattr(config.model, "reasoning_effort", None) or None,
     )
 
 

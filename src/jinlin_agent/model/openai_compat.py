@@ -47,6 +47,7 @@ class OpenAICompatibleProvider:
         max_retries: int = 3,
         timeout_seconds: float = 180.0,
         logger: Callable[[str], None] | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -58,6 +59,7 @@ class OpenAICompatibleProvider:
         )
         self.max_retries = max(0, int(max_retries))
         self.timeout_seconds = timeout_seconds
+        self.reasoning_effort = reasoning_effort
         self._log = logger or (lambda msg: None)
 
     # ------------------------------------------------------------------ public
@@ -118,6 +120,8 @@ class OpenAICompatibleProvider:
             payload["temperature"] = request.temperature
         if request.max_output_tokens:
             payload["max_tokens"] = request.max_output_tokens
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
         if stream and include_usage:
             payload["stream_options"] = {"include_usage": True}
         return payload

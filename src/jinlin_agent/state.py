@@ -346,6 +346,8 @@ def _session_completed(s: SessionState, p: dict[str, Any]) -> None:
     s.report_artifact_id = p.get("report_artifact_id")
     s.status = Status.COMPLETED.value
     s.phase = Phase.COMPLETED.value
+    s.last_error = None
+    s.pending_question = None
 
 
 def _session_failed(s: SessionState, p: dict[str, Any]) -> None:
