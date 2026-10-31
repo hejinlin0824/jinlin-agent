@@ -1,0 +1,48 @@
+{
+  "response_id": "resp_mock_f7c05c781078",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_mock_7_0",
+      "name": "update_plan",
+      "arguments": "{\"plan\": {\"objective\": \"add timeout setting\", \"steps\": [{\"description\": \"read config and loader\", \"status\": \"completed\", \"evidence\": [\"config.py\"]}, {\"description\": \"add timeout default\", \"status\": \"completed\", \"evidence\": [\"config.py\"]}, {\"description\": \"test it\", \"status\": \"completed\", \"evidence\": [\"tests/test_loader.py\"]}]}}",
+      "parsed": {
+        "plan": {
+          "objective": "add timeout setting",
+          "steps": [
+            {
+              "description": "read config and loader",
+              "status": "completed",
+              "evidence": [
+                "config.py"
+              ]
+            },
+            {
+              "description": "add timeout default",
+              "status": "completed",
+              "evidence": [
+                "config.py"
+              ]
+            },
+            {
+              "description": "test it",
+              "status": "completed",
+              "evidence": [
+                "tests/test_loader.py"
+              ]
+            }
+          ]
+        }
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 20,
+    "total_tokens": 120
+  },
+  "raw_artifact_id": null,
+  "model": "mock"
+}

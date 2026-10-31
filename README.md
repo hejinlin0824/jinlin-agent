@@ -226,6 +226,7 @@ git_push = "deny"
 
 ## 12. 已知限制（V1）
 
+- **真实模型端到端尚未在本机验证**：等待 `DEEPSEEK_API_KEY`；当前 18/18 评测使用内置 scripted provider（离线可重复）。拿到 key 后先跑 `jinlin-agent doctor`，再跑一个小仓库任务即可确认。
 - 单 Agent；多 Agent 的字段与任务板只预留，不实现。
 - 网络无 OS 级隔离；沙箱写限制依赖 Windows 受限令牌，构造失败会降级 L0（报告会写明）。
 - 上下文压缩用确定性状态摘要，不做 LLM 摘要（更稳，但长会话信息密度略低）。

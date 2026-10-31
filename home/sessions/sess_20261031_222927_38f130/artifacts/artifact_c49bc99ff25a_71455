@@ -1,0 +1,41 @@
+{
+  "response_id": "resp_mock_40b0d6ea8470",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_mock_4_0",
+      "name": "update_plan",
+      "arguments": "{\"plan\": {\"objective\": \"fix add()\", \"steps\": [{\"description\": \"read test and implementation\", \"status\": \"completed\", \"evidence\": [\"calc.py\"]}, {\"description\": \"fix the operator\", \"status\": \"in_progress\"}], \"verification_strategy\": [\"pytest -q\"]}}",
+      "parsed": {
+        "plan": {
+          "objective": "fix add()",
+          "steps": [
+            {
+              "description": "read test and implementation",
+              "status": "completed",
+              "evidence": [
+                "calc.py"
+              ]
+            },
+            {
+              "description": "fix the operator",
+              "status": "in_progress"
+            }
+          ],
+          "verification_strategy": [
+            "pytest -q"
+          ]
+        }
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 20,
+    "total_tokens": 120
+  },
+  "raw_artifact_id": null,
+  "model": "mock"
+}

@@ -173,9 +173,10 @@ def cmd_resume(args: Any) -> int:
     workspace = Path(args.workspace).resolve() if args.workspace else _workspace_from_events(session_dir) or Path(".")
     sandbox = create_sandbox(workspace, cfg)
     session = SessionManager.open(cfg, args.session_id, sandbox)
+    previous_status = session.state.status
     if args.answer:
         session.emit("session.user_input", {"text": args.answer})
-    _print(f"[session] {session.id} resumed (status was {session.state.status})")
+    _print(f"[session] {session.id} resumed (status was {previous_status})")
     try:
         harness = _make_harness(cfg, session, args)
         status = harness.run()

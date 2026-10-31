@@ -1,0 +1,3 @@
+[verification]
+test_command = ["C:/Users/jinlin.he/AppData/Local/Programs/Python/Python313/python.exe", "-m", "pytest", "-q"]
+baseline_timeout_seconds = 120

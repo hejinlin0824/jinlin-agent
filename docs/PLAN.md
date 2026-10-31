@@ -142,3 +142,21 @@ python -m jinlin_agent eval --suite hcs    # T1–T4 探针
 python -m jinlin_agent eval --suite e1e8   # 真实任务评测
 python -m jinlin_agent run --workspace ... --task "..."   # 真实使用
 ```
+
+## 11. 交付状态（2026-10-31）
+
+| 里程碑 | 状态 | 证据 |
+|---|---|---|
+| M0 契约冻结 | ✅ | `docs/PLAN.md`（本文件，D1–D12）、`README.md`、`AGENTS.md` |
+| M1 内核纵切 | ✅ | 事件日志/状态折叠/循环/网关/工具管线/CLI；`tests/test_smoke.py` |
+| M2 信任层 | ✅ | 路径/命令策略、fail-closed 审批、验证阶梯/基线/完成门、证据报告、配置只紧不松 |
+| M3 上下文 | ✅ | 内容相关打分、压缩、artifact 审计、无静默截断（HCS P3/P3b） |
+| M4 加固 | ✅ | Windows L1 沙箱（受限令牌 + Low IL + Job Object）、循环检测、重试、doctor、eval 套件 |
+| 评测 | ✅ | `python -m pytest` 40 passed；`jinlin-agent eval --suite all` 18/18 |
+
+已知偏差（相对初版计划）：
+
+- 基线在会话创建时执行（而非首次验证时），以便 L5 回归比较有意义。
+- SQLite 投影未实现（事件折叠直接承担 V1 查询），`state.py` 已保留投影边界。
+- 完成时由 harness 自动重跑 L0/L1（有代码改动时）与 L3（项目有测试时），模型自己跑过的验证仍作为事件证据保留。
+- 沙箱默认低完整性（Low IL）+ 受限令牌；若环境不允许构造，自动降级并在 `sandbox.mode` 与报告中如实标注。

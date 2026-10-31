@@ -106,8 +106,9 @@ JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 _SANDBOX_API = "restricted-token+job-object"
 _JOB_ONLY_API = "job-object"
 
-# Writes b'x' (append) to argv[1]; used by the engine-liveness probes.
-_WRITE_PROBE_CODE = "import sys; open(sys.argv[1], 'ab').write(b'x')"
+# Opens argv[1] for append and closes it immediately: this performs the real
+# write-access check without modifying an existing file's contents.
+_WRITE_PROBE_CODE = "import sys; open(sys.argv[1], 'ab').close()"
 
 # --------------------------------------------------------------------------- #
 # ctypes plumbing
@@ -1296,7 +1297,11 @@ class WindowsSandbox(Sandbox):
             stderr_read=stderr_read,
             on_job_closed=self._forget_job,
         )
-        self._remember_job(job)
+        try:
+            self._remember_job(job)
+        except Exception:
+            spawned.close()
+            raise
         if stdin_data is not None and spawned.stdin_write:
             try:
                 _write_all(spawned.stdin_write, stdin_data.encode("utf-8"))

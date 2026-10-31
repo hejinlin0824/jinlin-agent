@@ -1,0 +1,25 @@
+{
+  "response_id": "resp_mock_2e9e45cd0712",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_mock_5_0",
+      "name": "edit_file",
+      "arguments": "{\"path\": \"calc.py\", \"old_string\": \"return a - b\", \"new_string\": \"return a + b\"}",
+      "parsed": {
+        "path": "calc.py",
+        "old_string": "return a - b",
+        "new_string": "return a + b"
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 20,
+    "total_tokens": 120
+  },
+  "raw_artifact_id": null,
+  "model": "mock"
+}

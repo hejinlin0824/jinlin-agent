@@ -1,0 +1,32 @@
+{
+  "response_id": "resp_mock_6c1c9ee987ea",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_mock_8_0",
+      "name": "propose_completion",
+      "arguments": "{\"summary\": \"add() now returns the sum; the failing test passes\", \"claims\": [{\"statement\": \"add() returns a + b and the test passes\", \"evidence_refs\": [\"calc.py\", \"tests/test_calc.py\"]}]}",
+      "parsed": {
+        "summary": "add() now returns the sum; the failing test passes",
+        "claims": [
+          {
+            "statement": "add() returns a + b and the test passes",
+            "evidence_refs": [
+              "calc.py",
+              "tests/test_calc.py"
+            ]
+          }
+        ]
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 20,
+    "total_tokens": 120
+  },
+  "raw_artifact_id": null,
+  "model": "mock"
+}

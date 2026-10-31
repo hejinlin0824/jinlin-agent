@@ -1,0 +1,23 @@
+{
+  "response_id": "resp_mock_5244d7e56e56",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_mock_2_0",
+      "name": "read_file",
+      "arguments": "{\"path\": \"config.py\"}",
+      "parsed": {
+        "path": "config.py"
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 20,
+    "total_tokens": 120
+  },
+  "raw_artifact_id": null,
+  "model": "mock"
+}

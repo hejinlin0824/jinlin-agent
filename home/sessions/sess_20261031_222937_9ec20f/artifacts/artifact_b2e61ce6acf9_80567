@@ -1,0 +1,34 @@
+{
+  "response_id": "resp_mock_c0f0f22613d1",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_mock_3_0",
+      "name": "update_plan",
+      "arguments": "{\"plan\": {\"objective\": \"fix add()\", \"steps\": [{\"description\": \"look at code\", \"status\": \"completed\", \"evidence\": [\"calc.py\"]}]}}",
+      "parsed": {
+        "plan": {
+          "objective": "fix add()",
+          "steps": [
+            {
+              "description": "look at code",
+              "status": "completed",
+              "evidence": [
+                "calc.py"
+              ]
+            }
+          ]
+        }
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 20,
+    "total_tokens": 120
+  },
+  "raw_artifact_id": null,
+  "model": "mock"
+}

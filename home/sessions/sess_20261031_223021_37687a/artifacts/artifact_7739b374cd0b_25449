@@ -1,0 +1,35 @@
+{
+  "response_id": "resp_mock_52a1fae916ff",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_mock_6_0",
+      "name": "update_plan",
+      "arguments": "{\"plan\": {\"objective\": \"add a version helper module\", \"steps\": [{\"description\": \"write module and test\", \"status\": \"completed\", \"evidence\": [\"version.py\", \"test_version.py\"]}]}}",
+      "parsed": {
+        "plan": {
+          "objective": "add a version helper module",
+          "steps": [
+            {
+              "description": "write module and test",
+              "status": "completed",
+              "evidence": [
+                "version.py",
+                "test_version.py"
+              ]
+            }
+          ]
+        }
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 20,
+    "total_tokens": 120
+  },
+  "raw_artifact_id": null,
+  "model": "mock"
+}
