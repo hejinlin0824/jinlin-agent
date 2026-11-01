@@ -355,19 +355,51 @@ def _rollback_transaction(
                     continue
                 redundant.append(trash.name)  # reverted content, verified ours
                 restored.append(rel)
-            else:  # delete: restore from the moved-aside backup
-                if path.exists():
-                    incomplete.append(rel)  # a concurrent writer recreated it
-                    continue
+            else:  # delete: restore the original content to its path
                 backup: Path = record["backup"]
-                if not backup.exists():
-                    incomplete.append(rel)
+                before_sha = record.get("before_sha")
+                original_bytes = record.get("original_bytes")
+                identity = record.get("backup_identity")
+                verified = record.get("backup_verified", True)  # legacy records were hash-verified
+                # is the backup still provably the original we moved?
+                backup_ok = verified and backup.exists() and before_sha is not None
+                if backup_ok:
+                    try:
+                        backup_ok = hashlib.sha256(backup.read_bytes()).hexdigest() == before_sha
+                    except OSError:
+                        backup_ok = False
+                if backup_ok and identity is not None:
+                    try:
+                        st = os.stat(backup)
+                        backup_ok = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) == identity
+                    except OSError:
+                        backup_ok = False
+                if backup_ok:
+                    if not _restore_no_clobber(backup, path):
+                        incomplete.append(rel)  # claimed concurrently / no hardlink support
+                        continue
+                    redundant.append(backup.name)  # content back at the path
+                    restored.append(rel)
                     continue
-                if not _restore_no_clobber(backup, path):
-                    incomplete.append(rel)  # claimed concurrently, or fs cannot hard-link:
-                    continue  # keep the backup, never fall back to an overwriting rename
-                redundant.append(backup.name)  # content back at the path
-                restored.append(rel)
+                # The backup is missing, replaced, or no longer provably the
+                # original: it is never presented as one. Re-create the original
+                # from the bytes recorded at hash time; the unverifiable backup
+                # stays untouched for inspection.
+                if original_bytes is not None and not path.exists():
+                    try:
+                        out_fd = os.open(
+                            path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o666
+                        )
+                        try:
+                            os.write(out_fd, original_bytes)
+                            os.fsync(out_fd)
+                        finally:
+                            os.close(out_fd)
+                        restored.append(rel)  # content-wise restored; the backup is kept aside
+                        continue
+                    except OSError:
+                        pass
+                incomplete.append(rel)
         except Exception:
             incomplete.append(rel)
     return restored, incomplete, redundant
@@ -654,16 +686,83 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                 written.append({"path": item["rel"], "hash_before": None, "hash_after": digest, "lines_added": len(item["data"].splitlines())})
             elif item["kind"] == "delete":
                 expected = item["old_sha"]
-                current_sha = hashlib.sha256(path.read_bytes()).hexdigest()
-                if current_sha != expected:
+                data_at_plan = path.read_bytes()
+                if hashlib.sha256(data_at_plan).hexdigest() != expected:
                     raise AgentError(FILE_CHANGED_EXTERNALLY, f"{item['rel']} changed before deletion", source="edit")
+                item["original_bytes"] = data_at_plan
                 backup = path.with_name(f".{path.name}.jinlin-txn-{uuid.uuid4().hex[:8]}")
-                # move the directory entry atomically; verify what we moved
+                # Lifecycle (round-9): open the ORIGINAL *before* moving it, so
+                # the content hash and the identity fingerprint describe the
+                # object we are about to move, taken from one file object.
+                # Anything that replaces the path afterwards can never be
+                # mistaken for that object: post-move we only compare the
+                # backup path against the fd fingerprint.
+                fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+                try:
+                    digest = hashlib.sha256()
+                    original_bytes = bytearray()
+                    while True:
+                        chunk = os.read(fd, 1 << 20)
+                        if not chunk:
+                            break
+                        original_bytes += chunk
+                        digest.update(chunk)
+                    moved_sha = digest.hexdigest()
+                    st = os.fstat(fd)
+                    original_identity = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+                except OSError as exc:
+                    os.close(fd)
+                    # nothing has been moved yet — the path is untouched
+                    raise AgentError(
+                        TOOL_EXECUTION_FAILED,
+                        f"{item['rel']} could not be read for deletion ({exc}); nothing was moved",
+                        source="edit",
+                    ) from exc
+                os.close(fd)
+                # the handle must be closed before the rename: an open handle
+                # without FILE_SHARE_DELETE blocks os.replace on Windows
+                if moved_sha != expected:
+                    # content changed between validation and the write phase —
+                    # nothing has been moved, so there is nothing to recover
+                    raise AgentError(FILE_CHANGED_EXTERNALLY, f"{item['rel']} changed before deletion", source="edit")
                 os.replace(path, backup)
-                # hash and identity MUST come from the same open file object:
-                # reading the hash by path and statting the path separately
-                # would let a replacement that lands in between be registered
-                # as our backup (round-8 finding)
+                # The move is now a fact: register the pending delete BEFORE
+                # anything else can fail, carrying the original bytes — recovery
+                # never depends on the backup path still holding the original
+                # (round-9 finding). The record stays unverified until the
+                # backup's content and fingerprint are re-checked through one
+                # freshly opened file object.
+                applied.append(
+                    {
+                        "kind": "delete",
+                        "path": path,
+                        "rel": item["rel"],
+                        "backup": backup,
+                        "before_sha": expected,
+                        "backup_identity": None,
+                        "original_bytes": item["original_bytes"],
+                        "backup_verified": False,
+                    }
+                )
+                deleted.append(item["rel"])
+                # does the backup path still hold the object we moved? a
+                # replacement that slipped in between the move and this check
+                # makes the backup unprovable — the record stays unverified and
+                # rollback re-creates the original from the recorded bytes
+                try:
+                    st = os.stat(backup)
+                    backup_verified = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) == original_identity
+                except OSError:
+                    backup_verified = False
+                if not backup_verified:
+                    raise AgentError(
+                        RECOVERY_UNCERTAIN,
+                        f"{item['rel']}: the moved backup no longer provably holds the original "
+                        "content (it was replaced between the move and verification); the original "
+                        "bytes are preserved in the transaction record",
+                        source="edit",
+                        details={"backup": backup.name},
+                    )
                 fd = os.open(backup, os.O_RDONLY | getattr(os, "O_BINARY", 0))
                 try:
                     digest = hashlib.sha256()
@@ -672,41 +771,30 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                         if not chunk:
                             break
                         digest.update(chunk)
-                    moved_sha = digest.hexdigest()
+                    verified_sha = digest.hexdigest()
                     st = os.fstat(fd)
                     backup_identity = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
                 finally:
                     os.close(fd)
-                if moved_sha != expected:
-                    if _restore_no_clobber(backup, path):
-                        raise AgentError(
-                            FILE_CHANGED_EXTERNALLY,
-                            f"{item['rel']} changed while being deleted; original restored",
-                            source="edit",
-                        )
+                if verified_sha != expected or backup_identity != original_identity:
+                    # The moved backup was replaced or altered before it could be
+                    # verified: it is NOT the original, so it is never restored.
+                    # The pending record stays unverified — rollback re-creates
+                    # the original from the recorded bytes and leaves this backup
+                    # untouched.
                     raise AgentError(
                         RECOVERY_UNCERTAIN,
-                        f"{item['rel']} changed while being deleted and the path was claimed "
-                        f"concurrently; the original content was kept aside at {backup.name} "
-                        "instead of replacing the concurrent file",
+                        f"{item['rel']}: the moved backup no longer provably holds the original "
+                        "content (it was replaced between the move and verification); the original "
+                        "bytes are preserved in the transaction record",
                         source="edit",
-                        details={"kept_aside": backup.name},
+                        details={"backup": backup.name},
                     )
+                record = applied[-1]
+                record["backup_identity"] = backup_identity
+                record["backup_verified"] = True
                 if not record_trash(ctx.workspace, backup, item["rel"], "txn"):
                     manifest_degraded.append(backup.name)
-                applied.append(
-                    {
-                        "kind": "delete",
-                        "path": path,
-                        "rel": item["rel"],
-                        "backup": backup,
-                        "before_sha": expected,
-                        # fingerprint of exactly the file object the hash above
-                        # was computed from
-                        "backup_identity": backup_identity,
-                    }
-                )
-                deleted.append(item["rel"])
             else:
                 new_sha = hashlib.sha256(item["data"]).hexdigest()
                 atomic_write(path, item["data"], mode_from=path, expected_sha256=item["old_sha"])
@@ -753,6 +841,22 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                 ),
                 output="patch failed; partial rollback — inspect: " + ", ".join(incomplete),
             )
+        if isinstance(exc, AgentError):
+            # AgentError diagnoses (PATCH_CONFLICT on a lost race,
+            # RECOVERY_UNCERTAIN on an unverifiable backup, ...) surface with
+            # their own code — the handler MUST return in every branch: falling
+            # through here would treat a rolled-back transaction as committed
+            if exc.code == RECOVERY_UNCERTAIN:
+                exc.details.update(
+                    {
+                        "rolled_back": restored,
+                        "rollback_incomplete": incomplete,
+                        "redundant_trash": redundant,
+                        "trash_manifest_degraded": manifest_degraded,
+                    }
+                )
+            return ToolResult(ok=False, error=exc)
+        # non-AgentError (raw I/O failure etc.) with a clean rollback
         return ToolResult(
             ok=False,
             error=AgentError(
@@ -797,9 +901,11 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             continue
         try:
             backup.unlink()
-            forget_trash(ctx.workspace, backup)
         except OSError as exc:
             cleanup_deferred.append({"name": backup.name, "reason": f"unlink failed: {exc}"})
+            continue
+        if not forget_trash(ctx.workspace, backup):
+            manifest_degraded.append(f"{backup.name} (cleanup succeeded; manifest update failed)")
 
     read_hashes = {w["path"]: w["hash_after"] for w in written}
     summary = [f"applied {len(plan)} file operation(s):"]

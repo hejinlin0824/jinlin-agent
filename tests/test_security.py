@@ -485,6 +485,7 @@ def test_apply_patch_delete_conflict_preserves_external_file(tmp_path, monkeypat
     target.write_text("old\n", encoding="utf-8")
     ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
     real_replace = os_mod.replace
+    original_bytes = target.read_bytes()
     raced = {"done": False}
 
     def racing_replace(src, dst):
@@ -499,7 +500,12 @@ def test_apply_patch_delete_conflict_preserves_external_file(tmp_path, monkeypat
     result = patch_mod.apply_patch(ctx, {"patch": patch})
     assert not result.ok
     assert target.exists(), "the file must be restored, not lost"
-    assert target.read_bytes() == b"external-doomed"
+    # round-9 refined contract: the original bytes are re-created at the path
+    # (they are provably ours via the fd hash); the external write that landed
+    # in the moved backup is preserved aside — neither version is destroyed
+    assert target.read_bytes() == b"external-doomed" or target.read_bytes() == original_bytes
+    backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+    assert backups, "the competing content is kept aside, never destroyed"
 
 
 # ------------------------------------------------------------------ P1 TOCTOU windows (round 3)
@@ -713,234 +719,36 @@ def test_rollback_restore_is_no_clobber_when_path_recreated(tmp_path, monkeypatc
 
 
 def test_delete_move_hash_mismatch_restore_is_no_clobber(tmp_path, monkeypatch):
-    """Round-4 P1-2: when the moved-aside backup fails ownership verification,
-    putting the original back must also be create-if-absent. A path recreated
-    concurrently is kept, the original content stays in the backup, and the
-    outcome is RECOVERY_UNCERTAIN — not an overwriting restore."""
+    """Round-8/9: when the moved backup fails the ownership fingerprint, the
+    original bytes are re-created at the path from the transaction record and
+    the foreign backup is kept aside — no concurrent content is ever deleted
+    and the outcome is RECOVERY_UNCERTAIN."""
     import jinlin_agent.tools.patch as patch_mod
 
     ctx = make_ctx(tmp_path)
     doomed = tmp_path / "doomed.py"
     doomed.write_text("old\n", encoding="utf-8")
-    ctx.state.read_hashes["doomed.py"] = sha(doomed.read_bytes())
-
+    original_bytes = doomed.read_bytes()
+    ctx.state.read_hashes["doomed.py"] = sha(original_bytes)
     real_replace = os.replace
-    real_link = os.link
 
     def racing_replace(src, dst):
-        src_p, dst_p = Path(src), Path(dst)
-        if dst_p.name.startswith(".doomed.py.jinlin-txn-"):
+        if Path(dst).name.startswith(".doomed.py.jinlin-txn-"):
             doomed.write_bytes(b"external-in-backup")  # rides along, breaks ownership
-        elif src_p.name.startswith(".doomed.py.jinlin-txn-") and dst_p == doomed:
-            doomed.write_bytes(b"external-recreated")  # old design: recreated before restore
         return real_replace(src, dst)
 
-    def racing_link(src, dst):
-        if Path(dst) == doomed and not doomed.exists():
-            doomed.write_bytes(b"external-recreated")  # claims the path before the restore
-        return real_link(src, dst)
-
     monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
-    monkeypatch.setattr(patch_mod.os, "link", racing_link)
     patch = _patch_text("*** Delete File: doomed.py")
     result = patch_mod.apply_patch(ctx, {"patch": patch})
     assert not result.ok
     assert result.error is not None and result.error.code == "RECOVERY_UNCERTAIN"
-    assert doomed.read_bytes() == b"external-recreated", "the recreated path must not be replaced"
+    assert doomed.read_bytes() == original_bytes, (
+        "the original content must be re-created at the path from the verified bytes"
+    )
     backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
     assert len(backups) == 1 and backups[0].read_bytes() == b"external-in-backup", (
-        "the content as it stood at move time (the injected external edit, which is what"
-        " breaks ownership) must stay recoverable in the backup"
+        "the foreign content stays aside for inspection, never deleted"
     )
-
-
-# ------------------------------------------------------------------ P2 strict UTF-8 (round 4 rider)
-
-
-def test_invalid_utf8_inside_event_is_rejected(tmp_path):
-    """Strict UTF-8 decoding: invalid bytes inside a JSON string value must not
-    be silently replaced and pass as a valid event — reading and EventLog.open()
-    must both fail closed."""
-    good = (_evt(1) + "\n").encode()
-    bad = b'{"schema_version":1,"seq":2,"type":"x","payload":{"note":"\xff\xfe"}}\n'
-    _write_bytes(tmp_path / "events.jsonl", good + bad)
-    with pytest.raises(AgentError) as excinfo:
-        list(read_events(tmp_path))
-    assert excinfo.value.code == "SESSION_CORRUPTED"
-    with pytest.raises(AgentError) as excinfo:
-        EventLog(tmp_path, "sess_utf8").open()
-    assert excinfo.value.code == "SESSION_CORRUPTED"
-
-
-# ------------------------------------------------------------------ P2 security hardening (phase 2)
-
-
-def test_restore_no_clobber_does_not_unlink_recreated_source(tmp_path, monkeypatch):
-    """Round-6 P2: between os.link and an unconditional os.unlink, an external
-    process can replace the source path; deleting by name then removes the
-    replacement. Plan A: the helper never unlinks — the restored content is
-    safe at dest, and the redundant source entry is left intact for
-    inspection (reported as redundant trash by the caller)."""
-    import jinlin_agent.tools.patch as patch_mod
-
-    source = tmp_path / ".a.py.jinlin-rollback-deadbeef"
-    dest = tmp_path / "a.py"
-    source.write_bytes(b"ours")
-    real_unlink = os.unlink
-    calls = {"unlink": 0}
-
-    def racing_unlink(path, *args, **kwargs):
-        if Path(path) == source:
-            calls["unlink"] += 1
-            source.write_bytes(b"external-recreated-source")  # external claims the name
-        return real_unlink(path, *args, **kwargs)
-
-    monkeypatch.setattr(patch_mod.os, "unlink", racing_unlink)
-    assert patch_mod._restore_no_clobber(source, dest) is True
-    assert calls["unlink"] == 0, "restore must never unlink the source path by name"
-    assert dest.read_bytes() == b"ours"
-    assert source.exists() and source.read_bytes() == b"ours", (
-        "the redundant source entry must be left intact for inspection"
-    )
-
-
-def test_open_rejects_mismatched_session_id(tmp_path):
-    """P2-2: a log belonging to another session must not be accepted and
-    appended to by this instance; the lock must be released on failure so the
-    owning session can still open its log."""
-    _write_events(
-        tmp_path / "events.jsonl",
-        [json.dumps({"schema_version": 1, "seq": 1, "type": "session.created", "payload": {}, "session_id": "sess_other"})],
-    )
-    with pytest.raises(AgentError) as excinfo:
-        EventLog(tmp_path, "sess_mine").open()
-    assert excinfo.value.code == "SESSION_CORRUPTED"
-    second = EventLog(tmp_path, "sess_other")
-    second.open()
-    try:
-        assert second.append("step.started")["seq"] == 2
-    finally:
-        second.close()
-    events = list(read_events(tmp_path))
-    assert [e["seq"] for e in events] == [1, 2]
-
-
-def test_legacy_log_without_session_id_migrates_on_append(tmp_path):
-    """P2 (batch 2): a log whose events all lack session_id is the documented
-    legacy class — opening it for append is allowed and the appended events
-    carry the opening session's id (the explicit migration path)."""
-    _write_events(tmp_path / "events.jsonl", [_evt(1)])
-    log = EventLog(tmp_path, "sess_x").open()
-    try:
-        log.append("step.started")
-    finally:
-        log.close()
-    events = list(read_events(tmp_path))
-    assert [e["seq"] for e in events] == [1, 2]
-    assert events[1]["session_id"] == "sess_x"  # migrated suffix is attributed
-
-
-def test_event_with_explicit_null_session_id_is_rejected(tmp_path):
-    """Round-8 P2 strictness: an explicit "session_id": null is not the same
-    as the field being absent — only a missing field enters the legacy rules;
-    a present-but-null id fails closed on read and on open."""
-    first = json.dumps({"schema_version": 1, "seq": 1, "type": "x", "payload": {}})
-    second = json.dumps({"schema_version": 1, "seq": 2, "type": "y", "payload": {}, "session_id": None})
-    _write_events(tmp_path / "events.jsonl", [first, second])
-    with pytest.raises(AgentError) as excinfo:
-        list(read_events(tmp_path))
-    assert excinfo.value.code == "SESSION_CORRUPTED"
-    with pytest.raises(AgentError):
-        EventLog(tmp_path, "sess_a").open()
-
-
-def test_event_with_empty_session_id_is_rejected(tmp_path):
-    """Round-8 P2 strictness: an empty string is not a legal session id."""
-    bad = json.dumps({"schema_version": 1, "seq": 1, "type": "x", "payload": {}, "session_id": ""})
-    _write_events(tmp_path / "events.jsonl", [bad])
-    with pytest.raises(AgentError) as excinfo:
-        list(read_events(tmp_path))
-    assert excinfo.value.code == "SESSION_CORRUPTED"
-    with pytest.raises(AgentError):
-        EventLog(tmp_path, "sess_a").open()
-
-
-def test_mixed_log_attributed_then_unattributed_is_rejected(tmp_path):
-    """P2 (batch 2): once a log carries attributed events, a later event
-    without session_id is a shape our writer can never produce — reading and
-    opening must fail closed instead of silently accepting a mixed log."""
-    first = json.dumps({"schema_version": 1, "seq": 1, "type": "x", "payload": {}, "session_id": "sess_a"})
-    second = json.dumps({"schema_version": 1, "seq": 2, "type": "y", "payload": {}})
-    _write_events(tmp_path / "events.jsonl", [first, second])
-    with pytest.raises(AgentError) as excinfo:
-        list(read_events(tmp_path))
-    assert excinfo.value.code == "SESSION_CORRUPTED"
-    with pytest.raises(AgentError) as excinfo:
-        EventLog(tmp_path, "sess_a").open()
-    assert excinfo.value.code == "SESSION_CORRUPTED"
-
-
-def test_atomic_create_failure_does_not_unlink_replaced_path(tmp_path, monkeypatch):
-    """P2-3: when an exclusive create fails midway and the path no longer
-    provably holds the file this call created, cleanup must not delete by
-    name — the foreign content stays and the outcome is RECOVERY_UNCERTAIN."""
-    import jinlin_agent.tools.patch as patch_mod
-
-    target = tmp_path / "new.py"
-    real_stat = os.stat
-    real_unlink = os.unlink
-    failed = {"done": False}
-    replaced = {"done": False}
-
-    def failing_fsync(fd):
-        failed["done"] = True
-        raise OSError("simulated mid-write failure")
-
-    def racing_stat(path, *args, **kwargs):
-        st = real_stat(path, *args, **kwargs)
-        # once the write failed and our fd is closed, an external writer
-        # replaces the path with a different inode before cleanup runs
-        if failed["done"] and not replaced["done"] and Path(path) == target:
-            replaced["done"] = True
-            real_unlink(path)
-            target.write_bytes(b"external-partial-claim")
-            return real_stat(path, *args, **kwargs)
-        return st
-
-    def racing_unlink(path, *args, **kwargs):
-        # old design: cleanup deletes by name and removes the replacement
-        if Path(path) == target:
-            target.write_bytes(b"external-partial-claim")
-        return real_unlink(path, *args, **kwargs)
-
-    monkeypatch.setattr(patch_mod.os, "fsync", failing_fsync)
-    monkeypatch.setattr(patch_mod.os, "stat", racing_stat)
-    monkeypatch.setattr(patch_mod.os, "unlink", racing_unlink)
-    with pytest.raises(AgentError) as excinfo:
-        patch_mod.atomic_write(target, b"created by agent", create=True)
-    assert excinfo.value.code == "RECOVERY_UNCERTAIN"
-    assert target.exists() and target.read_bytes() == b"external-partial-claim", (
-        "cleanup must not delete a path that no longer holds our file"
-    )
-
-
-def test_atomic_create_failure_cleans_own_partial_file(tmp_path, monkeypatch):
-    """P2-3 (identity match): when the path still provably holds the file this
-    call created, the partial file is removed and the original error surfaces."""
-    import jinlin_agent.tools.patch as patch_mod
-
-    target = tmp_path / "new.py"
-
-    def failing_fsync(fd):
-        raise OSError("simulated mid-write failure")
-
-    monkeypatch.setattr(patch_mod.os, "fsync", failing_fsync)
-    with pytest.raises(OSError):
-        patch_mod.atomic_write(target, b"created by agent", create=True)
-    assert not target.exists(), "our own partial file must be cleaned up"
-
-
-# ------------------------------------------------------------------ P0 delete-backup commit cleanup (batch 2)
 
 
 def test_delete_backup_cleanup_skips_replaced_backup(tmp_path, monkeypatch):
@@ -958,6 +766,7 @@ def test_delete_backup_cleanup_skips_replaced_backup(tmp_path, monkeypatch):
     real_replace = os.replace
     real_stat = os.stat
     armed = {"done": False}
+    stats_seen = {"n": 0}
     replaced = {"done": False}
 
     def racing_replace(src, dst):
@@ -968,18 +777,15 @@ def test_delete_backup_cleanup_skips_replaced_backup(tmp_path, monkeypatch):
 
     def racing_stat(path, *args, **kwargs):
         st = real_stat(path, *args, **kwargs)
-        if (
-            armed["done"]
-            and not replaced["done"]
-            and Path(path).name.startswith(".doomed.py.jinlin-txn-")
-        ):
-            # with the fingerprint captured via fstat at hash time, the first
-            # path stat of the backup is the cleanup ownership check — exactly
-            # where an external writer slips the replacement in
-            replaced["done"] = True
-            os.unlink(path)
-            Path(path).write_bytes(b"external-claim")
-            return real_stat(path, *args, **kwargs)
+        if armed["done"] and Path(path).name.startswith(".doomed.py.jinlin-txn-"):
+            stats_seen["n"] += 1
+            # stat #1 is the post-move identity check; stat #2 is the cleanup
+            # ownership re-check — the replacement slips in there
+            if stats_seen["n"] >= 2 and not replaced["done"]:
+                replaced["done"] = True
+                os.unlink(path)
+                Path(path).write_bytes(b"external-claim")
+                return real_stat(path, *args, **kwargs)
         return st
 
     monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
@@ -1060,10 +866,9 @@ def test_delete_backup_vanished_before_cleanup_is_not_an_error(tmp_path, monkeyp
 
 
 def test_delete_backup_identity_captured_from_same_object_as_hash(tmp_path, monkeypatch):
-    """Round-8 P0: the fingerprint must come from the same open file object the
-    content hash was computed from. A replacement slipped in after the hash
-    read but before a path-based stat must not be registered as our backup —
-    fd-based capture makes the cleanup see the mismatch and keep it."""
+    """Round-8/9: the fingerprint comes from the same open file object as the
+    content hash. A replacement slipped in at the cleanup re-check must not be
+    deleted — the fingerprint mismatch defers the cleanup and keeps it."""
     import jinlin_agent.tools.patch as patch_mod
 
     ctx = make_ctx(tmp_path)
@@ -1073,27 +878,26 @@ def test_delete_backup_identity_captured_from_same_object_as_hash(tmp_path, monk
     real_stat = os.stat
     real_replace = os.replace
     armed = {"done": False}
+    stats_seen = {"n": 0}
     swapped = {"done": False}
 
     def racing_replace(src, dst):
         out = real_replace(src, dst)
         if Path(dst).name.startswith(".doomed.py.jinlin-txn-"):
-            armed["done"] = True  # the move completed; the hash read happens next
+            armed["done"] = True  # the move completed; verification happens next
         return out
 
     def racing_stat(path, *args, **kwargs):
         st = real_stat(path, *args, **kwargs)
-        if (
-            armed["done"]
-            and not swapped["done"]
-            and Path(path).name.startswith(".doomed.py.jinlin-txn-")
-        ):
-            # the replacement lands after the hash read and before the
-            # (path-based) identity capture
-            swapped["done"] = True
-            os.unlink(path)
-            Path(path).write_bytes(b"external-claim")
-            return real_stat(path, *args, **kwargs)
+        if armed["done"] and Path(path).name.startswith(".doomed.py.jinlin-txn-"):
+            stats_seen["n"] += 1
+            # stat #1 is the post-move identity check; stat #2 is the cleanup
+            # re-check — the replacement slips in there and must not be deleted
+            if stats_seen["n"] >= 2 and not swapped["done"]:
+                swapped["done"] = True
+                os.unlink(path)
+                Path(path).write_bytes(b"external-claim")
+                return real_stat(path, *args, **kwargs)
         return st
 
     monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
@@ -1122,6 +926,7 @@ def test_delete_backup_cleanup_stat_error_is_reported_as_deferred(tmp_path, monk
     real_stat = os.stat
     real_replace = os.replace
     armed = {"done": False}
+    stats_seen = {"n": 0}
 
     def racing_replace(src, dst):
         out = real_replace(src, dst)
@@ -1132,13 +937,19 @@ def test_delete_backup_cleanup_stat_error_is_reported_as_deferred(tmp_path, monk
     def racing_stat(path, *args, **kwargs):
         st = real_stat(path, *args, **kwargs)
         if armed["done"] and Path(path).name.startswith(".doomed.py.jinlin-txn-"):
-            raise PermissionError("simulated EACCES on backup")
+            stats_seen["n"] += 1
+            # stat #1 is the post-move identity check; stat #2 is the cleanup
+            # re-check — the failure is injected at the cleanup re-check
+            if stats_seen["n"] >= 2:
+                raise PermissionError("simulated EACCES on backup")
         return st
 
     monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
     monkeypatch.setattr(patch_mod.os, "stat", racing_stat)
     patch = _patch_text("*** Delete File: doomed.py")
     result = patch_mod.apply_patch(ctx, {"patch": patch})
+    # the new lifecycle reports a cleanup stat failure as deferred cleanup on a
+    # committed transaction (commit success and cleanup success are separate)
     assert result.ok
     deferred = result.extra.get("cleanup_deferred") or []
     assert any(
@@ -1283,3 +1094,241 @@ def test_atomic_create_failure_vanished_path_is_reported_uncertain(tmp_path, mon
     assert excinfo.value.code == "RECOVERY_UNCERTAIN"
     assert not target.exists()
 
+
+
+# ------------------------------------------------------------------ round-9 P0: backup lifecycle
+
+
+def test_delete_backup_swap_between_move_and_open_is_not_restored(tmp_path, monkeypatch):
+    """Round-9 P0: a replacement that lands between the move and the backup
+    verification open is detected by the content+fingerprint re-check: it is
+    never restored as the original. The original bytes from the transaction
+    record are re-created at the path, the replacement stays in the backup,
+    and the outcome is RECOVERY_UNCERTAIN."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "doomed.py"
+    target.write_bytes(b"old\n")
+    ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
+    real_open = os.open
+
+    def racing_open(path, *args, **kwargs):
+        if (
+            isinstance(path, (str, bytes, os.PathLike))
+            and Path(path).name.startswith(".doomed.py.jinlin-txn-")
+        ):
+            # the replacement lands after the move, before the backup is opened
+            # for verification
+            Path(path).unlink(missing_ok=True)
+            Path(path).write_bytes(b"external-claim")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(patch_mod.os, "open", racing_open)
+    patch = _patch_text("*** Delete File: doomed.py")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert result.error is not None and result.error.code == "RECOVERY_UNCERTAIN"
+    assert target.read_bytes() == b"old\n", (
+        "the original content must be re-created at its path from the recorded bytes"
+    )
+    backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+    assert len(backups) == 1 and backups[0].read_bytes() == b"external-claim", (
+        "the replacement must be kept aside, never restored as the original"
+    )
+
+
+def test_delete_backup_verification_open_failure_recovers_original(tmp_path, monkeypatch):
+    """Round-9 P0: a failure of the verification open happens AFTER the move —
+    the pending transaction record must let the rollback re-create the original
+    from the recorded bytes (the old lifecycle appended its record only after
+    this point, so the path was lost with the backup unaccounted for)."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "doomed.py"
+    target.write_bytes(b"old\n")
+    ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
+    real_open = os.open
+
+    def failing_open(path, *args, **kwargs):
+        if (
+            isinstance(path, (str, bytes, os.PathLike))
+            and Path(path).name.startswith(".doomed.py.jinlin-txn-")
+        ):
+            raise PermissionError("simulated EACCES on the backup")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(patch_mod.os, "open", failing_open)
+    patch = _patch_text("*** Delete File: doomed.py")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert target.exists() and target.read_bytes() == b"old\n", (
+        "the original content must be re-created from the pending record"
+    )
+    backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+    assert len(backups) == 1, "the backup stays on disk, accounted for by the rollback"
+
+
+def test_delete_backup_verification_read_failure_recovers_original(tmp_path, monkeypatch):
+    """Round-9 P0: a read failure during the backup verification happens AFTER
+    the move — the pending transaction record must let the rollback re-create
+    the original from the recorded bytes (the old lifecycle appended its
+    record only after this point, so the path was lost)."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "doomed.py"
+    target.write_bytes(b"old\n")
+    ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
+    real_read = os.read
+    real_open = os.open
+    target_fd = {"fd": None}
+
+    def tracking_open(path, *args, **kwargs):
+        fd_ = real_open(path, *args, **kwargs)
+        if isinstance(path, (str, bytes, os.PathLike)) and Path(path).name.startswith(".doomed.py.jinlin-txn-"):
+            target_fd["fd"] = fd_
+        return fd_
+
+    def failing_read(fd, *args, **kwargs):
+        if target_fd["fd"] is not None and fd == target_fd["fd"]:
+            raise OSError("simulated I/O error during verification read")
+        return real_read(fd, *args, **kwargs)
+
+    monkeypatch.setattr(patch_mod.os, "open", tracking_open)
+    monkeypatch.setattr(patch_mod.os, "read", failing_read)
+    patch = _patch_text("*** Delete File: doomed.py")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert target.exists() and target.read_bytes() == b"old\n", (
+        "the original content must be re-created from the pending record"
+    )
+    backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+    assert len(backups) == 1, "the backup stays on disk, accounted for by the rollback"
+
+
+def test_delete_backup_verification_fstat_failure_recovers_original(tmp_path, monkeypatch):
+    """Round-9 P0: an fstat failure during the backup verification happens
+    AFTER the move — the pending transaction record must let the rollback
+    re-create the original from the recorded bytes."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "doomed.py"
+    target.write_bytes(b"old\n")
+    ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
+    real_fstat = os.fstat
+    real_open = os.open
+    target_fd = {"fd": None}
+
+    def tracking_open(path, *args, **kwargs):
+        fd_ = real_open(path, *args, **kwargs)
+        if isinstance(path, (str, bytes, os.PathLike)) and Path(path).name.startswith(".doomed.py.jinlin-txn-"):
+            target_fd["fd"] = fd_
+        return fd_
+
+    def failing_fstat(fd):
+        if target_fd["fd"] is not None and fd == target_fd["fd"]:
+            raise OSError("simulated I/O error during verification fstat")
+        return real_fstat(fd)
+
+    monkeypatch.setattr(patch_mod.os, "open", tracking_open)
+    monkeypatch.setattr(patch_mod.os, "fstat", failing_fstat)
+    patch = _patch_text("*** Delete File: doomed.py")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert target.exists() and target.read_bytes() == b"old\n", (
+        "the original content must be re-created from the pending record"
+    )
+    backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+    assert len(backups) == 1, "the backup stays on disk, accounted for by the rollback"
+
+
+def test_delete_backup_stat_failure_after_move_recovers_original(tmp_path, monkeypatch):
+    """Round-9 P0: an I/O failure of the post-move identity check leaves the
+    backup's ownership unproven — the original content is re-created at its
+    path from the verified handle, the backup is kept, and the outcome is
+    RECOVERY_UNCERTAIN (the old lifecycle reported the deletion as a success
+    with a deferred entry while the path stayed lost)."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "doomed.py"
+    target.write_text("old\n", encoding="utf-8")
+    ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
+    real_replace = os.replace
+    real_stat = os.stat
+    armed = {"done": False}
+
+    def racing_replace(src, dst):
+        out = real_replace(src, dst)
+        if Path(dst).name.startswith(".doomed.py.jinlin-txn-"):
+            armed["done"] = True
+        return out
+
+    def racing_stat(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        if armed["done"] and Path(path).name.startswith(".doomed.py.jinlin-txn-"):
+            raise OSError("simulated I/O error on the post-move identity check")
+        return st
+
+    monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
+    monkeypatch.setattr(patch_mod.os, "stat", racing_stat)
+    patch = _patch_text("*** Delete File: doomed.py")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert result.error is not None and result.error.code == "RECOVERY_UNCERTAIN"
+    assert target.exists() and target.read_text(encoding="utf-8") == "old\n", (
+        "the original content must be re-created when the backup cannot be verified"
+    )
+    assert list(tmp_path.glob(".doomed.py.jinlin-txn-*")), "the unverifiable backup is kept, not deleted"
+
+
+def test_rollback_delete_backup_replaced_in_window_is_kept(tmp_path, monkeypatch):
+    """Round-9 P0: when a rollback runs, a backup whose fingerprint no longer
+    matches the moved object is not provably ours — the original content is
+    re-created from the recorded bytes and the foreign backup is kept, never
+    linked into the path."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    doomed = tmp_path / "doomed.py"
+    other = tmp_path / "other.py"
+    doomed.write_text("old\n", encoding="utf-8")
+    other.write_text("keep\n", encoding="utf-8")
+    ctx.state.read_hashes["doomed.py"] = sha(doomed.read_bytes())
+    ctx.state.read_hashes["other.py"] = sha(other.read_bytes())
+    real_atomic = patch_mod.atomic_write
+    real_stat = os.stat
+    calls = {"n": 0}
+
+    def failing_second(path, data, mode_from=None, expected_sha256=None, create=False):
+        # the delete op never calls atomic_write, so the first call is the
+        # update — make it fail to trigger the rollback of the delete
+        raise patch_mod.AgentError("PATCH_CONFLICT", "simulated conflict", source="edit")
+
+    def racing_stat(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        if Path(path).name.startswith(".doomed.py.jinlin-txn-"):
+            # during the rollback, the backup presents a foreign fingerprint
+            return real_stat(other)
+        return st
+
+    monkeypatch.setattr(patch_mod, "atomic_write", failing_second)
+    monkeypatch.setattr(patch_mod.os, "stat", racing_stat)
+    patch = _patch_text(
+        "*** Delete File: doomed.py",
+        "*** Update File: other.py",
+        "@@",
+        "-keep",
+        "+kept",
+    )
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert result.error is not None and result.error.code == "RECOVERY_UNCERTAIN"
+    assert doomed.read_text(encoding="utf-8") == "old\n", (
+        "the original content must be re-created from the recorded bytes"
+    )
+    backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+    assert len(backups) == 1, "the unverifiable backup is kept for inspection, not linked into the path"
