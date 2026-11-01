@@ -655,7 +655,23 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                 backup = path.with_name(f".{path.name}.jinlin-txn-{uuid.uuid4().hex[:8]}")
                 # move the directory entry atomically; verify what we moved
                 os.replace(path, backup)
-                moved_sha = hashlib.sha256(backup.read_bytes()).hexdigest()
+                # hash and identity MUST come from the same open file object:
+                # reading the hash by path and statting the path separately
+                # would let a replacement that lands in between be registered
+                # as our backup (round-8 finding)
+                fd = os.open(backup, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+                try:
+                    digest = hashlib.sha256()
+                    while True:
+                        chunk = os.read(fd, 1 << 20)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                    moved_sha = digest.hexdigest()
+                    st = os.fstat(fd)
+                    backup_identity = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+                finally:
+                    os.close(fd)
                 if moved_sha != expected:
                     if _restore_no_clobber(backup, path):
                         raise AgentError(
@@ -671,7 +687,6 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                         source="edit",
                         details={"kept_aside": backup.name},
                     )
-                st = os.stat(backup)
                 record_trash(ctx.workspace, backup.name, item["rel"], "txn")
                 applied.append(
                     {
@@ -680,9 +695,9 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                         "rel": item["rel"],
                         "backup": backup,
                         "before_sha": expected,
-                        # fingerprint captured right after our own move: the post-commit
-                        # cleanup may only delete the backup while it still matches this
-                        "backup_identity": (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns),
+                        # fingerprint of exactly the file object the hash above
+                        # was computed from
+                        "backup_identity": backup_identity,
                     }
                 )
                 deleted.append(item["rel"])
@@ -755,8 +770,13 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         identity = record.get("backup_identity")
         try:
             st = os.stat(backup)
-        except OSError:
-            continue  # already gone; nothing of ours left to clean
+        except FileNotFoundError:
+            continue  # gone — nothing of ours left to clean
+        except OSError as exc:
+            # a stat failure is not "nothing to clean": keep the backup and
+            # report the reason instead of silently swallowing the error
+            cleanup_deferred.append({"name": backup.name, "reason": f"stat failed: {exc}"})
+            continue
         provable = identity is not None and (
             st.st_dev,
             st.st_ino,
@@ -764,13 +784,15 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             st.st_mtime_ns,
         ) == identity
         if not provable:
-            cleanup_deferred.append(backup.name)
+            cleanup_deferred.append(
+                {"name": backup.name, "reason": "current stat fingerprint does not match the moved backup"}
+            )
             continue
         try:
             backup.unlink()
-            forget_trash(ctx.workspace, backup.name)
-        except OSError:
-            cleanup_deferred.append(backup.name)
+            forget_trash(ctx.workspace, backup)
+        except OSError as exc:
+            cleanup_deferred.append({"name": backup.name, "reason": f"unlink failed: {exc}"})
 
     read_hashes = {w["path"]: w["hash_after"] for w in written}
     summary = [f"applied {len(plan)} file operation(s):"]
@@ -780,8 +802,8 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         summary.append(f"  D {d}")
     if cleanup_deferred:
         summary.append(
-            "note: backup file(s) kept after commit (ownership not provable or unlink failed): "
-            + ", ".join(cleanup_deferred)
+            "note: backup file(s) kept after commit (ownership not provable or cleanup failed): "
+            + ", ".join(d["name"] for d in cleanup_deferred)
             + " — the transaction is committed; inspect before removing"
         )
     return ToolResult(

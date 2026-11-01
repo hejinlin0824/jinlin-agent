@@ -932,9 +932,7 @@ def test_delete_backup_cleanup_skips_replaced_backup(tmp_path, monkeypatch):
     ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
     real_replace = os.replace
     real_stat = os.stat
-    real_unlink = os.unlink
     armed = {"done": False}
-    stats_seen = {"n": 0}
     replaced = {"done": False}
 
     def racing_replace(src, dst):
@@ -945,26 +943,22 @@ def test_delete_backup_cleanup_skips_replaced_backup(tmp_path, monkeypatch):
 
     def racing_stat(path, *args, **kwargs):
         st = real_stat(path, *args, **kwargs)
-        if armed["done"] and Path(path).name.startswith(".doomed.py.jinlin-txn-"):
-            stats_seen["n"] += 1
-            # first stat after the move is the identity capture; the cleanup
-            # stat (second) is where the external writer slips the replacement in
-            if stats_seen["n"] >= 2 and not replaced["done"]:
-                replaced["done"] = True
-                real_unlink(path)
-                Path(path).write_bytes(b"external-claim")
-                return real_stat(path, *args, **kwargs)
-        return st
-
-    def racing_unlink(path, *args, **kwargs):
-        # old design: cleanup deletes by name and removes the replacement
-        if Path(path).name.startswith(".doomed.py.jinlin-txn-"):
+        if (
+            armed["done"]
+            and not replaced["done"]
+            and Path(path).name.startswith(".doomed.py.jinlin-txn-")
+        ):
+            # with the fingerprint captured via fstat at hash time, the first
+            # path stat of the backup is the cleanup ownership check — exactly
+            # where an external writer slips the replacement in
+            replaced["done"] = True
+            os.unlink(path)
             Path(path).write_bytes(b"external-claim")
-        return real_unlink(path, *args, **kwargs)
+            return real_stat(path, *args, **kwargs)
+        return st
 
     monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
     monkeypatch.setattr(patch_mod.os, "stat", racing_stat)
-    monkeypatch.setattr(patch_mod.os, "unlink", racing_unlink)
     patch = _patch_text("*** Delete File: doomed.py")
     result = patch_mod.apply_patch(ctx, {"patch": patch})
     assert result.ok, "a cleanup race must not fail an already committed transaction"
@@ -1038,6 +1032,95 @@ def test_delete_backup_vanished_before_cleanup_is_not_an_error(tmp_path, monkeyp
     assert result.ok
     assert not result.extra.get("cleanup_deferred"), "a vanished backup is not deferred cleanup"
     assert not list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+
+
+def test_delete_backup_identity_captured_from_same_object_as_hash(tmp_path, monkeypatch):
+    """Round-8 P0: the fingerprint must come from the same open file object the
+    content hash was computed from. A replacement slipped in after the hash
+    read but before a path-based stat must not be registered as our backup —
+    fd-based capture makes the cleanup see the mismatch and keep it."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "doomed.py"
+    target.write_text("old\n", encoding="utf-8")
+    ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
+    real_stat = os.stat
+    real_replace = os.replace
+    armed = {"done": False}
+    swapped = {"done": False}
+
+    def racing_replace(src, dst):
+        out = real_replace(src, dst)
+        if Path(dst).name.startswith(".doomed.py.jinlin-txn-"):
+            armed["done"] = True  # the move completed; the hash read happens next
+        return out
+
+    def racing_stat(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        if (
+            armed["done"]
+            and not swapped["done"]
+            and Path(path).name.startswith(".doomed.py.jinlin-txn-")
+        ):
+            # the replacement lands after the hash read and before the
+            # (path-based) identity capture
+            swapped["done"] = True
+            os.unlink(path)
+            Path(path).write_bytes(b"external-claim")
+            return real_stat(path, *args, **kwargs)
+        return st
+
+    monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
+    monkeypatch.setattr(patch_mod.os, "stat", racing_stat)
+    patch = _patch_text("*** Delete File: doomed.py")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert result.ok
+    backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+    assert len(backups) == 1 and backups[0].read_bytes() == b"external-claim", (
+        "the replacement must not be registered as our backup and then deleted"
+    )
+    deferred = result.extra.get("cleanup_deferred") or []
+    assert any(d["name"] == backups[0].name for d in deferred)
+
+
+def test_delete_backup_cleanup_stat_error_is_reported_as_deferred(tmp_path, monkeypatch):
+    """Round-8 P0: a stat failure is not the same as 'the backup is gone' —
+    PermissionError and other I/O errors must surface as deferred cleanup with
+    the reason instead of being silently treated as nothing-to-clean."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "doomed.py"
+    target.write_text("old\n", encoding="utf-8")
+    ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
+    real_stat = os.stat
+    real_replace = os.replace
+    armed = {"done": False}
+
+    def racing_replace(src, dst):
+        out = real_replace(src, dst)
+        if Path(dst).name.startswith(".doomed.py.jinlin-txn-"):
+            armed["done"] = True
+        return out
+
+    def racing_stat(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        if armed["done"] and Path(path).name.startswith(".doomed.py.jinlin-txn-"):
+            raise PermissionError("simulated EACCES on backup")
+        return st
+
+    monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
+    monkeypatch.setattr(patch_mod.os, "stat", racing_stat)
+    patch = _patch_text("*** Delete File: doomed.py")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert result.ok
+    deferred = result.extra.get("cleanup_deferred") or []
+    assert any(
+        d["name"].startswith(".doomed.py.jinlin-txn-") and "stat failed" in d["reason"]
+        for d in deferred
+    ), "a stat failure must be reported as deferred cleanup with its reason"
+    assert list(tmp_path.glob(".doomed.py.jinlin-txn-*")), "the backup must stay on disk"
 
 
 # ------------------------------------------------------------------ P3 create-cleanup boundary matrix (batch 2)
