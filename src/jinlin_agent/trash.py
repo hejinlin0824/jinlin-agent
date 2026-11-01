@@ -118,7 +118,7 @@ def _append_audit_event(workspace: Path, action: str, status: str, **fields: Any
         body["event_hash"] = hashlib.sha256(
             json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         ).hexdigest()
-        encoded = (json.dumps(body, sort_keys=True, ensure_ascii=False) + "\\n").encode("utf-8")
+        encoded = (json.dumps(body, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
         path = _audit_path(workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o600)
