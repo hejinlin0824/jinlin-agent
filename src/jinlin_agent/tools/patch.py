@@ -40,6 +40,7 @@ from ..errors import (
     AgentError,
 )
 from ..locks import SessionLock, SessionLockedError
+from ..trash import forget_trash, record_trash
 from .base import ToolContext, ToolResult, ToolSpec
 from .registry import ToolRegistry
 
@@ -284,7 +285,7 @@ def _restore_no_clobber(source: Path, dest: Path) -> bool:
     return True
 
 
-def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], list[str], list[str]]:
+def _rollback_transaction(applied: list[dict[str, Any]], workspace: Path) -> tuple[list[str], list[str], list[str]]:
     """Revert only mutations this transaction actually made *and* still owns.
 
     Ownership is verified by content hash, and the live path is never deleted
@@ -317,6 +318,7 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
                     continue
                 trash = path.with_name(f".{path.name}.jinlin-rollback-{uuid.uuid4().hex[:8]}")
                 os.replace(path, trash)  # content-preserving: never unlink in place
+                record_trash(workspace, trash.name, rel, "rollback")
                 if hashlib.sha256(trash.read_bytes()).hexdigest() == record["after_sha"]:
                     redundant.append(trash.name)  # reverted content, verified ours
                     restored.append(rel)
@@ -332,6 +334,7 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
                     continue
                 trash = path.with_name(f".{path.name}.jinlin-rollback-{uuid.uuid4().hex[:8]}")
                 os.replace(path, trash)
+                record_trash(workspace, trash.name, rel, "rollback")
                 if hashlib.sha256(trash.read_bytes()).hexdigest() != record["after_sha"]:
                     if _restore_no_clobber(trash, path):
                         redundant.append(trash.name)  # content back at the path
@@ -669,6 +672,7 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                         details={"kept_aside": backup.name},
                     )
                 st = os.stat(backup)
+                record_trash(ctx.workspace, backup.name, item["rel"], "txn")
                 applied.append(
                     {
                         "kind": "delete",
@@ -704,7 +708,7 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                     }
                 )
     except Exception as exc:
-        restored, incomplete, redundant = _rollback_transaction(applied)
+        restored, incomplete, redundant = _rollback_transaction(applied, ctx.workspace)
         details = {
             "rolled_back": restored,
             "rollback_incomplete": incomplete,
@@ -764,6 +768,7 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             continue
         try:
             backup.unlink()
+            forget_trash(ctx.workspace, backup.name)
         except OSError:
             cleanup_deferred.append(backup.name)
 

@@ -316,6 +316,29 @@ def cmd_doctor(args: Any) -> int:
     return 0
 
 
+def cmd_clean(args: Any) -> int:
+    from .trash import clean_trash
+
+    workspace = Path(args.workspace or ".").expanduser().resolve()
+    report = clean_trash(workspace, apply=bool(args.apply))
+    _print(f"workspace: {workspace}")
+    _print(f"status: {report['status']}")
+    if report.get("detail"):
+        _print(f"detail: {report['detail']}")
+    for key in ("removable", "unrecognized", "removed"):
+        items = report.get(key) or []
+        _print(f"{key}: {len(items)}")
+        for name in items:
+            _print(f"  {name}")
+    failed = report.get("failed") or []
+    _print(f"failed: {len(failed)}")
+    for item in failed:
+        _print(f"  {item['name']} ({item['error']})")
+    if report["status"] == "dry-run":
+        _print("dry run only — pass --apply to remove the provable leftovers")
+    return 0
+
+
 def cmd_eval(args: Any) -> int:
     from .evalkit import run_suite
 
@@ -376,6 +399,15 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="environment and config check")
     doctor.add_argument("--workspace", default=".")
     doctor.set_defaults(func=cmd_doctor)
+
+    clean = sub.add_parser("clean", help="list (default) or remove jinlin trash/backup leftovers")
+    clean.add_argument("--workspace", default=".", help="workspace to sweep (default: current directory)")
+    clean.add_argument(
+        "--apply",
+        action="store_true",
+        help="remove the provable leftovers (default: dry run; unrecognized files are never removed)",
+    )
+    clean.set_defaults(func=cmd_clean)
 
     ev = sub.add_parser("eval", help="run the harness conformance / evaluation suite")
     ev.add_argument("--suite", default="all", choices=["all", "hcs", "e1e8"])
