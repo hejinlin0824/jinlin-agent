@@ -1334,6 +1334,65 @@ def test_rollback_delete_backup_replaced_in_window_is_kept(tmp_path, monkeypatch
     assert len(backups) == 1, "the unverifiable backup is kept for inspection, not linked into the path"
 
 
+def test_rollback_delete_never_restores_from_backup_path(tmp_path, monkeypatch):
+    """A backup pathname can be replaced after rollback's ownership check.
+    Recovery must reconstruct from the pre-move bytes, never link whatever
+    happens to occupy the backup name at the last moment."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    doomed = tmp_path / "doomed.py"
+    other = tmp_path / "other.py"
+    original = b"original A bytes\n"
+    replacement = b"external B bytes\n"
+    doomed.write_bytes(original)
+    other.write_bytes(b"keep\n")
+    ctx.state.read_hashes["doomed.py"] = sha(original)
+    ctx.state.read_hashes["other.py"] = sha(other.read_bytes())
+
+    real_atomic = patch_mod.atomic_write
+    real_write_exclusive = patch_mod._write_exclusive
+    real_restore = patch_mod._restore_no_clobber
+
+    def failing_second(path, data, mode_from=None, expected_sha256=None, create=False):
+        raise patch_mod.AgentError("PATCH_CONFLICT", "force rollback", source="edit")
+
+    def racing_restore(source, dest):
+        if Path(source).name.startswith(".doomed.py.jinlin-txn-"):
+            # This is after the old implementation's backup hash/stat check,
+            # but before its hard-link restore.
+            Path(source).write_bytes(replacement)
+        return real_restore(source, dest)
+
+    def racing_write(path, data):
+        if Path(path) == doomed:
+            backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+            assert len(backups) == 1
+            backups[0].write_bytes(replacement)
+        return real_write_exclusive(path, data)
+
+    monkeypatch.setattr(patch_mod, "atomic_write", failing_second)
+    monkeypatch.setattr(patch_mod, "_restore_no_clobber", racing_restore)
+    monkeypatch.setattr(patch_mod, "_write_exclusive", racing_write)
+
+    patch = _patch_text(
+        "*** Delete File: doomed.py",
+        "*** Update File: other.py",
+        "@@",
+        "-keep",
+        "+kept",
+    )
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+
+    assert not result.ok
+    assert result.error is not None and result.error.code == "RECOVERY_UNCERTAIN"
+    assert doomed.read_bytes() == original, "the original bytes, not the backup-path replacement, must be restored"
+    backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+    assert len(backups) == 1 and backups[0].read_bytes() == replacement, (
+        "the replacement at the backup path must remain available for inspection"
+    )
+
+
 def test_delete_backup_replaced_and_original_path_claimed_creates_rescue(tmp_path, monkeypatch):
     """Round-10 P0 acceptance: the backup replaced concurrently AND the path
     claimed by another writer - the original bytes are parked in a rescue
