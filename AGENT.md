@@ -1,16 +1,16 @@
 ---
 handoff_document: true
 project: jinlin-agent (Python code-engineering agent harness)
-version: 2.1
-generated_at: "2026-11-01T13:30+08:00"
+version: 2.2
+generated_at: "2026-11-01T14:30+08:00"
 repository: https://github.com/hejinlin0824/jinlin-agent
 working_directory: "E:\\codebase\\玩耍项目\\jinlin-agent"
 branches:
   main: 85854f1   # 受保护基线，评审要求不得直接改
-  review/followup-fixes: 22d4c7d+   # 第 3 轮整改代码提交；docs 提交后 HEAD 再 +N
+  review/followup-fixes: f1b0cb8+   # 第 4 轮整改代码提交；docs 提交后 HEAD 再 +N
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
-test_status: "python -m pytest -q => 72 passed; jinlin-agent eval --suite all => 18/18"
-review_status: "第 3 轮两个 P1（TOCTOU / torn tail 恢复）已按报告修复；等待第 4 轮针对性复核后合并"
+test_status: "python -m pytest -q => 76 passed; jinlin-agent eval --suite all => 18/18"
+review_status: "第 4 轮 P1×2（恢复路径 no-clobber）已修 + P2-1 严格 UTF-8 已补；P2-2/P2-3 单独排期；等待最后一轮复核"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
 ---
@@ -63,15 +63,15 @@ non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
 | 分支 | HEAD | 说明 |
 |---|---|---|
 | `main` | `85854f1` | 受保护基线；评审明确要求**不要**直接改 |
-| `review/followup-fixes` | `22d4c7d`+ | 第 3 轮整改代码提交；其后是 docs 提交，推前用 `git log --oneline -3` 确认 |
+| `review/followup-fixes` | `f1b0cb8`+ | 第 4 轮整改代码提交；其后是 docs 提交，推前用 `git log --oneline -3` 确认 |
 | `origin/main` | `85854f1` | 与本地一致 |
 
-代码基线（被第 3 轮复核审阅的代码提交）：`9a935d4`。第 3 轮整改代码提交：`22d4c7d`（O_EXCL 创建 / workspace 写锁 / 先移动后校验回滚 / EventLog 尾部修复，含 8 条新测试）。仓库已迁到 `E:\codebase\玩耍项目\jinlin-agent`（原 `C:\Users\jinlin.he\Documents\deepseek-harness\default-workspace\jinlin-code-agent` 不再存在）。
+代码基线（被第 3 轮复核审阅的代码提交）：`9a935d4`。第 3 轮整改代码提交：`22d4c7d`（O_EXCL 创建 / workspace 写锁 / 先移动后校验回滚 / EventLog 尾部修复）。第 4 轮整改代码提交：`f1b0cb8`（统一 `_restore_no_clobber` 放回 / 删除覆盖式 fallback / 严格 UTF-8）。仓库已迁到 `E:\codebase\玩耍项目\jinlin-agent`（原 `C:\Users\jinlin.he\Documents\deepseek-harness\default-workspace\jinlin-code-agent` 不再存在）。
 
 ### 2.2 验证状态
 
 ```bash
-python -m pytest -q            # 72 passed（42 基础 + 30 安全/完成门/事务回归）
+python -m pytest -q            # 76 passed（42 基础 + 34 安全/完成门/事务回归）
 jinlin-agent eval --suite all  # 18/18 probes passed（离线，scripted provider）
 ```
 
@@ -85,7 +85,8 @@ CI：`.github/workflows/ci.yml`，矩阵 `windows-latest` / `ubuntu-latest`，Py
 |---|---|---|---|
 | 第 1 轮 | `JINLIN_AGENT_REVIEW.md` | 实验型 Harness 7.0/10；生产级 4.5/10；P0×2、P1×6、P2×4 | 已修 P0×2 + P1×6 + P2×2，见 `docs/REVIEW-RESPONSE.md` |
 | 第 2 轮 | `JINLIN_AGENT_REVIEW_FOLLOWUP.md` | 接受大部分；要求修：回滚并发、L5 `exit_code=None`、事件尾判定 | 已修，见 `docs/REVIEW-RESPONSE.md` §0 |
-| **第 3 轮（当前）** | `JINLIN_AGENT_SUBMISSION_REVIEW.md` | **Request changes / 暂缓合并**：L5 通过；**2 个 P1 待修** | **两个 P1 已修**（`22d4c7d`，见 §3 与 `docs/REVIEW-SUBMISSION-ROUND3.md`），等待针对性复核 |
+| **第 3 轮** | `JINLIN_AGENT_SUBMISSION_REVIEW.md` | **Request changes / 暂缓合并**：L5 通过；**2 个 P1 待修** | **两个 P1 已修**（`22d4c7d`，见 §3 与 `docs/REVIEW-SUBMISSION-ROUND3.md`） |
+| **第 4 轮（当前）** | 《第 3 轮整改复核意见》 | **Request changes**：上轮全过；**P1×2 恢复路径残留竞争** + P2×3 | **P1×2 已修 + P2-1 已补**（`f1b0cb8`，见 `docs/REVIEW-SUBMISSION-ROUND4.md`）；P2-2/P2-3 单独排期；等待最后一轮复核 |
 
 ⚠️ 三个评审报告目前都在所有者本机 `C:\Users\jinlin.he\Downloads\` 下，**不在仓库里**。如果接手环境读不到，请让所有者粘贴或提供文件；本文件 §3 已完整摘录第 3 轮的要求。
 
@@ -412,7 +413,7 @@ git push origin main
 6. **Low IL 限制**：workspace 是 Medium 标签，Low IL 写不了；不要为追求"更低完整性"重标用户 workspace。
 7. **证据语法**：测试类 claim 必须引用 `ver_*`/`artifact_*`/`L3 tests`/测试命令；只引文件路径会被拒。
 8. **事件日志**：读取允许无换行 torn tail，且 `open()` 已在 append 前修复（截断/补换行）；中间坏/空行/seq 缺口必须 fail closed。
-9. **回滚边界**：只回滚本事务写后 hash 仍匹配的内容；不一致时 `RECOVERY_UNCERTAIN`，不要静默覆盖。
+9. **回滚边界**：只回滚本事务写后 hash 仍匹配的内容；不一致时 `RECOVERY_UNCERTAIN`，不要静默覆盖。**所有放回（trash/backup → 原路径）必须走 `_restore_no_clobber`（`os.link` create-if-absent）**，绝不 `exists()` + `os.replace`——那是第 4 轮复核抓到的缺陷模式。
 10. **`main` 保护**：评审明确要求分支隔离；直接改 main 会被拒。
 11. **CI 平台差异**：仅在 Windows 验证过 L1 沙箱；Linux 上 `test_sandbox_win.py` 必须跳过（模块 import 在 Windows-only，tests 里已做 platform guard）。
 12. **API/网络**：GitHub HTTP 可能被本地代理拦截；GitHub API 匿名有速率限制；CI 日志下载需凭据。

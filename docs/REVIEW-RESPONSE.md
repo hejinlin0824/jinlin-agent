@@ -1,12 +1,23 @@
-# 独立评审响应与整改记录（v1.3）
+# 独立评审响应与整改记录（v1.4）
 
 | 项 | 值 |
 |---|---|
-| 评审来源 | `JINLIN_AGENT_REVIEW.md`（2026-11-01，静态代码审查）+ `JINLIN_AGENT_REVIEW_FOLLOWUP.md`（整改复核）+ `JINLIN_AGENT_SUBMISSION_REVIEW.md`（第 3 轮提交复核） |
-| 评审基线 | `f89384c`（首轮）、`85854f1`（复核轮）、`9a935d4`（第 3 轮代码提交） |
+| 评审来源 | `JINLIN_AGENT_REVIEW.md`（2026-11-01，静态代码审查）+ `JINLIN_AGENT_REVIEW_FOLLOWUP.md`（整改复核）+ `JINLIN_AGENT_SUBMISSION_REVIEW.md`（第 3 轮提交复核）+《第 3 轮整改复核意见》（第 4 轮复核） |
+| 评审基线 | `f89384c`（首轮）、`85854f1`（复核轮）、`9a935d4`/`22d4c7d`（第 3/4 轮代码提交） |
 | 评审评分 | 实验型工程 Harness **7.0/10**；生产级通用 Agent **4.5/10** |
-| 本响应版本 | v1.3：首轮 P0/P1 整改 + follow-up 三项残留修复 + 第 3 轮 P1×2（TOCTOU / torn tail 恢复） |
-| 结论 | **接受三轮评审**。首轮 P0×2、P1×6 已修；follow-up 的 P1×2、P2×1 已修；第 3 轮 P1×2 已修（L5 与 CI 该轮已通过）；其余明确延后 |
+| 本响应版本 | v1.4：前三轮全部修复 + 第 4 轮 P1×2（恢复路径 no-clobber）+ P2-1（严格 UTF-8） |
+| 结论 | **接受各轮评审**。首轮 P0×2、P1×6 已修；follow-up P1×2、P2×1 已修；第 3 轮 P1×2 已修；第 4 轮 P1×2 已修、P2-1 已顺手补上；P2-2/P2-3 单独排期 |
+
+## 0b. 第 4 轮复核整改（v1.4，基于《第 3 轮整改复核意见》）
+
+第 4 轮结论为 **Request changes**：上一轮全部整改项通过；新发现恢复路径的残留竞争（P1×2）。本轮按复核 §6 要求只处理 P1-1 / P1-2，并顺手补上复核明确建议的 P2-1；**P2-2 / P2-3 未动，单独排期**。代码提交 `f1b0cb8`，`main` 保持 `85854f1` 不变。
+
+| 复核项 | 处理 | 回归测试 |
+|---|---|---|
+| **P1-1** 回滚恢复用 `os.replace(trash, path)`，"trash 已移动、原路径被外部重建"时可覆盖外部文件 | 新增统一 `_restore_no_clobber(source, dest)` helper：`os.link` 原子 create-if-absent 放回 + 删除冗余 source 名；dest 被占用或文件系统不支持硬链接 → 返回 False，**双方保留**（外部内容在路径、本事务内容在 trash/backup）并报 `RECOVERY_UNCERTAIN`；**不以覆盖式 rename 作为静默回退**。Add / Update 回滚 mismatch 与 Update 恢复写失败后的放回全部改走 helper | `test_rollback_restore_is_no_clobber_when_path_recreated[add]`、`[update]`（参数化注入"路径重建"时序；断言外部内容完整、trash 留存、`RECOVERY_UNCERTAIN`） |
+| **P1-2** Delete 写入阶段 move 后 hash 不匹配的恢复分支 `exists()` + `os.replace(backup, path)` 有同类窗口 | 同一 helper：恢复成功 → `FILE_CHANGED_EXTERNALLY`（original restored）；路径被占用 → `RECOVERY_UNCERTAIN` + `details.kept_aside`（备份文件名，原内容留存可恢复）。同时删除 Delete **回滚**恢复中"重查存在 + rename"的覆盖式 fallback | `test_delete_move_hash_mismatch_restore_is_no_clobber`（注入 move 前外部改写 + 放回前路径重建；断言外部内容、backup 留存、`RECOVERY_UNCERTAIN`） |
+| **P2-1** 事件解码 `errors="replace"` 使非法 UTF-8 被静默替换（复核建议顺手补上） | 改为严格 `raw.decode("utf-8")`；非法字节触发 `UnicodeDecodeError` → 统一 `SESSION_CORRUPTED`（torn tail 判定不受影响：无换行尾片段仍按 torn write 截断） | `test_invalid_utf8_inside_event_is_rejected`（JSON 字符串值内 `\xff\xfe`；`read_events` 与 `EventLog.open()` 双路径 fail-closed） |
+| P2-2 事件 `session_id` 未与 EventLog 实例预期比较 / P2-3 `_atomic_create_new` 失败清理按路径 unlink | **未动**（复核 §6：本轮不扩大范围，单独排期） | — |
 
 ## 0a. 第 3 轮复核整改（v1.3，基于 `JINLIN_AGENT_SUBMISSION_REVIEW.md`）
 
