@@ -197,6 +197,55 @@ def test_schema_and_session_mismatch_is_rejected(tmp_path):
     assert excinfo.value.code == "SESSION_CORRUPTED"
 
 
+# ------------------------------------------------------------------- P1 torn-tail repair
+
+
+def test_open_repairs_torn_tail_before_append(tmp_path):
+    """A tolerated torn tail must be truncated before the next append; appending
+    behind an unterminated fragment would fuse both into one corrupt line and
+    permanently corrupt the log on the next read."""
+    log_path = tmp_path / "events.jsonl"
+    _write_bytes(log_path, (_evt(1) + "\n").encode() + b'{"seq":')
+    log = EventLog(tmp_path, "sess_torn").open()
+    try:
+        log.append("step.started")
+    finally:
+        log.close()
+    events = list(read_events(tmp_path))
+    assert [e["seq"] for e in events] == [1, 2]
+    data = log_path.read_bytes()
+    assert data.endswith(b"\n"), "append must never follow an unterminated fragment"
+    for line in data.split(b"\n")[:-1]:
+        json.loads(line.decode("utf-8"))  # every remaining line must parse
+
+
+def test_open_repairs_missing_trailing_newline(tmp_path):
+    """A complete final JSON line whose newline was lost must get its terminator
+    back before the next append, so two events never share one line."""
+    _write_bytes(tmp_path / "events.jsonl", _evt(1).encode())  # valid JSON, no \n
+    log = EventLog(tmp_path, "sess_nonl").open()
+    try:
+        log.append("step.started")
+    finally:
+        log.close()
+    events = list(read_events(tmp_path))
+    assert [e["seq"] for e in events] == [1, 2]
+    data = (tmp_path / "events.jsonl").read_bytes()
+    assert len([line for line in data.split(b"\n") if line.strip()]) == 2
+
+
+def test_open_failure_releases_session_lock(tmp_path):
+    """A log that fails validation in open() must not leak the advisory lock;
+    the next EventLog instance must be able to take it immediately."""
+    _write_bytes(tmp_path / "events.jsonl", (_evt(1) + "\n").encode() + b"{broken}\n")
+    with pytest.raises(AgentError) as excinfo:
+        EventLog(tmp_path, "sess_lock").open()
+    assert excinfo.value.code == "SESSION_CORRUPTED"
+    second = EventLog(tmp_path, "sess_lock")
+    second._lock.acquire()  # must not raise SessionLockedError
+    second._lock.release()
+
+
 # --------------------------------------------------------------------------- P1 gate
 
 
@@ -451,4 +500,153 @@ def test_apply_patch_delete_conflict_preserves_external_file(tmp_path, monkeypat
     assert not result.ok
     assert target.exists(), "the file must be restored, not lost"
     assert target.read_bytes() == b"external-doomed"
+
+
+# ------------------------------------------------------------------ P1 TOCTOU windows (round 3)
+
+
+def test_apply_patch_add_no_clobber_at_replace_window(tmp_path, monkeypatch):
+    """The Add path must establish the file without os.replace at all: an
+    exclusive create leaves no check-then-replace window in which a concurrent
+    creator could be overwritten."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "new.py"
+    real_replace = os.replace
+    calls = {"replace": 0}
+
+    def racing_replace(src, dst):
+        calls["replace"] += 1
+        if Path(dst) == target and not target.exists():
+            target.write_bytes(b"external-writer")  # concurrent creator wins the race
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
+    patch = _patch_text("*** Add File: new.py", "+created by agent")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert calls["replace"] == 0, "the create path must never route through os.replace"
+    assert result.ok, "the race window no longer exists, so the Add completes cleanly"
+    assert target.read_bytes() == b"created by agent\n"
+
+
+def test_apply_patch_add_conflict_when_creator_wins_exclusive_create(tmp_path, monkeypatch):
+    """A creator that slips in just before the exclusive create must win:
+    the Add fails with PATCH_CONFLICT and the foreign content survives."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "new.py"
+    real_open = os.open
+
+    def racing_open(path, flags, *args, **kwargs):
+        if isinstance(path, (str, bytes, os.PathLike)) and Path(path) == target and not target.exists():
+            target.write_bytes(b"external-writer")  # concurrent creator inserts first
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(patch_mod.os, "open", racing_open)
+    patch = _patch_text("*** Add File: new.py", "+created by agent")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert result.error is not None and result.error.code == "PATCH_CONFLICT"
+    assert target.read_bytes() == b"external-writer"
+
+
+def test_apply_patch_update_toctou_after_hash_check(tmp_path, monkeypatch):
+    """An uncoordinated external write landing between the final hash check and
+    os.replace cannot be detected with portable file APIs. The documented
+    best-effort contract: jinlin sessions are mutually excluded by the workspace
+    write lock (see the lock test), and the residual window against arbitrary
+    external processes is stated in the security model instead of claimed
+    impossible."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "a.py"
+    target.write_text("old\n", encoding="utf-8")
+    ctx.state.read_hashes["a.py"] = sha(target.read_bytes())
+    real_replace = os.replace
+
+    def racing_replace(src, dst):
+        if Path(dst) == target:
+            target.write_bytes(b"external-edit-after-check")  # lands in the residual window
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
+    patch = _patch_text("*** Update File: a.py", "@@", "-old", "+new")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert result.ok
+    assert target.read_bytes().replace(b"\r\n", b"\n") == b"new\n"
+
+
+def test_editing_tools_serialize_on_workspace_write_lock(tmp_path):
+    """The workspace write lock is what turns the pre-write hash check into a
+    hard guarantee between jinlin sessions: a second write phase cannot even
+    start while another session holds the lock."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    from jinlin_agent.events import SessionLock
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "a.py"
+    target.write_text("old\n", encoding="utf-8")
+    ctx.state.read_hashes["a.py"] = sha(target.read_bytes())
+    blocker = SessionLock(tmp_path / ".jinlin" / "write.lock")
+    blocker.acquire()
+    try:
+        patch = _patch_text("*** Update File: a.py", "@@", "-old", "+new")
+        result = patch_mod.apply_patch(ctx, {"patch": patch})
+        assert not result.ok
+        assert result.error is not None and result.error.code == "WORKSPACE_LOCKED"
+        assert target.read_text(encoding="utf-8") == "old\n", "the blocked write must not touch the file"
+    finally:
+        blocker.release()
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert result.ok
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_rollback_after_check_preserves_external_content(tmp_path, monkeypatch):
+    """Rollback's own check-then-act: content written between the ownership
+    check and the destructive step must never be deleted or overwritten. The
+    verified content is moved aside atomically first, so a foreign edit rides
+    along, fails the ownership hash, and is moved back untouched."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    first = tmp_path / "a.py"
+    second = tmp_path / "b.py"
+    first.write_text("old-a\n", encoding="utf-8")
+    second.write_text("old-b\n", encoding="utf-8")
+    ctx.state.read_hashes["a.py"] = sha(first.read_bytes())
+    ctx.state.read_hashes["b.py"] = sha(second.read_bytes())
+    real_atomic = patch_mod.atomic_write
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def failing_second(path, data, mode_from=None, expected_sha256=None, create=False):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_atomic(path, data, mode_from=mode_from, expected_sha256=expected_sha256, create=create)
+        raise patch_mod.AgentError("PATCH_CONFLICT", "simulated concurrent conflict", source="edit")
+
+    def racing_replace(src, dst):
+        dst_path = Path(dst)
+        if dst_path == second:
+            second.write_bytes(b"external-edit-in-window")  # old design: clobbered right here
+        elif dst_path.name.startswith(".a.py.jinlin-rollback"):
+            first.write_bytes(b"external-edit-in-window")  # new design: rides along in the trash
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(patch_mod, "atomic_write", failing_second)
+    monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
+    patch = _patch_text(
+        "*** Update File: a.py", "@@", "-old-a", "+new-a",
+        "*** Update File: b.py", "@@", "-old-b", "+new-b",
+    )
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert result.error is not None and result.error.code == "RECOVERY_UNCERTAIN"
+    assert "a.py" in result.error.details.get("rollback_incomplete", [])
+    assert first.read_bytes() == b"external-edit-in-window", "external content must survive the rollback"
 

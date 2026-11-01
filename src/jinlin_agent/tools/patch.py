@@ -7,7 +7,14 @@ Both share the same safety engine:
   * exact matching only (no fuzzy matching — silent corruption is worse than a
     failed edit)
   * first match must be unique (edit_file) / hunk must match exactly once
-  * BOM and line endings preserved; atomic replace via temp file + os.replace
+  * BOM and line endings preserved; updates write atomically (temp file +
+    os.replace with a pre-replace hash re-check), new files are established
+    with an exclusive create (O_CREAT | O_EXCL) so they can never overwrite
+    a concurrent creator
+  * the write phase is serialized across jinlin sessions by the workspace
+    write lock (<workspace>/.jinlin/write.lock); the residual TOCTOU window
+    against uncoordinated external processes is part of the documented
+    security model
   * a multi-file patch validates everything before writing anything
 """
 
@@ -18,22 +25,52 @@ import os
 import stat
 import tempfile
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from ..errors import (
     PATCH_CONFLICT,
     PATCH_PARSE_ERROR,
     FILE_NOT_READ,
     FILE_CHANGED_EXTERNALLY,
+    WORKSPACE_LOCKED,
     AgentError,
 )
+from ..locks import SessionLock, SessionLockedError
 from .base import ToolContext, ToolResult, ToolSpec
 from .registry import ToolRegistry
 
 
 # --------------------------------------------------------------------------- text io
+
+
+@contextmanager
+def _workspace_write_guard(ctx: ToolContext) -> Iterator[None]:
+    """Serialize the write phase across jinlin sessions on one workspace.
+
+    The lock is what turns the pre-write hash check into a hard guarantee
+    between sessions: while it is held, no other jinlin process can enter its
+    own write phase, so no hash-visible change can slip in. It says nothing
+    about uncoordinated external processes — that residual window is part of
+    the documented security model.
+    """
+    lock = SessionLock(Path(ctx.workspace) / ".jinlin" / "write.lock")
+    try:
+        lock.acquire()
+    except SessionLockedError as exc:
+        raise AgentError(
+            WORKSPACE_LOCKED,
+            "another jinlin session holds this workspace's write lock; "
+            "retry once it finishes (edits are serialized per workspace)",
+            source="edit",
+            retriable=True,
+        ) from exc
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 @dataclass
@@ -89,14 +126,26 @@ def atomic_write(
     expected_sha256: str | None = None,
     create: bool = False,
 ) -> None:
-    """Write atomically, re-checking the target hash right before the replace.
+    """Write atomically; re-check the target hash immediately before replacing.
 
-    `expected_sha256` closes the check-then-replace TOCTOU window as far as a
-    portable userspace API can: the target is re-read immediately before
-    os.replace and the written file is verified afterwards.
-    `create=True` never overwrites an existing target.
+    ``create=True`` establishes the file with an exclusive create
+    (``O_CREAT | O_EXCL``) and never touches ``os.replace``, so a file created
+    concurrently can never be overwritten: the write fails with PATCH_CONFLICT
+    instead. This is an atomic no-clobber guarantee provided by the filesystem.
+
+    With ``expected_sha256`` the target is re-read immediately before the
+    replace and the written file is verified afterwards. That check *narrows*
+    the check-then-replace TOCTOU window; it cannot eliminate it against an
+    uncoordinated external process (portable file APIs have no atomic
+    compare-and-swap on regular files). Jinlin sessions are mutually excluded
+    by the workspace write lock (``<workspace>/.jinlin/write.lock``); the
+    residual window is documented in the security model
+    (``docs/REPORT-AND-HANDBOOK.md`` §16).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    if create:
+        _atomic_create_new(path, data)
+        return
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
     try:
         with os.fdopen(fd, "wb") as fh:
@@ -108,8 +157,6 @@ def atomic_write(
                 os.chmod(tmp_name, stat.S_IMODE(mode_from.stat().st_mode))
             except OSError:
                 pass
-        if create and path.exists():
-            raise AgentError(PATCH_CONFLICT, f"{path.name} was created concurrently; refusing to overwrite", source="edit")
         if expected_sha256 is not None:
             current = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
             if current != expected_sha256:
@@ -134,6 +181,38 @@ def atomic_write(
         raise
 
 
+def _atomic_create_new(path: Path, data: bytes) -> None:
+    """Create ``path`` exclusively and write ``data`` (atomic no-clobber).
+
+    ``O_CREAT | O_EXCL`` makes establishment and the does-it-exist decision a
+    single filesystem operation on both Windows and POSIX. If the write itself
+    fails midway, the partial file is removed again (it is ours).
+    """
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    except FileExistsError as exc:
+        raise AgentError(
+            PATCH_CONFLICT,
+            f"{path.name} was created concurrently; refusing to overwrite",
+            source="edit",
+        ) from exc
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except BaseException:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != hashlib.sha256(data).hexdigest():
+        raise AgentError(TOOL_EXECUTION_FAILED, f"{path.name}: written content failed verification", source="edit")
+    _invalidate_bytecode(path)
+
+
 def _invalidate_bytecode(path: Path) -> None:
     """Remove cached bytecode for an edited Python source file (best effort)."""
     if path.suffix.lower() != ".py":
@@ -151,9 +230,20 @@ def _invalidate_bytecode(path: Path) -> None:
 def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
     """Revert only mutations this transaction actually made *and* still owns.
 
-    A path is reverted only when its current hash equals the hash our write
-    produced. If a concurrent writer changed it after us, we keep their content
-    and report the rollback as incomplete instead of overwriting it.
+    Ownership is verified by content hash, and the live path is never deleted
+    or overwritten in place: the current file is first renamed to a
+    transaction-scoped trash name (atomic, content-preserving), the trash is
+    hashed, and only when it matches what our write produced is it removed or
+    replaced. If the hash differs — a concurrent writer edited the file after
+    us — the trash is moved back untouched and the path is reported as
+    incomplete (the caller raises RECOVERY_UNCERTAIN). Delete restores through
+    ``os.link`` (atomic create-if-absent on both platforms), which can never
+    replace a file a concurrent writer recreated.
+
+    The residual window between the trash-rename and the final step is
+    best-effort against uncoordinated external processes; jinlin sessions are
+    serialized by the workspace write lock. See the security model
+    (``docs/REPORT-AND-HANDBOOK.md`` §16).
     """
     restored: list[str] = []
     incomplete: list[str] = []
@@ -164,30 +254,58 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
             if record["kind"] == "add":
                 if not path.exists():
                     continue
-                if hashlib.sha256(path.read_bytes()).hexdigest() == record["after_sha"]:
-                    path.unlink()
+                trash = path.with_name(f".{path.name}.jinlin-rollback-{uuid.uuid4().hex[:8]}")
+                os.replace(path, trash)  # content-preserving: never unlink in place
+                if hashlib.sha256(trash.read_bytes()).hexdigest() == record["after_sha"]:
+                    trash.unlink()
                     restored.append(rel)
                 else:
+                    os.replace(trash, path)  # concurrent content — put it back untouched
                     incomplete.append(rel)
             elif record["kind"] == "update":
                 if not path.exists():
                     incomplete.append(rel)
                     continue
-                if hashlib.sha256(path.read_bytes()).hexdigest() != record["after_sha"]:
+                trash = path.with_name(f".{path.name}.jinlin-rollback-{uuid.uuid4().hex[:8]}")
+                os.replace(path, trash)
+                if hashlib.sha256(trash.read_bytes()).hexdigest() != record["after_sha"]:
+                    os.replace(trash, path)  # concurrent content — put it back untouched
                     incomplete.append(rel)
                     continue
-                atomic_write(path, record["before"], expected_sha256=record["after_sha"])
+                try:
+                    atomic_write(path, record["before"], create=True)
+                except Exception:
+                    if not path.exists():
+                        os.replace(trash, path)  # nothing claimed the path; restore ours
+                    # else: someone else wrote the path during our failed
+                    # restore — keep their content and ours (trash), report it
+                    incomplete.append(rel)
+                    continue
+                trash.unlink()
                 restored.append(rel)
             else:  # delete: restore from the moved-aside backup
                 if path.exists():
                     incomplete.append(rel)  # a concurrent writer recreated it
                     continue
                 backup: Path = record["backup"]
-                if backup.exists():
+                if not backup.exists():
+                    incomplete.append(rel)
+                    continue
+                try:
+                    os.link(backup, path)  # atomic create-if-absent on both platforms
+                except FileExistsError:
+                    incomplete.append(rel)  # concurrent writer recreated it in the window
+                    continue
+                except OSError:
+                    # filesystem without hardlink support: best-effort re-check + rename
+                    if path.exists():
+                        incomplete.append(rel)
+                        continue
                     os.replace(backup, path)
                     restored.append(rel)
-                else:
-                    incomplete.append(rel)
+                    continue
+                os.unlink(backup)
+                restored.append(rel)
         except Exception:
             incomplete.append(rel)
     return restored, incomplete
@@ -368,6 +486,14 @@ def _rel_path(ctx: ToolContext, raw: str) -> tuple[Path, str]:
 
 
 def apply_patch(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    try:
+        with _workspace_write_guard(ctx):
+            return _apply_patch_locked(ctx, args)
+    except AgentError as exc:
+        return ToolResult(ok=False, error=exc)
+
+
+def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     text = args.get("patch") or ""
     if len(text.encode("utf-8")) > int(ctx.config.workspace.get("max_patch_bytes", 2_000_000)):
         return ToolResult(ok=False, error=AgentError("FILE_TOO_LARGE", "patch too large", source="edit"))
@@ -508,6 +634,11 @@ def apply_patch(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     except Exception as exc:
         restored, incomplete = _rollback_transaction(applied)
         details = {"rolled_back": restored, "rollback_incomplete": incomplete}
+        if not applied and isinstance(exc, AgentError):
+            # nothing was written, so there is nothing to roll back — surface
+            # the precise error (e.g. PATCH_CONFLICT on a lost create race)
+            # instead of a generic execution-failure wrapper
+            return ToolResult(ok=False, error=exc)
         if incomplete:
             return ToolResult(
                 ok=False,
@@ -554,6 +685,14 @@ def apply_patch(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
 
 
 def edit_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    try:
+        with _workspace_write_guard(ctx):
+            return _edit_file_locked(ctx, args)
+    except AgentError as exc:
+        return ToolResult(ok=False, error=exc)
+
+
+def _edit_file_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     path, rel = _rel_path(ctx, args["path"])
     old_string = args.get("old_string") or ""
     new_string = args.get("new_string") or ""
@@ -619,6 +758,14 @@ def edit_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
 
 
 def write_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+    try:
+        with _workspace_write_guard(ctx):
+            return _write_file_locked(ctx, args)
+    except AgentError as exc:
+        return ToolResult(ok=False, error=exc)
+
+
+def _write_file_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     path, rel = _rel_path(ctx, args["path"])
     content = args.get("content") or ""
     create_only = bool(args.get("create_only", False))
