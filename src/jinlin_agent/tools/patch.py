@@ -188,9 +188,13 @@ def _atomic_create_new(path: Path, data: bytes) -> None:
     ``O_CREAT | O_EXCL`` makes establishment and the does-it-exist decision a
     single filesystem operation on both Windows and POSIX. If the write fails,
     the partial file is removed **only while the path still provably holds the
-    inode this call created** (device + file id captured from the open fd); a
-    path that was replaced concurrently is left untouched and the outcome is
-    reported as RECOVERY_UNCERTAIN instead of deleting by name.
+    inode this call created** — identity is the ``(st_dev, st_ino, st_size,
+    st_mtime_ns)`` tuple captured from the open fd after the bytes landed;
+    plain ``(dev, ino)`` is not enough because Linux filesystems hand the
+    just-freed inode straight back to the next create, which would make a
+    concurrent replacement look like our file. A path that was replaced, or a
+    failure before the identity could be captured, is left untouched and
+    surfaces as RECOVERY_UNCERTAIN instead of deleting by name.
     """
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
@@ -200,21 +204,27 @@ def _atomic_create_new(path: Path, data: bytes) -> None:
             f"{path.name} was created concurrently; refusing to overwrite",
             source="edit",
         ) from exc
-    identity: tuple[int, int] | None = None
+    identity: tuple[int, int, int, int] | None = None
     try:
-        st = os.fstat(fd)
-        identity = (st.st_dev, st.st_ino)
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
             fh.flush()
+            st = os.fstat(fh.fileno())
+            identity = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
             os.fsync(fh.fileno())
     except BaseException as exc:
         provably_ours = False
-        try:
-            current = os.stat(path)
-            provably_ours = (current.st_dev, current.st_ino) == identity
-        except OSError:
-            provably_ours = False  # path vanished — nothing of ours to clean
+        if identity is not None:
+            try:
+                current = os.stat(path)
+                provably_ours = (
+                    current.st_dev,
+                    current.st_ino,
+                    current.st_size,
+                    current.st_mtime_ns,
+                ) == identity
+            except OSError:
+                provably_ours = False  # path vanished — nothing of ours to clean
         if provably_ours:
             try:
                 os.unlink(path)
