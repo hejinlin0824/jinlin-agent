@@ -1,12 +1,23 @@
-# 独立评审响应与整改记录（v1.4）
+# 独立评审响应与整改记录（v1.5）
 
 | 项 | 值 |
 |---|---|
-| 评审来源 | `JINLIN_AGENT_REVIEW.md`（2026-11-01，静态代码审查）+ `JINLIN_AGENT_REVIEW_FOLLOWUP.md`（整改复核）+ `JINLIN_AGENT_SUBMISSION_REVIEW.md`（第 3 轮提交复核）+《第 3 轮整改复核意见》（第 4 轮复核） |
-| 评审基线 | `f89384c`（首轮）、`85854f1`（复核轮）、`9a935d4`/`22d4c7d`（第 3/4 轮代码提交） |
-| 评审评分 | 实验型工程 Harness **7.0/10**；生产级通用 Agent **4.5/10** |
-| 本响应版本 | v1.4：前三轮全部修复 + 第 4 轮 P1×2（恢复路径 no-clobber）+ P2-1（严格 UTF-8） |
-| 结论 | **接受各轮评审**。首轮 P0×2、P1×6 已修；follow-up P1×2、P2×1 已修；第 3 轮 P1×2 已修；第 4 轮 P1×2 已修、P2-1 已顺手补上；P2-2/P2-3 单独排期 |
+| 评审来源 | `JINLIN_AGENT_REVIEW.md`（首轮）+ `JINLIN_AGENT_REVIEW_FOLLOWUP.md` + `JINLIN_AGENT_SUBMISSION_REVIEW.md`（第 3 轮）+《第 3 轮整改复核意见》（第 4 轮）+ 第 5 轮有条件批准 +《第 6 轮独立复核意见》 |
+| 评审基线 | `f89384c`（首轮）→ `85854f1`（第 1–4 轮合并基线）→ 第 4 轮 P1 验收后 `main` 推进至 `f7c008b` |
+| 本响应版本 | v1.5：第 4 轮 P1 已验收合并（§0b）+ 第二阶段 P2 安全加固第 1 批（§0c：source 清理竞态 / P2-2 / P2-3） |
+| 结论 | 第 4 轮两个 P1 **验收通过并已合并**；第 6 轮新发现的 source 清理竞态与排期 P2-2/P2-3 **已修复**；P3 项按清单排期 |
+
+## 0c. 第二阶段 P2 安全加固第 1 批（v1.5，基于《第 6 轮独立复核意见》+ 既有排期）
+
+第 6 轮复核**验收通过**第 4 轮两个 P1（合并已完成、main CI 双平台绿），同时新发现 `_restore_no_clobber` 的源路径清理竞态，并给出下一阶段顺序：先 source 竞态，再 P2-2、P2-3。本批按该顺序全部完成（方案 A），代码提交 `a9c8d34`。
+
+| 项 | 处理 | 回归测试 |
+|---|---|---|
+| **source 清理竞态**（link→unlink 之间源路径被外部替换，按名 unlink 误删外部新文件） | 采纳复核**方案 A**：`_restore_no_clobber` 成功后**不删除 source**；冗余目录项由 `_rollback_transaction` 收集为 `redundant_trash`（新增第三返回值）随失败详情上报，语义为"检查后可移除"；失配且放回被占用时 trash 不计入 redundant（仍是可恢复副本）。恢复路径内不存在任何按名 unlink | `test_restore_no_clobber_does_not_unlink_recreated_source`（link 后注入 source 替换：外部新文件留存、dest 内容正确、helper 不调用 unlink） |
+| **P2-2** EventLog 实例级 session_id 校验 | `open()` 在修复/追加前校验每个已解析事件的 `session_id`：非空且 ≠ 实例预期 → `SESSION_CORRUPTED`；省略 session_id 的事件维持既有容忍；失败释放锁 | `test_open_rejects_mismatched_session_id`（外会话日志拒开 + 锁释放 + 属主会话可打开续写 seq=2） |
+| **P2-3** `_atomic_create_new` 失败清理按路径 unlink | 从 fd 捕获 `(st_dev, st_ino)` 身份；写失败时仅当路径仍可证明持有该 inode 才清理；被替换/消失 → 保留现场抛 `RECOVERY_UNCERTAIN`（原异常为 `__cause__`） | `test_atomic_create_failure_does_not_unlink_replaced_path`（清理期路径被替换：外部内容留存 + `RECOVERY_UNCERTAIN`）、`test_atomic_create_failure_cleans_own_partial_file`（身份匹配：仍清理自身半写文件） |
+
+残余窗口声明：stat 与 unlink 之间的微秒级替换仍是 best-effort（复核已指出 stat 检查不构成完整方案，故本批同时按方案 A 消除了恢复路径内的按名删除）；已在 `REPORT-AND-HANDBOOK.md` §16 如实声明。
 
 ## 0b. 第 4 轮复核整改（v1.4，基于《第 3 轮整改复核意见》）
 

@@ -1,16 +1,16 @@
 ---
 handoff_document: true
 project: jinlin-agent (Python code-engineering agent harness)
-version: 2.2
-generated_at: "2026-11-01T14:30+08:00"
+version: 2.3
+generated_at: "2026-11-01T15:40+08:00"
 repository: https://github.com/hejinlin0824/jinlin-agent
 working_directory: "E:\\codebase\\玩耍项目\\jinlin-agent"
 branches:
-  main: 414e826+   # 已按第 5 轮复核批准 fast-forward 合并（合并点 414e826；其后仅有记录类纯文档提交）
-  review/followup-fixes: 与 main 同步（合并后所有提交先落分支、再 ff 到 main）
+  main: f7c008b   # 第 4 轮 P1 验收归档线；P2 加固批经 review/followup-fixes ff 推进
+  review/followup-fixes: a9c8d34+   # P2 安全加固第 1 批代码提交；docs 提交后 HEAD 再 +N
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
-test_status: "python -m pytest -q => 76 passed; jinlin-agent eval --suite all => 18/18"
-review_status: "第 5 轮复核 Approve；已于 414e826 完成 ff 合并（main CI run 41286417603 双平台 success）；P2-2/P2-3 及 §4 清单单独排期"
+test_status: "python -m pytest -q => 80 passed; jinlin-agent eval --suite all => 18/18"
+review_status: "第 4 轮 P1 已验收合并（f7c008b 归档线）；第 6 轮 source 清理竞态 + P2-2/P2-3 已修复（第二阶段第 1 批），待复核"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
 ---
@@ -413,7 +413,7 @@ git push origin main
 6. **Low IL 限制**：workspace 是 Medium 标签，Low IL 写不了；不要为追求"更低完整性"重标用户 workspace。
 7. **证据语法**：测试类 claim 必须引用 `ver_*`/`artifact_*`/`L3 tests`/测试命令；只引文件路径会被拒。
 8. **事件日志**：读取允许无换行 torn tail，且 `open()` 已在 append 前修复（截断/补换行）；中间坏/空行/seq 缺口必须 fail closed。
-9. **回滚边界**：只回滚本事务写后 hash 仍匹配的内容；不一致时 `RECOVERY_UNCERTAIN`，不要静默覆盖。**所有放回（trash/backup → 原路径）必须走 `_restore_no_clobber`（`os.link` create-if-absent）**，绝不 `exists()` + `os.replace`——那是第 4 轮复核抓到的缺陷模式。
+9. **回滚边界**：只回滚本事务写后 hash 仍匹配的内容；不一致时 `RECOVERY_UNCERTAIN`，不要静默覆盖。**所有放回（trash/backup → 原路径）必须走 `_restore_no_clobber`（`os.link` create-if-absent）**，绝不 `exists()` + `os.replace`——那是第 4 轮复核抓到的缺陷模式。**放回成功后不按名 unlink source**（第 6 轮抓到的缺陷模式：源路径被替换后会误删后来者）——冗余目录项收集进 `redundant_trash` 上报，留给受控清理。
 10. **`main` 保护**：评审明确要求分支隔离；直接改 main 会被拒。
 11. **CI 平台差异**：仅在 Windows 验证过 L1 沙箱；Linux 上 `test_sandbox_win.py` 必须跳过（模块 import 在 Windows-only，tests 里已做 platform guard）。
 12. **API/网络**：GitHub HTTP 可能被本地代理拦截；GitHub API 匿名有速率限制；CI 日志下载需凭据。

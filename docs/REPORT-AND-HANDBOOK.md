@@ -318,7 +318,7 @@ session 开始时快照记录"任务前既有的脏文件"；完成门区分 **�
 - **保留 BOM 与换行风格**（CRLF 不会因为 `\n` 而全量 miss）；
 - **原子写**：更新走临时文件 + `os.replace`，写前复核哈希**缩小**（不消除）TOCTOU 窗口；新建文件走 `O_CREAT|O_EXCL` 独占创建（不用 `os.replace`），对并发创建者具有文件系统级的原子 no-clobber 保证——竞争失败返回 `PATCH_CONFLICT`，绝不覆盖对方内容；
 - **workspace 写锁**：写阶段持 `<workspace>/.jinlin/write.lock` 顾问锁，多个 Jinlin 会话在同一工作区上串行（第二个会话得到可重试的 `WORKSPACE_LOCKED`）；
-- **回滚先移动后校验，放回一律 no-clobber**：回滚不动原路径——先把当前内容原子改名到事务级 trash、校验哈希归属，只有确认仍是本事务产物才删除/替换；所有"把 trash/backup 放回原路径"的动作都走统一 helper（`os.link` 原子 create-if-absent + 删除冗余名）：路径已被并发重建时**双方保留**（外部内容在路径、本事务内容在 trash/backup）并报告 `RECOVERY_UNCERTAIN`，绝不用覆盖式 rename 回退（包括硬链接不可用的文件系统）；
+- **回滚先移动后校验，放回一律 no-clobber，清理一律不按名删**：回滚不动原路径——先把当前内容原子改名到事务级 trash、校验哈希归属，只有确认仍是本事务产物才替换；所有"把 trash/backup 放回原路径"的动作都走统一 helper（`os.link` 原子 create-if-absent）：路径已被并发重建时**双方保留**（外部内容在路径、本事务内容在 trash/backup）并报告 `RECOVERY_UNCERTAIN`，绝不用覆盖式 rename 回退（包括硬链接不可用的文件系统）；放回成功后 source 目录项**有意保留**、不按名 unlink（防误删后来者），作为 `redundant_trash` 上报供检查后受控清理；
 - 失败信息包含 hunk 号与匹配诊断，便于模型自纠。
 
 ## 10. 上下文管理（T3 的核心）
@@ -468,7 +468,7 @@ $ jinlin-agent eval --suite all
 8. **完成门偏严**：证据引用不合规会多 1 轮；这是刻意的 trade-off（False Success 优先于步数）。
 9. **SQLite 投影未实现**：事件折叠直接承担 V1 查询。
 10. **无 MCP / skills / hooks / plugins**：扩展性显著弱于两条基线。
-11. **更新路径的残余 TOCTOU 窗口**：对**不受本程序控制的外部进程**，跨平台普通文件 API 没有按内容哈希的原子 compare-and-swap。写前哈希复核只能把"检查→替换"窗口缩到微秒级，不能消除；一个恰好在窗口内落盘的外部修改仍会被覆盖且无法事后检测。workspace 写锁消除的是**多个 Jinlin 会话之间**的竞争（硬保证），对外部进程仅是 best-effort。回滚与恢复侧已无覆盖风险：本事务内容先原子改名到 trash/backup 再校验归属，所有放回走 `os.link` create-if-absent（路径被并发重建时双方保留并报 `RECOVERY_UNCERTAIN`），对外部进程也是 no-clobber；但 `link + unlink` 两步**不是**抵御任意外部进程的完整原子事务——外部进程在两步之间删除/替换目标路径仍会造成恢复现场的不确定性（不会覆盖外部内容，但可能残留冗余目录项或使放回不可判定）。新建文件同理无此问题（`O_CREAT|O_EXCL` 是文件系统级原子 no-clobber）。
+11. **更新路径的残余 TOCTOU 窗口**：对**不受本程序控制的外部进程**，跨平台普通文件 API 没有按内容哈希的原子 compare-and-swap。写前哈希复核只能把"检查→替换"窗口缩到微秒级，不能消除；一个恰好在窗口内落盘的外部修改仍会被覆盖且无法事后检测。workspace 写锁消除的是**多个 Jinlin 会话之间**的竞争（硬保证），对外部进程仅是 best-effort。回滚与恢复侧已无覆盖与误删风险：本事务内容先原子改名到 trash/backup 再校验归属，所有放回走 `os.link` create-if-absent（路径被并发重建时双方保留并报 `RECOVERY_UNCERTAIN`），放回成功后源目录项**保留不删**（作为 `redundant_trash` 上报，供检查后受控清理），对外部进程既不覆盖也不误删；但 `link` 与后续任何操作之间仍非完整原子事务，恢复现场的不确定性（冗余目录项、放回不可判定）如实存在。新建文件侧：`O_CREAT|O_EXCL` 建立是文件系统级原子 no-clobber；失败清理只在 `(st_dev, st_ino)` 身份仍匹配时按名删除自身半写文件，路径被并发替换时保留现场并报 `RECOVERY_UNCERTAIN`。
 
 ---
 
