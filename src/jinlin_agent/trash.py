@@ -434,10 +434,17 @@ def _safe_rescue_target(workspace: Path, orig: str) -> tuple[Path | None, str | 
 def _publish_restore_stage(stage: Path, dest: Path, digest: str) -> dict[str, Any]:
     """Publish a fully verified stage with atomic no-clobber hard-link creation."""
     try:
-        if hashlib.sha256(stage.read_bytes()).hexdigest() != digest:
-            return {"status": "incomplete", "detail": "staging file does not match the rescue SHA-256; retained for inspection"}
+        if stage.is_symlink():
+            return {"status": "unrecognized", "detail": "staging path is a symlink; not followed"}
+        with stage.open("rb") as fh:
+            data = fh.read()
+            if hashlib.sha256(data).hexdigest() != digest:
+                return {"status": "incomplete", "detail": "staging file does not match the rescue SHA-256; retained for inspection"}
+            # Recovery re-establishes the file-data durability barrier before
+            # publishing a stage left behind by a prior process.
+            os.fsync(fh.fileno())
     except OSError as exc:
-        return {"status": "uncertain", "detail": f"staging file could not be verified: {exc}"}
+        return {"status": "uncertain", "detail": f"staging file could not be verified/fsynced: {exc}"}
     try:
         os.link(stage, dest)
     except FileExistsError:
@@ -494,7 +501,9 @@ def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
                 return {"status": "already-published", "target": orig, "rescue": rescue_rel, "sha256": digest,
                         "detail": "target already contains the verified bytes; rescue retained"}
             return {"status": "conflict", "detail": f"target already exists; rescue preserved at {rescue_rel}"}
-        if stage.exists() or stage.is_symlink():
+        if stage.is_symlink():
+            return {"status": "rejected", "detail": "staging path is a symlink; not followed"}
+        if stage.exists():
             published = _publish_restore_stage(stage, dest, digest)
             published.update({"target": orig, "rescue": rescue_rel, "sha256": digest})
             return published
