@@ -58,12 +58,16 @@ def _restore_no_clobber(source: Path, dest: Path) -> bool:
 
 | 测试 | 注入时序 | 断言 |
 |---|---|---|
-| `test_rollback_restore_is_no_clobber_when_path_recreated[add]` | 本事务 Add 后外部改写目标（随 trash 移动、所有权失配）→ trash 移动完成后、放回前，外部**重建**原路径 | 路径 = 外部重建内容；trash 留存 = 本事务回滚内容；`RECOVERY_UNCERTAIN` + `rollback_incomplete` |
+| `test_rollback_restore_is_no_clobber_when_path_recreated[add]` | 本事务 Add 后注入外部改写 → 目标随 trash 原子移动（所有权失配）→ trash 移动完成后、放回前，外部**重建**原路径 | 路径 = 外部重建内容（`external-recreated`）；trash 留存 = 移动时刻路径上的实际内容（即注入的 `external-in-window`），未被销毁、可恢复；`RECOVERY_UNCERTAIN` + `rollback_incomplete` |
 | `test_rollback_restore_is_no_clobber_when_path_recreated[update]` | 同上（Update 事务） | 同上 |
-| `test_delete_move_hash_mismatch_restore_is_no_clobber` | Delete 移动到 backup 前注入外部改写（随 backup 移动、hash 失配）→ 放回前外部重建原路径 | 路径 = 外部重建内容；backup 留存 = 原内容；`RECOVERY_UNCERTAIN` |
+| `test_delete_move_hash_mismatch_restore_is_no_clobber` | Delete 移动到 backup 前注入外部改写（随 backup 移动、hash 失配）→ 放回前外部重建原路径 | 路径 = 外部重建内容（`external-recreated`）；backup 留存 = 移动时刻路径上的实际内容（注入的 `external-in-backup`），未被销毁；`RECOVERY_UNCERTAIN` |
 | `test_invalid_utf8_inside_event_is_rejected` | JSON 字符串值内注入非法 UTF-8 字节（`\xff\xfe`） | `read_events` 与 `EventLog.open()` 均 `SESSION_CORRUPTED` |
 
-注：修复前运行上述测试（除 add 参数化用例的夹具在红跑后修正过一次夹具构造，其断言路径与 update 用例完全一致且共享同一恢复代码分支）均失败，失败形态与复核预测一致。
+**内容描述更正（第 5 轮复核 §2.4 指出）**：trash / backup 中保留的**不是**本事务写入的原始字节——测试桩在移动前注入的外部改写会随目录项一起进入 trash/backup（这正是所有权哈希失配、进入恢复分支的原因）。测试断言与上表已按实际行为表述为"移动时刻路径上的实际内容（注入的外部改写）"。no-clobber 行为的验证不受此影响：断言的是"外部重建的路径不被放回动作替换 + 放回失败后源文件（trash/backup）内容原样留存"。
+
+复核建议的后续强化（非阻塞，未在本轮实施）：增加一组"trash/backup 保留本事务原始字节、移动完成后再重建目标路径"的注入变体，进一步区分"外部内容随移动进入 trash"与"本事务原始内容滞留 trash"两种现场。
+
+注：修复前运行上述测试均失败，失败形态与复核预测一致。
 
 ---
 
@@ -108,10 +112,25 @@ jinlin-agent eval --suite all -> 18/18 probes passed
 
 ---
 
-## 6. CI
+## 6. CI 证据（第 5 轮复核 §3.1 要求的验收材料）
 
-- Workflow：`.github/workflows/ci.yml`，矩阵 `windows-latest` / `ubuntu-latest`，Python 3.13；
-- 本轮代码提交 `f1b0cb8` 的 run：推送后见分支 Actions 页（判定标准：两 job 均 success；失败则修复后再推并更新本节）。
+| 项 | 值 |
+|---|---|
+| Run URL | <https://github.com/hejinlin0824/jinlin-agent/actions/runs/41280497556>（Run ID `41280497556`） |
+| Run head SHA | `545e5cb`（评审分支 HEAD）；其相对代码提交 `f1b0cb8` 的差异**只有** `AGENT.md` 与 `docs/*.md`，**未触碰 `src/` 与 `tests/`**（`git diff --stat f1b0cb8..545e5cb`：4 个文件，全部为 Markdown 文档） |
+| windows-latest / py3.13 | **success**（全部步骤通过，含 "Unit + probe + security tests" 与 "Harness conformance probes"） |
+| ubuntu-latest / py3.13 | **success**（同上） |
+| Windows pytest（`reports/junit.xml`） | `tests=76 failures=0 errors=0 skipped=0` |
+| Ubuntu pytest（`reports/junit.xml`） | `tests=76 failures=0 errors=0 skipped=16`（16 个 skip 为 Windows 专属 L1 沙箱测试模块的平台守卫，与本轮改动无关） |
+| Windows eval（`reports/eval.txt`） | `18/18 probes passed` |
+| Ubuntu eval（`reports/eval.txt`） | `18/18 probes passed` |
+| 结论 | 双平台 success，pytest 与 eval 结果与本报告 §1/§3.2 一致——验收标准满足 |
+
+复核提到的"主要提交"（`9a935d4`）之外的上一轮 run（`41276159252`）与本轮 run 均为双平台 success。本轮验收以 Run `41280497556` 为准。
+
+## 6a. 恢复原语的边界声明（第 5 轮复核 §4）
+
+`_restore_no_clobber` 的 `os.link()` + `os.unlink()` 是 create-if-absent 的 no-clobber 恢复，但**不是**覆盖任意外部进程所有并发操作的完整原子事务：外部进程在两个目录项操作之间删除/替换目标路径，仍可能造成恢复现场的不确定性（该窗口不产生"覆盖外部内容"，但可能残留冗余目录项或使"放回"不可判定）。对遵循同一锁协议的 Jinlin 会话之间，workspace 写锁仍是硬保证。该边界已写入安全模型 `docs/REPORT-AND-HANDBOOK.md` §16 第 11 条。
 
 ---
 

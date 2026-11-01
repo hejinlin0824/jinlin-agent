@@ -468,7 +468,7 @@ $ jinlin-agent eval --suite all
 8. **完成门偏严**：证据引用不合规会多 1 轮；这是刻意的 trade-off（False Success 优先于步数）。
 9. **SQLite 投影未实现**：事件折叠直接承担 V1 查询。
 10. **无 MCP / skills / hooks / plugins**：扩展性显著弱于两条基线。
-11. **更新路径的残余 TOCTOU 窗口**：对**不受本程序控制的外部进程**，跨平台普通文件 API 没有按内容哈希的原子 compare-and-swap。写前哈希复核只能把"检查→替换"窗口缩到微秒级，不能消除；一个恰好在窗口内落盘的外部修改仍会被覆盖且无法事后检测。workspace 写锁消除的是**多个 Jinlin 会话之间**的竞争（硬保证），对外部进程仅是 best-effort。回滚与恢复侧已无覆盖风险：本事务内容先原子改名到 trash/backup 再校验归属，所有放回走 `os.link` create-if-absent（路径被并发重建时双方保留并报 `RECOVERY_UNCERTAIN`），对外部进程也是 no-clobber。新建文件同理无此问题（`O_CREAT|O_EXCL` 是文件系统级原子 no-clobber）。
+11. **更新路径的残余 TOCTOU 窗口**：对**不受本程序控制的外部进程**，跨平台普通文件 API 没有按内容哈希的原子 compare-and-swap。写前哈希复核只能把"检查→替换"窗口缩到微秒级，不能消除；一个恰好在窗口内落盘的外部修改仍会被覆盖且无法事后检测。workspace 写锁消除的是**多个 Jinlin 会话之间**的竞争（硬保证），对外部进程仅是 best-effort。回滚与恢复侧已无覆盖风险：本事务内容先原子改名到 trash/backup 再校验归属，所有放回走 `os.link` create-if-absent（路径被并发重建时双方保留并报 `RECOVERY_UNCERTAIN`），对外部进程也是 no-clobber；但 `link + unlink` 两步**不是**抵御任意外部进程的完整原子事务——外部进程在两步之间删除/替换目标路径仍会造成恢复现场的不确定性（不会覆盖外部内容，但可能残留冗余目录项或使放回不可判定）。新建文件同理无此问题（`O_CREAT|O_EXCL` 是文件系统级原子 no-clobber）。
 
 ---
 

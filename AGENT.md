@@ -10,7 +10,7 @@ branches:
   review/followup-fixes: f1b0cb8+   # 第 4 轮整改代码提交；docs 提交后 HEAD 再 +N
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
 test_status: "python -m pytest -q => 76 passed; jinlin-agent eval --suite all => 18/18"
-review_status: "第 4 轮 P1×2（恢复路径 no-clobber）已修 + P2-1 严格 UTF-8 已补；P2-2/P2-3 单独排期；等待最后一轮复核"
+review_status: "第 5 轮复核：P1 全部通过，有条件批准；CI 证据与报告措辞已补齐（见 REVIEW-SUBMISSION-ROUND4.md §2.3/§6/§6a），等待最终验收后合并"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
 ---
