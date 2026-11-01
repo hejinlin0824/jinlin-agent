@@ -655,7 +655,9 @@ def recover_rescue(workspace: Path) -> dict[str, Any]:
             expected.add(_relative_posix(_restore_stage_path(target, rescue["sha256"]), workspace))
         orphaned: list[dict[str, Any]] = []
         for root, dirs, files in os.walk(workspace, followlinks=False):
-            candidates = list(files) + [name for name in dirs if (Path(root) / name).is_symlink()]
+            # Include matching directories as suspicious artifacts too;
+            # os.walk does not follow symlink directories with followlinks=False.
+            candidates = list(files) + list(dirs)
             for name in candidates:
                 if not RESTORE_STAGE_RE.match(name):
                     continue
