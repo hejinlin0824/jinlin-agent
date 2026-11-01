@@ -366,7 +366,9 @@ def cmd_rescue(args: Any) -> int:
             _print(f"  removed: {path}")
         for path in report["manifest_degraded"]:
             _print(f"  manifest update failed after removal: {path}")
-        return 0 if report["status"] in ("dry-run", "applied") and not report["failed"] else 2
+        for item in report.get("quarantined", []):
+            _print(f"  quarantined evidence (manual inspection required): {item['path']} [{item['kind']}]")
+        return 0 if report["status"] in ("dry-run", "applied") and not report["failed"] and not report.get("quarantined") else 2
     if args.rescue_action == "list":
         report = list_rescue(workspace)
         _print(f"workspace: {workspace}")
