@@ -825,3 +825,15 @@ def test_rescue_cli_recover_returns_nonzero_for_orphan_stage(tmp_path, capsys):
     assert main(["rescue", "recover", "--workspace", str(tmp_path)]) == 2
     assert "orphaned:" in capsys.readouterr().out
     assert orphan.read_bytes() == b"orphan"
+
+
+
+def test_rescue_clean_reports_interrupted_quarantine_without_touching_it(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    quarantine = tmp_path / ".lost.py.jinlin-clean-a1b2c3d4"
+    quarantine.write_bytes(b"interrupted cleanup evidence")
+    report = trash_mod.clean_rescue(tmp_path, apply=True)
+    assert report["quarantined"] == [{"path": quarantine.name, "kind": "file"}]
+    assert quarantine.read_bytes() == b"interrupted cleanup evidence"
+    assert report["removed"] == []
