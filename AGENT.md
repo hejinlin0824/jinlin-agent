@@ -7,10 +7,10 @@ repository: https://github.com/hejinlin0824/jinlin-agent
 working_directory: "E:\\codebase\\玩耍项目\\jinlin-agent"
 branches:
   main: f7c008b   # 第 4 轮 P1 验收归档线；P2 加固批经 review/followup-fixes ff 推进
-  review/followup-fixes: a9c8d34+   # P2 安全加固第 1 批代码提交；docs 提交后 HEAD 再 +N
+  review/followup-fixes: dad2dda+   # P2 安全加固第 1 批（含 Ubuntu 抓到的 inode 复用修正）；docs 提交后 HEAD 再 +N
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
 test_status: "python -m pytest -q => 80 passed; jinlin-agent eval --suite all => 18/18"
-review_status: "第 4 轮 P1 已验收合并（f7c008b 归档线）；第 6 轮 source 清理竞态 + P2-2/P2-3 已修复（第二阶段第 1 批），待复核"
+review_status: "第 4 轮 P1 已验收合并（f7c008b 归档线）；第 6 轮 source 清理竞态 + P2-2/P2-3 已修复（第二阶段第 1 批，dad2dda 双平台 CI 绿），待复核"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
 ---

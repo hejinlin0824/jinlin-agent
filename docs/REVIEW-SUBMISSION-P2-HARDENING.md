@@ -4,7 +4,7 @@
 |---|---|
 | 仓库 | `hejinlin0824/jinlin-agent` |
 | 提交分支 | `review/followup-fixes`（合并后与 `main` 同步推进；`main` 当前为已验收的 `f7c008b` 线） |
-| 代码 HEAD | `a9c8d34`（本报告提交后 HEAD 再 +N，代码内容不变） |
+| 代码 HEAD | `dad2dda`（`a9c8d34` 主修复 + `dad2dda` 身份元组修正；本报告提交后 HEAD 再 +N，代码内容不变） |
 | 对应复核 | 《第 6 轮独立复核意见》（P1 验收通过 + 新发现 source 清理竞态）+ 既有排期 P2-2 / P2-3 |
 | 提交日期 | 2026-11-01 |
 | 提交范围 | 第 6 轮建议的 P2 安全加固三件套 + 恢复现场注入强化（source 替换时序）；不含 P3 项 |
@@ -45,29 +45,32 @@
 
 ### 2.3 P2-3：身份守卫的失败清理
 
-`_atomic_create_new` 在 `os.open` 之后立即 `os.fstat(fd)` 捕获 `(st_dev, st_ino)`。写失败时：
+`_atomic_create_new` 在写入落地后（`fsync` 之前）从 fd 捕获身份四元组 `(st_dev, st_ino, st_size, st_mtime_ns)`。写失败时：
 
 | 清理时路径状态 | 行为 |
 |---|---|
-| `os.stat(path)` 身份 == 创建时身份 | 仍是我们自己的半写文件 → unlink 清理，原始异常照常抛出 |
-| 身份不同（被并发替换）或路径已消失 | **不删除**，抛 `RECOVERY_UNCERTAIN`（"left in place for inspection"），原异常挂为 `__cause__` |
+| `os.stat(path)` 身份 == 创建时身份 | 仍是我们自己的文件 → unlink 清理，原始异常照常抛出 |
+| 身份不同（被并发替换）或路径已消失、或失败发生在身份捕获之前（写入中途） | **不删除**，抛 `RECOVERY_UNCERTAIN`（"left in place for inspection"），原异常挂为 `__cause__` |
 
-Windows/POSIX 的 `st_ino` 均由 CPython 提供（NTFS file id / inode），双平台可用。残余窗口（stat 之后、unlink 之前的微秒级替换）如实声明为 best-effort，与 §16 的威胁模型一致——本修复消除的是"按名删除"这一缺陷类，而非声称零竞态。
+**为什么是四元组而不是 `(dev, ino)`**：`dad2dda` 修正——首批实现（`a9c8d34`）只用 `(st_dev, st_ino)`，Ubuntu CI 立刻抓到真实缺陷：Linux 文件系统（ext4/overlayfs）会把刚释放的 inode 立刻分配给下一个 create，并发替换因此能呈现**完全相同的 (dev, ino)**，身份检查误判为自己的文件并按名删除。加入 `st_size` 与 `st_mtime_ns` 后，inode 复用的替换会因大小与纳秒时间戳不同而被识别（Windows/NTFS 的 file id 天然不复用，故首批本地与 Windows CI 未暴露）。这是 CI 跨平台矩阵价值的直接例证。
+
+残余窗口如实声明：stat 与 unlink 之间的微秒级替换、以及"替换者刻意复制相同 size/mtime"的对抗场景仍是 best-effort（后者超出威胁模型），与 §16 的边界一致——本修复消除的是"按名删除"与"inode 复用误判"两个缺陷类，不声称零竞态。Windows/POSIX 的 `st_ino` 均由 CPython 提供（NTFS file id / inode），双平台可用。
 
 ---
 
 ## 3. 变更范围与验证
 
-### 3.1 Diffstat（`f7c008b..a9c8d34`，代码提交）
+### 3.1 Diffstat（`f7c008b..dad2dda`，含两笔代码提交与本报告）
 
 ```
- src/jinlin_agent/events.py      |  16 +-
- src/jinlin_agent/tools/patch.py |  97 ++++++++-----
- tests/test_security.py          | 113 ++++++++++
- 3 files changed, 195 insertions(+), 31 deletions(-)
+ docs/REVIEW-SUBMISSION-P2-HARDENING.md | 126 +++++  (本报告)
+ src/jinlin_agent/events.py             |  16 +     (P2-2 实例级 session_id 校验)
+ src/jinlin_agent/tools/patch.py        | 111 +++--- (方案 A + P2-3 身份守卫 + 四元组修正)
+ tests/test_security.py                 | 113 +++++  (4 条新回归)
+ 7 files changed, 359 insertions(+), 48 deletions(-)
 ```
 
-另有文档提交（本报告、`REVIEW-RESPONSE.md` §0c、`REPORT-AND-HANDBOOK.md` §9/§16 措辞、`AGENT.md` 状态），不触碰 `src/` 与 `tests/`。
+提交：`a9c8d34`（主修复）→ `ebc522b`（本报告初版）→ `dad2dda`（Ubuntu CI 抓到的 inode 复用误判修正）。另有归档类文档提交（`REVIEW-RESPONSE.md` §0c、手册 §9/§16、`AGENT.md`），不触碰 `src/` 与 `tests/`。
 
 ### 3.2 测试增量（76 → 80，全部先红后绿）
 
@@ -114,7 +117,9 @@ jinlin-agent eval --suite all -> 18/18 probes passed
 ## 6. CI
 
 - Workflow：`.github/workflows/ci.yml`，矩阵 `windows-latest` / `ubuntu-latest`，Python 3.13；
-- 本轮代码提交 `a9c8d34` 的 run：推送后见分支 Actions 页；判定标准与之前一致（两 job 均 success，pytest/eval 数字与 §3.3 同口径）。
+- 首批代码提交 `a9c8d34` 的 run：Ubuntu **failure**（<https://github.com/hejinlin0824/jinlin-agent/actions/runs/41289041280>，`test_atomic_create_failure_does_not_unlink_replaced_path` 暴露 inode 复用误判，见 §2.3）、Windows success——CI 抓到真实缺陷；
+- 修正提交 `dad2dda` 的 run：Windows + Ubuntu 均 **success**（<https://github.com/hejinlin0824/jinlin-agent/actions/runs/41289620436>）；
+- 判定标准与之前一致：两 job 均 success，pytest/eval 数字与 §3.3 同口径（Ubuntu 的 16 个 skip 为 Windows 专属 L1 沙箱测试的平台守卫）。
 
 ---
 
