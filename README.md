@@ -76,7 +76,8 @@ jinlin-agent stats <session_id>             # 指标（步数/token/验证/压�
 jinlin-agent eval --suite all               # HCS + E1-E8 评测
 jinlin-agent clean --workspace .              # 只预览可证明归属的普通残留文件
 jinlin-agent rescue list --workspace .        # 列出通过 manifest + SHA-256 校验的救援副本
-jinlin-agent rescue restore <rescue-path> --workspace .  # 无覆盖恢复；成功后保留救援副本
+jinlin-agent rescue restore <rescue-path> --workspace .  # 暂存后原子无覆盖发布
+jinlin-agent rescue recover --workspace .                # 检查并恢复中断的暂存事务
 ```
 
 安装为命令行（可选）：
