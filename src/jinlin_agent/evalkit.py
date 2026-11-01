@@ -191,8 +191,28 @@ def probe_t2_environment(tmp: Path) -> tuple[bool, str]:
     if "return a + b" not in body:
         return False, "file was not changed on disk"
     if out.session.state.status != Status.COMPLETED.value:
-        return False, f"status={out.session.state.status}"
+        return False, f"status={_failure_digest(out)}"
     return True, "tool interface really changed the external environment"
+
+
+def _failure_digest(out: RunOutcome) -> str:
+    """Compact, CI-friendly explanation of why a scripted session did not complete."""
+    state = out.session.state
+    error = state.last_error or {}
+    rejections = [
+        evt["payload"].get("reasons", []) for evt in out.events if evt.get("type") == "completion.rejected"
+    ]
+    parts = [f"status={state.status}", f"error={error.get('code')}: {str(error.get('message', ''))[:160]}"]
+    if rejections:
+        parts.append("last_rejection=" + "; ".join(str(r) for r in rejections[-1][:2]))
+    failed_tools = [
+        f"{evt['payload'].get('tool')}:{(evt['payload'].get('error') or {}).get('code')}"
+        for evt in out.events
+        if evt.get("type") == "tool.failed"
+    ]
+    if failed_tools:
+        parts.append("failed_tools=" + ",".join(failed_tools[-5:]))
+    return " | ".join(parts)
 
 
 def probe_t3_context(tmp: Path) -> tuple[bool, str]:
