@@ -359,6 +359,7 @@ def clean_trash(workspace: Path, apply: bool = False) -> dict[str, Any]:
 
 RESCUE_RE = re.compile(r"^\.(?P<orig>.+)\.jinlin-rescue-(?P<tag>[0-9a-f]{8})$")
 RESTORE_STAGE_RE = re.compile(r"^\.(?P<target>.+)\.jinlin-restore-(?P<digest>[0-9a-f]{16})$")
+CLEAN_QUARANTINE_RE = re.compile(r"^\..+\.jinlin-clean-[0-9a-f]{8}$")
 
 
 def list_rescue(workspace: Path) -> dict[str, Any]:
@@ -727,6 +728,18 @@ def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
     try:
         listed = list_rescue_unlocked(workspace)
         report["unrecognized"] = [item["path"] for item in listed["unrecognized"]]
+        # A process may stop after quarantine rename but before unlink. Such
+        # objects are evidence-only until a human inspects them.
+        for root, dirs, files in os.walk(workspace, followlinks=False):
+            dirs[:] = [name for name in dirs if name not in _SKIP_DIRS]
+            for name in list(files) + list(dirs):
+                if CLEAN_QUARANTINE_RE.match(name):
+                    candidate = Path(root) / name
+                    report["quarantined"].append({
+                        "path": _relative_posix(candidate, workspace),
+                        "kind": "symlink" if candidate.is_symlink() else ("directory" if candidate.is_dir() else "file"),
+                    })
+        report["quarantined"].sort(key=lambda item: item["path"])
         manifest = _load_manifest(workspace)
         eligible: list[dict[str, Any]] = []
         for rescue in listed["rescued"]:
