@@ -392,7 +392,7 @@ def list_rescue(workspace: Path) -> dict[str, Any]:
                         and st.st_ino == ident.get("ino")
                         and st.st_size == ident.get("size")
                         and st.st_mtime_ns == ident.get("mtime_ns")
-                        (ident.get("sha256") is None or hashlib.sha256(data).hexdigest() == ident.get("sha256"))
+                        and (ident.get("sha256") is None or hashlib.sha256(data).hexdigest() == ident.get("sha256"))
                     )
                 except OSError:
                     valid = False
@@ -486,7 +486,7 @@ def list_rescue_unlocked(workspace: Path) -> dict[str, Any]:
                          and isinstance(ident, dict) and st.st_dev == ident.get("dev")
                          and st.st_ino == ident.get("ino") and st.st_size == ident.get("size")
                          and st.st_mtime_ns == ident.get("mtime_ns")
-                         (ident.get("sha256") is None or hashlib.sha256(data).hexdigest() == ident.get("sha256")))
+                         and (ident.get("sha256") is None or hashlib.sha256(data).hexdigest() == ident.get("sha256")))
             except OSError:
                 valid, data = False, b""
             item = {"path": rel, "orig": str(entry.get("orig")) if entry else match.group("orig"),
