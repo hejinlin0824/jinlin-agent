@@ -394,3 +394,77 @@ def test_clean_apply_reports_manifest_update_failure(tmp_path, monkeypatch):
     assert report.get("manifest_degraded") == [proven.name], (
         "a failed manifest update must be surfaced as an explicit degradation"
     )
+
+
+
+def test_rescue_list_and_restore_verifies_sha_and_retains_source(tmp_path):
+    from jinlin_agent.trash import list_rescue, restore_rescue
+
+    original = b"important original bytes\n"
+    rescue = _mk_trash(tmp_path, ".lost.py.jinlin-rescue-deadbeef", original)
+    assert record_trash(tmp_path, rescue, "lost.py", "rescue") is True
+
+    report = list_rescue(tmp_path)
+    assert report["status"] == "ok"
+    assert len(report["rescued"]) == 1
+    item = report["rescued"][0]
+    assert item["path"] == rescue.name
+    assert item["orig"] == "lost.py"
+    assert item["sha256"] == sha(original)
+
+    restored = restore_rescue(tmp_path, rescue.name)
+    assert restored["status"] == "restored"
+    assert (tmp_path / "lost.py").read_bytes() == original
+    assert rescue.read_bytes() == original, "restore must retain the rescue source"
+    assert restored["sha256"] == sha(original)
+
+
+def test_rescue_restore_refuses_existing_target_without_overwrite(tmp_path):
+    from jinlin_agent.trash import restore_rescue
+
+    rescue = _mk_trash(tmp_path, ".lost.py.jinlin-rescue-deadbeef", b"original")
+    record_trash(tmp_path, rescue, "lost.py", "rescue")
+    target = tmp_path / "lost.py"
+    target.write_bytes(b"external claimant")
+
+    result = restore_rescue(tmp_path, rescue.name)
+    assert result["status"] == "conflict"
+    assert target.read_bytes() == b"external claimant"
+    assert rescue.read_bytes() == b"original"
+
+
+def test_rescue_list_rejects_replaced_or_modified_evidence(tmp_path):
+    from jinlin_agent.trash import list_rescue
+
+    rescue = _mk_trash(tmp_path, ".lost.py.jinlin-rescue-deadbeef", b"original")
+    record_trash(tmp_path, rescue, "lost.py", "rescue")
+    rescue.write_bytes(b"modified evidence")
+
+    report = list_rescue(tmp_path)
+    assert report["rescued"] == []
+    assert [x["path"] for x in report["unrecognized"]] == [rescue.name]
+
+
+def test_rescue_restore_rejects_manifest_path_traversal(tmp_path):
+    from jinlin_agent.trash import restore_rescue
+
+    rescue = _mk_trash(tmp_path, ".lost.py.jinlin-rescue-deadbeef", b"original")
+    record_trash(tmp_path, rescue, "../outside.py", "rescue")
+    result = restore_rescue(tmp_path, rescue.name)
+    assert result["status"] == "rejected"
+    assert not (tmp_path.parent / "outside.py").exists()
+    assert rescue.exists()
+
+
+def test_rescue_cli_lists_and_restores(tmp_path, capsys):
+    from jinlin_agent.cli import main
+
+    rescue = _mk_trash(tmp_path, ".lost.py.jinlin-rescue-deadbeef", b"cli original")
+    record_trash(tmp_path, rescue, "lost.py", "rescue")
+    assert main(["rescue", "list", "--workspace", str(tmp_path)]) == 0
+    output = capsys.readouterr().out
+    assert rescue.name in output and "lost.py" in output and "sha256=" in output
+
+    assert main(["rescue", "restore", rescue.name, "--workspace", str(tmp_path)]) == 0
+    assert (tmp_path / "lost.py").read_bytes() == b"cli original"
+    assert rescue.exists()
