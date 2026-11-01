@@ -320,8 +320,11 @@ session 开始时快照记录"任务前既有的脏文件"；完成门区分 **�
 - **workspace 写锁**：写阶段持 `<workspace>/.jinlin/write.lock` 顾问锁，多个 Jinlin 会话在同一工作区上串行（第二个会话得到可重试的 `WORKSPACE_LOCKED`）；
 - **回滚先移动后校验，放回一律 no-clobber，清理一律不按名删**：回滚不动原路径——先把当前内容原子改名到事务级 trash、校验哈希归属，只有确认仍是本事务产物才替换；所有"把 trash/backup 放回原路径"的动作都走统一 helper（`os.link` 原子 create-if-absent）：路径已被并发重建时**双方保留**（外部内容在路径、本事务内容在 trash/backup）并报告 `RECOVERY_UNCERTAIN`，绝不用覆盖式 rename 回退（包括硬链接不可用的文件系统）；放回成功后 source 目录项**有意保留**、不按名 unlink（防误删后来者），作为 `redundant_trash` 上报供检查后受控清理；
 - **Rescue 恢复不是覆盖式回滚**：当原路径被外部占用时，原始字节写入独立的 `.jinlin-rescue-<tag>` 文件并记录 manifest；`jinlin-agent rescue list` 只列出身份匹配的记录，新版记录同时核对 SHA-256，旧版记录明确标为 `legacy-stat`；`rescue restore` 使用独占创建，目标已存在则拒绝覆盖，成功后仍保留 Rescue 源文件。
-- **恢复中断的处理**：恢复先在目标同目录创建确定性命名的暂存文件，完成写入、`fsync` 与 SHA-256 校验后，才用硬链接原子 no-clobber 发布到目标路径。进程在暂存写入期间崩溃，不会把半成品暴露为目标文件；`jinlin-agent rescue recover` 会重新校验暂存文件、重新执行 `fsync`，仅发布与 Rescue 原件 SHA-256 完全一致的暂存文件。内容不完整的暂存文件只报告、不自动删除；目标已被占用则保留暂存和 Rescue 原件并报告冲突。暂存文件和 Rescue 源文件在发布成功后也都保留，便于人工审计与后续受控清理。
-- **恢复安全边界**：目标父目录必须已存在且解析后仍位于 workspace 内；目标文件用 `O_EXCL` 建立。workspace 写锁只协调 Jinlin 自身会话，不约束同权限外部进程；跨平台路径解析与创建之间仍存在外部并发目录替换窗口，不宣称抵御拥有同等文件系统权限的恶意进程。
+- **恢复中断的处理**：恢复先在目标同目录创建确定性命名的暂存文件，完成写入、文件 `fsync` 与 SHA-256 校验后，才用硬链接原子 no-clobber 发布到目标路径。POSIX 平台会在暂存目录项创建后、目标发布后尝试 `fsync` 父目录；便携式 Windows Python API 不提供等价的目录句柄同步能力，因此 Windows 目录项断电持久性明确标为 best-effort。进程在暂存写入期间崩溃，不会把半成品暴露为目标文件；`jinlin-agent rescue recover` 会重新校验暂存文件、重新执行文件 `fsync`，仅发布与 Rescue 原件 SHA-256 完全一致的暂存文件。内容不完整的暂存文件只报告、不自动删除；目标已被占用则保留暂存和 Rescue 原件并报告冲突。
+- **暂存身份检查**：发布前通过文件描述符检查暂存对象是普通文件，并比较打开描述符与路径的 `(dev, ino, size, mtime_ns)` 身份，拒绝符号链接及意外多重硬链接；发布后再次核对目标身份。该机制缩小并检测部分路径替换窗口，但跨平台路径式 `os.link` 仍有同权限外部进程竞态，不能视为抵御恶意同用户进程的完整安全边界。
+- **孤立暂存文件**：`rescue recover` 会扫描符合命名规则、但没有当前有效 Rescue + manifest 记录对应的暂存文件，并将其列为 `orphaned`。孤立文件仅报告，绝不自动发布或删除；CLI 对存在孤立文件返回非零状态，要求人工检查。
+- **受控清理**：`rescue clean` 默认只预览。只有当目标文件仍为普通非符号链接文件且 SHA-256 与有效 Rescue 一致时，才将 Rescue 与 stage 列入可清理项；`rescue clean --apply` 才执行清理。每个候选先移动到唯一 quarantine 名称，再验证被移动对象的类型与 SHA-256，匹配后才删除；身份不匹配的对象保留在 quarantine 并报告。清理成功后目标文件保留，manifest 记录随 Rescue 删除而移除。
+- **恢复安全边界**：目标父目录必须已存在且解析后仍位于 workspace 内；目标通过硬链接 create-if-absent 发布，不覆盖既有目标。workspace 写锁只协调 Jinlin 自身会话，不约束同权限外部进程；跨平台路径解析、路径式硬链接及 quarantine 操作仍有有限 TOCTOU 窗口，不宣称抵御拥有同等文件系统权限的恶意进程。
 - 失败信息包含 hunk 号与匹配诊断，便于模型自纠。
 
 ## 10. 上下文管理（T3 的核心）
@@ -471,7 +474,7 @@ $ jinlin-agent eval --suite all
 8. **完成门偏严**：证据引用不合规会多 1 轮；这是刻意的 trade-off（False Success 优先于步数）。
 9. **SQLite 投影未实现**：事件折叠直接承担 V1 查询。
 10. **无 MCP / skills / hooks / plugins**：扩展性显著弱于两条基线。
-11. **更新路径的残余 TOCTOU 窗口**：对**不受本程序控制的外部进程**，跨平台普通文件 API 没有按内容哈希的原子 compare-and-swap。写前哈希复核只能把"检查→替换"窗口缩到微秒级，不能消除；一个恰好在窗口内落盘的外部修改仍会被覆盖且无法事后检测。workspace 写锁消除的是**多个 Jinlin 会话之间**的竞争（硬保证），对外部进程仅是 best-effort。回滚与恢复侧已无覆盖与误删风险：本事务内容先原子改名到 trash/backup 再校验归属，所有放回走 `os.link` create-if-absent（路径被并发重建时双方保留并报 `RECOVERY_UNCERTAIN`），放回成功后源目录项**保留不删**（作为 `redundant_trash` 上报，供检查后受控清理），对外部进程既不覆盖也不误删；但 `link` 与后续任何操作之间仍非完整原子事务，恢复现场的不确定性（冗余目录项、放回不可判定）如实存在。新建文件侧：`O_CREAT|O_EXCL` 建立是文件系统级原子 no-clobber；失败清理只在 `(st_dev, st_ino)` 身份仍匹配时按名删除自身半写文件，路径被并发替换时保留现场并报 `RECOVERY_UNCERTAIN`。
+11. **更新与恢复路径的残余 TOCTOU 窗口**：对**不受本程序控制的外部进程**，跨平台普通文件 API 没有按内容哈希的原子 compare-and-swap。写前哈希复核只能缩小窗口，不能消除。workspace 写锁协调的是多个 Jinlin 会话，不约束同权限外部进程。Rescue 暂存发布使用文件描述符身份复核、SHA-256、普通文件检查及发布后身份核对，但最终 `os.link(stage, dest)` 仍按路径解析，检查与链接之间存在有限竞态；父目录解析与使用之间也存在外部目录替换窗口。POSIX 父目录 `fsync` 能增强目录项持久性，但 Windows 便携 API 无等价保证。受控清理采用 quarantine 后验证被移动对象再删除，降低按名误删风险；如果对象不匹配则保留 quarantine 证据。以上是 best-effort 防护，不宣称抵御拥有相同文件系统权限的恶意并发进程。
 
 ---
 
