@@ -63,7 +63,7 @@ def _restore_no_clobber(source: Path, dest: Path) -> bool:
 | `test_delete_move_hash_mismatch_restore_is_no_clobber` | Delete 移动到 backup 前注入外部改写（随 backup 移动、hash 失配）→ 放回前外部重建原路径 | 路径 = 外部重建内容（`external-recreated`）；backup 留存 = 移动时刻路径上的实际内容（注入的 `external-in-backup`），未被销毁；`RECOVERY_UNCERTAIN` |
 | `test_invalid_utf8_inside_event_is_rejected` | JSON 字符串值内注入非法 UTF-8 字节（`\xff\xfe`） | `read_events` 与 `EventLog.open()` 均 `SESSION_CORRUPTED` |
 
-**内容描述更正（第 5 轮复核 §2.4 指出）**：trash / backup 中保留的**不是**本事务写入的原始字节——测试桩在移动前注入的外部改写会随目录项一起进入 trash/backup（这正是所有权哈希失配、进入恢复分支的原因）。测试断言与上表已按实际行为表述为"移动时刻路径上的实际内容（注入的外部改写）"。no-clobber 行为的验证不受此影响：断言的是"外部重建的路径不被放回动作替换 + 放回失败后源文件（trash/backup）内容原样留存"。
+**内容描述更正（第 5 轮复核 §2.4 指出）**：trash / backup 中保留的**不是**本事务写入的原始字节——测试桩在移动前注入的外部改写会随目录项一起进入 trash/backup（这正是所有权哈希失配、进入恢复分支的原因）。测试断言与上表已按实际行为表述为"移动时刻路径上的实际内容（注入的外部改写）"。no-clobber 行为的验证不受此影响：断言的是"外部重建的路径不被放回动作替换 + 放回失败后源文件（trash/backup）内容原样留存"。**测试内的断言消息措辞已同步对齐**（消息字符串仅为提示文本，断言逻辑未变）。
 
 复核建议的后续强化（非阻塞，未在本轮实施）：增加一组"trash/backup 保留本事务原始字节、移动完成后再重建目标路径"的注入变体，进一步区分"外部内容随移动进入 trash"与"本事务原始内容滞留 trash"两种现场。
 
@@ -147,9 +147,24 @@ jinlin-agent eval --suite all -> 18/18 probes passed
 
 ---
 
+## 9. 最终验收与合并记录
+
+| 项 | 值 |
+|---|---|
+| 第 5 轮复核决定 | **Approve**，批准 `review/followup-fixes` fast-forward 合并到 `main` |
+| 复核确认 | P1-1 / P1-2 / 五个恢复入口统一 / 三组竞争注入测试 / P2-1 全部通过；CI Run `41280497556` 双平台 success；`f1b0cb8 → 545e5cb` 仅文档差异 |
+| 合并前条件 | §2.3 措辞修订（含测试断言消息对齐，仅提示文本，断言逻辑未变）——已随本系列提交完成 |
+| 合并方式 | `git checkout main && git merge --ff-only review/followup-fixes && git push origin main`（无 squash / rebase） |
+| 代码基线 | `main` 合并起点 `85854f1`；合并后 main 即分支 HEAD（最终 SHA 以 git log 为准，本表提交于合并前后会随纯文档提交小幅推进，代码内容自 `f1b0cb8` 起未再变化） |
+| 证据保留 | 本文件 §6（Run `41280497556` 双平台 pytest/eval 数字）、§6a（恢复原语边界）、§2.3（措辞更正）随仓库归档 |
+| 后续排期 | P2-2（日志 session_id 与实例比对）、P2-3（失败清理文件身份校验）、§2.3 建议的注入变体、P2-4…P2-8（同复核 §4 清单） |
+
+---
+
 ## 8. 相关材料
 
 - 本轮复核：《第 3 轮整改复核意见》（P1-1 / P1-2 / P2-1/2/3）
+- 最终复核：《第 4 轮整改独立复核回复报告》（Approve）
 - 历史整改记录：`docs/REVIEW-RESPONSE.md`（v1.3 + §0b）、`docs/REVIEW-SUBMISSION-ROUND3.md`
 - 安全模型：`docs/REPORT-AND-HANDBOOK.md` §9、§16
 - handoff 契约：`AGENT.md`

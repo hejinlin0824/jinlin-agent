@@ -707,7 +707,8 @@ def test_rollback_restore_is_no_clobber_when_path_recreated(tmp_path, monkeypatc
     assert target.read_bytes() == b"external-recreated", "the recreated path must not be replaced by the restore"
     trashes = list(tmp_path.glob(".a.py.jinlin-rollback-*"))
     assert len(trashes) == 1 and trashes[0].read_bytes() == b"external-in-window", (
-        "our rolled-back content must stay recoverable in the trash"
+        "the content as it stood at move time (the injected external edit, which is what"
+        " breaks ownership) must stay recoverable in the trash"
     )
 
 
@@ -748,7 +749,8 @@ def test_delete_move_hash_mismatch_restore_is_no_clobber(tmp_path, monkeypatch):
     assert doomed.read_bytes() == b"external-recreated", "the recreated path must not be replaced"
     backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
     assert len(backups) == 1 and backups[0].read_bytes() == b"external-in-backup", (
-        "the original content must stay recoverable in the backup"
+        "the content as it stood at move time (the injected external edit, which is what"
+        " breaks ownership) must stay recoverable in the backup"
     )
 
 
