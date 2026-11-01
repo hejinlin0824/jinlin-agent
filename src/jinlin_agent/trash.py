@@ -469,6 +469,13 @@ def _publish_restore_stage(stage: Path, dest: Path, digest: str) -> dict[str, An
     """
     if dest.is_symlink():
         return {"status": "conflict", "detail": "target is a symlink; stage and rescue retained"}
+    if dest.exists():
+        try:
+            if hashlib.sha256(dest.read_bytes()).hexdigest() == digest:
+                return {"status": "already-published", "detail": "target already contains the verified Rescue bytes; staging and rescue retained"}
+        except OSError as exc:
+            return {"status": "conflict", "detail": f"target exists but cannot be verified ({exc}); stage and rescue retained"}
+        return {"status": "conflict", "detail": "target exists with different content; staging and rescue retained"}
     flags_read = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     flags_sync = os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     read_fd = sync_fd = None
