@@ -8,6 +8,7 @@
 📄 完整技术报告 + 产品手册（含评分建议与 DSH/ZCode 基线对比）：[`docs/REPORT-AND-HANDBOOK.md`](docs/REPORT-AND-HANDBOOK.md)
 🤖 Agent 自述（可移植的 agent 契约 / handoff 说明）：[`AGENT.md`](AGENT.md)
 🛠 独立评审响应与整改记录：[`docs/REVIEW-RESPONSE.md`](docs/REVIEW-RESPONSE.md)
+📋 整改提交报告（供审查）：[`docs/REVIEW-SUBMISSION.md`](docs/REVIEW-SUBMISSION.md)
 
 ```bash
 python -m jinlin_agent doctor                      # 环境/模型/沙箱自检
