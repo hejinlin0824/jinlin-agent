@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from ..domain import SideEffect
 from ..errors import AgentError
+from ..paths import resolve_in_workspace
 
 
 @dataclass
@@ -58,14 +59,14 @@ class ToolContext:
     # ------------------------------------------------------------------ paths
 
     def resolve(self, path: str, must_exist: bool = False) -> Path:
-        """Resolve a repo-relative (or absolute-inside-workspace) path."""
-        raw = str(path or ".")
-        candidate = Path(raw)
-        if candidate.is_absolute():
-            resolved = Path(os.path.abspath(candidate))
-        else:
-            resolved = Path(os.path.abspath(self.workspace / candidate))
-        return resolved
+        """Resolve a repo-relative path and enforce the workspace boundary.
+
+        This is a defense-in-depth boundary: the policy checked the argument
+        string, and the handler re-checks the real path (symlinks/junctions
+        included) before touching the filesystem.
+        """
+        follow = bool(self.config.workspace.get("follow_symlinks", False))
+        return resolve_in_workspace(self.workspace, str(path or "."), follow_symlinks=follow)
 
     def relative(self, path: Path) -> str:
         try:

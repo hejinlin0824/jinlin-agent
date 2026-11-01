@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .domain import ApprovalDecision, RiskLevel, SideEffect
+from .paths import resolve_in_workspace, within as path_within
 from .errors import (
     APPROVAL_DENIED,
     APPROVAL_REQUIRED,
@@ -61,20 +62,10 @@ class PathPolicy:
             return str(path)
 
     def resolve(self, raw: str) -> Path:
-        candidate = Path(raw)
-        base = self.root if not candidate.is_absolute() else Path("/")
-        resolved = Path(os.path.abspath(base / candidate if not candidate.is_absolute() else candidate))
-        return resolved
+        return resolve_in_workspace(self.root, raw, self.follow_symlinks)
 
     def within(self, path: Path) -> bool:
-        try:
-            target = os.path.abspath(path)
-            root = os.path.abspath(self.root)
-            if os.name == "nt":
-                return os.path.normcase(target).startswith(os.path.normcase(root) + os.sep) or os.path.normcase(target) == os.path.normcase(root)
-            return target == root or target.startswith(root + os.sep)
-        except Exception:
-            return False
+        return path_within(self.root, path)
 
     def is_protected(self, rel: str) -> bool:
         rel = rel.replace("\\", "/")
@@ -84,24 +75,10 @@ class PathPolicy:
         return rel.startswith(".git/") or rel.startswith(".git\\")
 
     def check(self, raw: str, write: bool = False, delete: bool = False) -> tuple[Path | None, AgentError | None]:
-        path = self.resolve(raw)
-        if not self.within(path):
-            return None, AgentError(
-                PATH_OUTSIDE_WORKSPACE,
-                f"path escapes the workspace: {raw}",
-                source="policy",
-            )
-        if not self.follow_symlinks and path.exists():
-            try:
-                real = Path(os.path.realpath(path))
-                if not self.within(real):
-                    return None, AgentError(
-                        PATH_OUTSIDE_WORKSPACE,
-                        f"symlink escapes the workspace: {raw}",
-                        source="policy",
-                    )
-            except OSError:
-                pass
+        try:
+            path = self.resolve(raw)
+        except AgentError as exc:
+            return None, exc
         rel = self.rel(path)
         if self.is_protected(rel):
             return None, AgentError(
@@ -372,6 +349,12 @@ class PolicyEngine:
                 risk=RiskLevel.HIGH.value,
                 error=AgentError(COMMAND_DENIED, "command must be a non-empty argv array", source="policy"),
             )
+        cwd_raw = args.get("cwd", ".")
+        if isinstance(cwd_raw, str):
+            try:
+                self.paths.resolve(cwd_raw)
+            except AgentError as exc:
+                return PolicyDecision(allowed=False, risk=RiskLevel.HIGH.value, error=exc, reason=exc.message)
         assessment = assess_command([str(x) for x in argv])
         mode_decision = self._risk_mode(assessment)
         summary = " ".join(str(x) for x in argv)[:300]

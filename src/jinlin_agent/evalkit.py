@@ -422,7 +422,7 @@ def probe_t6_evidence(tmp: Path) -> tuple[bool, str]:
 
 
 def _bugfix_script(bogus_evidence: bool = False) -> list[dict[str, Any]]:
-    evidence = ["does-not-exist.py"] if bogus_evidence else ["calc.py", "tests/test_calc.py"]
+    evidence = ["does-not-exist.py"] if bogus_evidence else ["calc.py", "tests/test_calc.py", "L3 tests"]
     return [
         {"tool_calls": [{"name": "get_project_summary", "arguments": {}}]},
         {"tool_calls": [{"name": "read_file", "arguments": {"path": "tests/test_calc.py"}}]},
@@ -591,7 +591,7 @@ def eval_e3_cross_file(tmp: Path) -> tuple[bool, str]:
                     "name": "propose_completion",
                     "arguments": {
                         "summary": "timeout setting added through config + tests",
-                        "claims": [{"statement": "timeout default is 30 and tests pass", "evidence_refs": ["config.py", "tests/test_loader.py"]}],
+                        "claims": [{"statement": "timeout default is 30 and tests pass", "evidence_refs": ["config.py", "tests/test_loader.py", "L3 tests"]}],
                     },
                 }
             ]

@@ -156,38 +156,55 @@ class EventLog:
     # ------------------------------------------------------------------ read
 
     def iter_events(self) -> Iterator[dict[str, Any]]:
-        if not self.path.exists():
-            return
-        with open(self.path, "r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    evt = json.loads(line)
-                except json.JSONDecodeError:
-                    # torn write after crash: ignore the incomplete tail
-                    continue
-                if isinstance(evt, dict) and "type" in evt:
-                    yield evt
+        yield from _iter_events_checked(self.path)
+
+
+def _iter_events_checked(path: Path) -> Iterator[dict[str, Any]]:
+    """Replay an event log; tolerate only a torn tail, never mid-log corruption."""
+    from .errors import SESSION_CORRUPTED, AgentError
+
+    if not Path(path).exists():
+        return
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        lines = fh.read().split("\n")
+    while lines and not lines[-1].strip():
+        lines.pop()
+    expected = 1
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            evt = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            if index == len(lines) - 1:
+                # a torn write after a crash may leave the final line incomplete
+                break
+            raise AgentError(
+                SESSION_CORRUPTED,
+                f"corrupt event at line {index + 1} (mid-log corruption is not ignored)",
+                source="events",
+                details={"line": index + 1, "error": str(exc)},
+            ) from exc
+        if not isinstance(evt, dict) or "type" not in evt or not isinstance(evt.get("seq"), int):
+            raise AgentError(
+                SESSION_CORRUPTED,
+                f"invalid event at line {index + 1}: missing type/seq",
+                source="events",
+            )
+        if evt["seq"] != expected:
+            raise AgentError(
+                SESSION_CORRUPTED,
+                f"event sequence gap at line {index + 1}: expected seq {expected}, found {evt['seq']}",
+                source="events",
+            )
+        expected = evt["seq"] + 1
+        yield evt
 
 
 def read_events(session_dir: Path) -> Iterator[dict[str, Any]]:
     """Read events without taking the write lock (trace/stats/recovery viewer)."""
-    path = Path(session_dir) / "events.jsonl"
-    if not path.exists():
-        return
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                evt = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(evt, dict) and "type" in evt:
-                yield evt
+    yield from _iter_events_checked(Path(session_dir) / "events.jsonl")
 
 
 def new_session_id() -> str:

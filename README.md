@@ -4,6 +4,8 @@
 > CLI 直接可用，不是演示脚本：每条"完成"都有可复查的证据。
 
 📄 完整技术报告 + 产品手册（含评分建议与 DSH/ZCode 基线对比）：[`docs/REPORT-AND-HANDBOOK.md`](docs/REPORT-AND-HANDBOOK.md)
+🤖 Agent 自述（可移植的 agent 契约 / handoff 说明）：[`AGENT.md`](AGENT.md)
+🛠 独立评审响应与整改记录：[`docs/REVIEW-RESPONSE.md`](docs/REVIEW-RESPONSE.md)
 
 ```bash
 python -m jinlin_agent doctor                      # 环境/模型/沙箱自检
@@ -49,7 +51,7 @@ python -m jinlin_agent run --workspace ./my-repo -t "给查询接口加分页，
 要求：Python 3.11+（开发用 3.13）；**零第三方运行时依赖**。
 
 ```bash
-git clone <this-repo> && cd jinlin-code-agent
+git clone https://github.com/hejinlin0824/jinlin-agent.git && cd jinlin-agent
 python -m jinlin_agent doctor
 
 # 模型：DeepSeek OpenAI-compatible（默认 deepseek-flash）
@@ -244,12 +246,14 @@ git_push = "deny"
 
 ## 12. 已知限制（V1）
 
-- **真实模型端到端尚未在本机验证**：等待 `DEEPSEEK_API_KEY`；当前 18/18 评测使用内置 scripted provider（离线可重复）。拿到 key 后先跑 `jinlin-agent doctor`，再跑一个小仓库任务即可确认。
+- 真实模型验证已完成（DeepSeek-V4.1-Flash，7 次任务，False Success = 0），但样本量小、只覆盖小型 Python 仓库；详见 `docs/REPORT-AND-HANDBOOK.md` §13。
 - 单 Agent；多 Agent 的字段与任务板只预留，不实现。
 - 网络无 OS 级隔离；沙箱写限制依赖 Windows 受限令牌，构造失败会降级 L0（报告会写明）。
 - 上下文压缩用确定性状态摘要，不做 LLM 摘要（更稳，但长会话信息密度略低）。
-- SQLite 投影未实现（事件折叠足够 V1 规模）。
-- 无 Web/IDE/GitLab 接口。
+- 多文件补丁有回滚与写前哈希复核，但**跨文件崩溃原子性**未实现（无 transaction manifest）。
+- 脱敏只覆盖事件参数与常见凭据形态；Artifact/报告尚未统一递归脱敏。
+- SQLite 投影未实现（事件折叠足够 V1 规模）；无 Web/IDE/GitLab 接口。
+- 以上限制与独立评审整改状态见 `docs/REVIEW-RESPONSE.md`。
 
 ## 13. 开发
 

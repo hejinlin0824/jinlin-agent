@@ -109,6 +109,10 @@ class SessionManager:
         from .verify import Verifier
 
         if not session.config.verification.get("run_baseline", True):
+            session.emit(
+                "verification.baseline",
+                {"baseline": {"status": "skipped", "reason": "baseline disabled in config", "command": None}},
+            )
             return
         try:
             verifier = Verifier(
@@ -121,8 +125,22 @@ class SessionManager:
             )
             if verifier.project.test_commands:
                 verifier.ensure_baseline()
-        except Exception:
-            pass
+            else:
+                session.emit(
+                    "verification.baseline",
+                    {"baseline": {"status": "skipped", "reason": "no test command detected", "command": None}},
+                )
+        except Exception as exc:
+            session.emit(
+                "verification.baseline",
+                {
+                    "baseline": {
+                        "status": "error",
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "command": None,
+                    }
+                },
+            )
 
     @staticmethod
     def open(config: Config, session_id: str, sandbox: Any) -> Session:

@@ -81,7 +81,20 @@ def render(f: FileText, lines: list[str]) -> bytes:
     return raw
 
 
-def atomic_write(path: Path, data: bytes, mode_from: Path | None = None) -> None:
+def atomic_write(
+    path: Path,
+    data: bytes,
+    mode_from: Path | None = None,
+    expected_sha256: str | None = None,
+    create: bool = False,
+) -> None:
+    """Write atomically, re-checking the target hash right before the replace.
+
+    `expected_sha256` closes the check-then-replace TOCTOU window as far as a
+    portable userspace API can: the target is re-read immediately before
+    os.replace and the written file is verified afterwards.
+    `create=True` never overwrites an existing target.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
     try:
@@ -94,7 +107,20 @@ def atomic_write(path: Path, data: bytes, mode_from: Path | None = None) -> None
                 os.chmod(tmp_name, stat.S_IMODE(mode_from.stat().st_mode))
             except OSError:
                 pass
+        if create and path.exists():
+            raise AgentError(PATCH_CONFLICT, f"{path.name} was created concurrently; refusing to overwrite", source="edit")
+        if expected_sha256 is not None:
+            current = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+            if current != expected_sha256:
+                raise AgentError(
+                    FILE_CHANGED_EXTERNALLY,
+                    f"{path.name} changed just before the write (expected {expected_sha256[:12]}, found {str(current)[:12]})",
+                    source="edit",
+                )
         os.replace(tmp_name, path)
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != hashlib.sha256(data).hexdigest():
+            raise AgentError(TOOL_EXECUTION_FAILED, f"{path.name}: written content failed verification", source="edit")
     except Exception:
         try:
             os.unlink(tmp_name)
@@ -313,7 +339,7 @@ def apply_patch(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             if err:
                 errors.append(err)
                 continue
-            plan.append({"kind": "delete", "path": path, "rel": rel, "data": None, "old": f.data})
+            plan.append({"kind": "delete", "path": path, "rel": rel, "data": None, "old": f.data, "old_sha": f.sha})
         else:  # update
             if not path.exists():
                 errors.append(AgentError(PATCH_CONFLICT, f"{rel} does not exist", source="edit"))
@@ -368,16 +394,23 @@ def apply_patch(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             path = item["path"]
             if item["kind"] == "add":
                 backups.append((path, None))
-                atomic_write(path, item["data"])
+                atomic_write(path, item["data"], create=True)
                 digest = hashlib.sha256(item["data"]).hexdigest()
                 written.append({"path": item["rel"], "hash_before": None, "hash_after": digest, "lines_added": len(item["data"].splitlines())})
             elif item["kind"] == "delete":
                 backups.append((path, item["old"]))
+                current_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+                if current_sha != item["old_sha"]:
+                    raise AgentError(
+                        FILE_CHANGED_EXTERNALLY,
+                        f"{item['rel']} changed before deletion",
+                        source="edit",
+                    )
                 os.unlink(path)
                 deleted.append(item["rel"])
             else:
                 backups.append((path, item["old"]))
-                atomic_write(path, item["data"], mode_from=path)
+                atomic_write(path, item["data"], mode_from=path, expected_sha256=item["old_sha"])
                 digest = hashlib.sha256(item["data"]).hexdigest()
                 written.append(
                     {
@@ -461,9 +494,11 @@ def edit_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     if f.had_bom:
         new_data = b"\xef\xbb\xbf" + new_data
     try:
-        atomic_write(path, new_data, mode_from=path)
+        atomic_write(path, new_data, mode_from=path, expected_sha256=f.sha)
+    except AgentError as exc:
+        return ToolResult(ok=False, error=exc)
     except Exception as exc:
-        return ToolResult(ok=False, error=AgentError("TOOL_EXECUTION_FAILED", str(exc), source="edit"))
+        return ToolResult(ok=False, error=AgentError(TOOL_EXECUTION_FAILED, str(exc), source="edit"))
     digest = hashlib.sha256(new_data).hexdigest()
     added = new_text.count("\n") - f.text.count("\n")
     return ToolResult(
@@ -485,24 +520,42 @@ def write_file(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     path, rel = _rel_path(ctx, args["path"])
     content = args.get("content") or ""
     create_only = bool(args.get("create_only", False))
-    if path.exists() and create_only:
+    exists = path.exists()
+    if exists and create_only:
         return ToolResult(ok=False, error=AgentError(PATCH_CONFLICT, f"{rel} exists; use apply_patch", source="edit"))
-    if path.exists() and not ctx.config.workspace.get("allow_write", True):
+    if exists and not ctx.config.workspace.get("allow_write", True):
         return ToolResult(ok=False, error=AgentError("COMMAND_DENIED", "writes disabled", source="edit"))
-    if not path.exists():
+    if not exists:
         path.parent.mkdir(parents=True, exist_ok=True)
-    old = path.read_bytes() if path.exists() else None
-    try:
-        atomic_write(path, content.encode("utf-8"), mode_from=path)
-    except Exception as exc:
-        return ToolResult(ok=False, error=AgentError(TOOL_EXECUTION_FAILED, str(exc), source="edit"))
-    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    data = content.encode("utf-8")
+    if exists:
+        # existing files follow the same read-before-write contract as patches
+        current = load_text(path, rel, int(ctx.config.workspace.get("max_file_bytes", 1_048_576)))
+        error = check_clean(ctx, rel, current.sha)
+        if error:
+            return ToolResult(ok=False, error=error)
+        try:
+            atomic_write(path, data, mode_from=path, expected_sha256=current.sha)
+        except AgentError as exc:
+            return ToolResult(ok=False, error=exc)
+        except Exception as exc:
+            return ToolResult(ok=False, error=AgentError(TOOL_EXECUTION_FAILED, str(exc), source="edit"))
+        before = current.sha
+    else:
+        try:
+            atomic_write(path, data, create=True)
+        except AgentError as exc:
+            return ToolResult(ok=False, error=exc)
+        except Exception as exc:
+            return ToolResult(ok=False, error=AgentError(TOOL_EXECUTION_FAILED, str(exc), source="edit"))
+        before = None
+    digest = hashlib.sha256(data).hexdigest()
     return ToolResult(
-        output=f"wrote {rel} ({len(content.encode('utf-8'))} bytes)",
+        output=f"wrote {rel} ({len(data)} bytes{' ; replaced existing file after hash check' if before else ''})",
         written_files=[
             {
                 "path": rel,
-                "hash_before": hashlib.sha256(old).hexdigest() if old else None,
+                "hash_before": before,
                 "hash_after": digest,
             }
         ],

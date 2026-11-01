@@ -171,14 +171,29 @@ def _dedupe(items: list[list[str]]) -> list[list[str]]:
 _PASSED = re.compile(r"(\d+) passed")
 _FAILED = re.compile(r"(\d+) failed")
 _ERRORS = re.compile(r"(\d+) error")
+_FAILED_ID = re.compile(r"^FAILED\s+(\S+)", re.MULTILINE)
+_ERROR_ID = re.compile(r"^ERROR\s+(\S+)", re.MULTILINE)
 
 
-def parse_test_output(text: str, exit_code: int | None) -> dict[str, Any]:
-    out: dict[str, Any] = {"passed": 0, "failed": 0, "errors": 0, "exit_code": exit_code}
+def parse_test_output(text: str, exit_code: int | None, timed_out: bool = False) -> dict[str, Any]:
+    text = text or ""
+    out: dict[str, Any] = {
+        "passed": 0,
+        "failed": 0,
+        "errors": 0,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "failed_ids": sorted(set(_FAILED_ID.findall(text))),
+        "error_ids": sorted(set(_ERROR_ID.findall(text))),
+    }
     for regex, key in ((_PASSED, "passed"), (_FAILED, "failed"), (_ERRORS, "errors")):
-        matches = regex.findall(text or "")
+        matches = regex.findall(text)
         if matches:
             out[key] = max(int(x) for x in matches)
+    if out["failed_ids"] and out["failed"] == 0:
+        out["failed"] = len(out["failed_ids"])
+    if out["error_ids"] and out["errors"] == 0:
+        out["errors"] = len(out["error_ids"])
     return out
 
 
@@ -216,6 +231,8 @@ class Verifier:
         if self.baseline is not None:
             return self.baseline
         if getattr(self.state, "baseline", None):
+            if self.state.baseline.get("status") in ("skipped", "error"):
+                return None
             self.baseline = self.state.baseline
             return self.baseline
         if not self.config.verification.get("run_baseline", True) or not self.project.test_commands:
@@ -227,8 +244,11 @@ class Verifier:
             timeout=int(self.config.verification.get("baseline_timeout_seconds", 300)),
             env=process_env(str(self.workspace)),
         )
-        parsed = parse_test_output((result.stdout or "") + (result.stderr or ""), result.exit_code)
-        self.baseline = {"command": cmd, "exit_code": result.exit_code, **parsed}
+        parsed = parse_test_output(
+            (result.stdout or "") + (result.stderr or ""), result.exit_code, result.timed_out
+        )
+        status = "passed" if (result.exit_code == 0 and not result.timed_out) else "failed"
+        self.baseline = {"command": cmd, "status": status, **parsed}
         self.emit("verification.baseline", {"baseline": self.baseline})
         return self.baseline
 
@@ -390,19 +410,28 @@ class Verifier:
                 cmd = [*cmd, *targets]
             res = self.sandbox.run(cmd, str(self.workspace), timeout=timeout, env=process_env(str(self.workspace)))
             combined = (res.stdout or "") + "\n" + (res.stderr or "")
-            parsed = parse_test_output(combined, res.exit_code)
+            parsed = parse_test_output(combined, res.exit_code, res.timed_out)
             run.command = cmd
             run.exit_code = res.exit_code
             run.summary = parsed
             run.output_artifact_id = self.artifacts.write(
                 "verification_log", combined, {"level": "L3", "command": cmd}
             ).artifact_id
-            passed = res.exit_code == 0 and parsed["failed"] == 0 and parsed["errors"] == 0
+            passed = (
+                res.exit_code == 0
+                and not res.timed_out
+                and parsed["failed"] == 0
+                and parsed["errors"] == 0
+                and not parsed["failed_ids"]
+                and not parsed["error_ids"]
+            )
             if res.timed_out:
                 run.findings = [f"test command timed out after {timeout}s"]
-                passed = False
             elif not passed:
-                run.findings = [f"tests failed (exit {res.exit_code}, {parsed['failed']} failed, {parsed['errors']} errors)"]
+                run.findings = [
+                    f"tests failed (exit {res.exit_code}, {parsed['failed']} failed, "
+                    f"{parsed['errors']} errors, failed_ids={parsed['failed_ids'][:5]})"
+                ]
             run.status = "passed" if passed else "failed"
         run.completed_at = utcnow_iso()
         self.emit("verification.completed", {"verification": run.to_dict()})
@@ -429,13 +458,33 @@ class Verifier:
                 env=process_env(str(self.workspace)),
             )
             combined = (res.stdout or "") + "\n" + (res.stderr or "")
-            now = parse_test_output(combined, res.exit_code)
+            now = parse_test_output(combined, res.exit_code, res.timed_out)
             run.summary = {"baseline": baseline, "current": now}
-            new_failures = now["failed"] - baseline.get("failed", 0)
-            passed = new_failures <= 0
+            new_failed = set(now["failed_ids"]) - set(baseline.get("failed_ids", []))
+            new_errors = set(now["error_ids"]) - set(baseline.get("error_ids", []))
+            passed = not res.timed_out and not new_failed and not new_errors
+            findings: list[str] = []
+            if res.timed_out:
+                findings.append("regression test command timed out")
+                passed = False
+            if new_failed:
+                findings.append("new failing tests: " + ", ".join(sorted(new_failed)[:5]))
+            if new_errors:
+                findings.append("new collection/test errors: " + ", ".join(sorted(new_errors)[:5]))
+            if passed and res.exit_code not in (0, None):
+                # non-zero exit is only acceptable when the failure set is exactly the known one
+                known_failed = set(now["failed_ids"]) and set(now["failed_ids"]) <= set(
+                    baseline.get("failed_ids", [])
+                )
+                known_errors = set(now["error_ids"]) and set(now["error_ids"]) <= set(
+                    baseline.get("error_ids", [])
+                )
+                if not (known_failed or known_errors):
+                    findings.append(f"test command exited {res.exit_code} without a matching known failure set")
+                    passed = False
             run.status = "passed" if passed else "failed"
-            if not passed:
-                run.findings = [f"{new_failures} new test failure(s) vs baseline"]
+            if findings:
+                run.findings = findings
         run.completed_at = utcnow_iso()
         self.emit("verification.completed", {"verification": run.to_dict()})
         return run
@@ -548,6 +597,11 @@ class CompletionGate:
             by_level[run.level] = run  # later runs win
         evidence["verification"] = {lvl: {"status": r.status, "id": r.verification_id} for lvl, r in by_level.items()}
         if changed:
+            if "L0" not in by_level:
+                reasons.append("code changed but diff review (L0) never ran")
+            elif by_level["L0"].status != "passed":
+                findings = "; ".join(by_level["L0"].findings[:3]) or "see verification record"
+                reasons.append(f"diff review (L0) failed: {findings}")
             if "L1" not in by_level:
                 reasons.append("code changed but structural verification (L1) never ran")
             elif by_level["L1"].status != "passed":
@@ -562,6 +616,10 @@ class CompletionGate:
                 reasons.append("regression check (L5) found new failures vs baseline")
             if "L5" not in by_level and has_tests:
                 warnings.append("regression baseline (L5) was not run")
+            baseline_info = getattr(s, "baseline", None) or {}
+            if has_tests and baseline_info.get("status") in ("error", "skipped"):
+                detail = baseline_info.get("error") or baseline_info.get("reason") or "unavailable"
+                warnings.append(f"baseline {baseline_info.get('status')}: {detail}")
 
         # 9. claims evidence
         mentions_tests = any(
@@ -585,6 +643,13 @@ class CompletionGate:
                     "(cite a file path, a ver_* id, an artifact_* id, or the verification command "
                     "instead of a tool name or free prose)"
                 )
+            text_low = (getattr(claim, "statement", "") or "").lower()
+            if ("test" in text_low or "pass" in text_low) and self.verifier and self.verifier.project.test_commands:
+                if not any(self._passing_test_ref(ref, by_level.get("L3")) for ref in refs):
+                    reasons.append(
+                        "claim about tests must cite the passing test verification (ver_* id, "
+                        "'L3 tests', or the test command), not just files"
+                    )
             resolved.append({"statement": getattr(claim, "statement", ""), "evidence_refs": refs})
         evidence["claims"] = resolved
 
@@ -664,19 +729,43 @@ class CompletionGate:
                 return True
             if run.level.lower() in low and run.type.lower() in low:
                 return True
-            if run.command:
-                stem = " ".join([_command_stem(run.command[0])] + [str(x) for x in run.command[1:]]).lower()
-                tokens = stem.split()
-                aliases: set[str] = set()
-                # a claim may drop the interpreter, flags or the concrete test target
-                for i in range(len(tokens)):
-                    for j in range(i + 2, min(len(tokens), i + 6) + 1):
-                        aliases.add(" ".join(tokens[i:j]))
-                aliases.add(" ".join(t for t in tokens[1:] if t != "-m"))
-                if any(len(alias.split()) >= 2 and alias in low for alias in aliases if alias):
-                    return True
+            if run.command and any(alias in low for alias in _command_aliases(run.command)):
+                return True
         for obs in getattr(s, "recent_observations", []):
             artifact = obs.get("artifact_id")
             if raw == artifact or (artifact and str(artifact).lower() in low):
                 return True
         return False
+
+    def _passing_test_ref(self, ref: str, l3: VerificationRun | None) -> bool:
+        """A claim about tests must point at a *passing* L3 verification."""
+        if l3 is None or l3.status != "passed":
+            return False
+        raw = str(ref or "").strip().lower()
+        if not raw:
+            return False
+        if l3.verification_id and l3.verification_id.lower() in raw:
+            return True
+        if l3.output_artifact_id and l3.output_artifact_id.lower() in raw:
+            return True
+        if l3.level.lower() in raw and l3.type.lower() in raw:
+            return True
+        if l3.command and any(alias in raw for alias in _command_aliases(l3.command)):
+            return True
+        return False
+
+
+def _command_aliases(command: list[str]) -> set[str]:
+    """Aliases of a verification command that a claim may quote."""
+    if not command:
+        return set()
+    stem = " ".join([_command_stem(command[0])] + [str(x) for x in command[1:]]).lower()
+    tokens = stem.split()
+    aliases: set[str] = set()
+    for i in range(len(tokens)):
+        for j in range(i + 2, min(len(tokens), i + 6) + 1):
+            alias = " ".join(tokens[i:j])
+            if len(alias.split()) >= 2:
+                aliases.add(alias)
+    aliases.add(" ".join(t for t in tokens[1:] if t != "-m"))
+    return aliases

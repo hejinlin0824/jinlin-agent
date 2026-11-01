@@ -1,16 +1,17 @@
 # Jinlin Code Engineer Agent
 
-## 技术报告 + 产品手册（v1.0）
+## 技术报告 + 产品手册（v1.1）
 
 | 项 | 值 |
 |---|---|
 | 被评系统 | `jinlin-code-agent`（CLI：`jinlin-agent`） |
-| 版本 | 0.1.0 |
-| 对应代码提交 | `f89384c`（`git log -1`） |
-| 文档日期 | 2026-10-31 |
+| 版本 | 0.1.0（文档 v1.1） |
+| 对应代码提交 | 见 `git log -1`（v1.1 为独立评审整改后的提交） |
+| 文档日期 | 2026-11-01（v1.0：2026-10-31） |
 | 文档性质 | 技术报告 + 产品手册二合一；供其他 AI 模型评审打分 |
 | 运行环境（实测） | Windows 11，Python 3.13.15，DeepSeek-V4.1-Flash（API id `deepseek-flash`） |
 | 基线系统 | **DeepSeek Harness（DSH）**、**ZCode** |
+| 独立评审 | 静态代码审查：实验型工程 Harness 7.0/10、生产级通用 Agent 4.5/10；整改记录见 `docs/REVIEW-RESPONSE.md` |
 | 许可 | MIT（见 `LICENSE`） |
 
 ---
@@ -621,9 +622,9 @@ $ jinlin-agent eval --suite all
 ## D. 复现信息
 
 ```bash
-cd jinlin-code-agent
+cd jinlin-agent
 python -m pip install -e .
-python -m pytest -q                    # 42 passed
+python -m pytest -q                    # 55 passed（42 基础 + 13 评审回归）
 jinlin-agent eval --suite all          # 18/18
 jinlin-agent doctor
 # 真实模型（需 key）：
@@ -632,9 +633,31 @@ jinlin-agent run --workspace /tmp/repo -t "修复失败测试"
 ```
 
 - Python 3.13.15；Windows 11；无 Docker/WSL。
-- 代码提交：`f89384c`（本文档提交后见 `git log -1`）。
+- 代码提交：见 `git log -1`（本文档随代码更新）。
 
-## E. 引用
+## E. 独立评审与整改（文档 v1.1 新增）
+
+独立静态评审（2026-11-01）给出：实验型工程 Harness **7.0/10**，生产级通用 Agent **4.5/10**。
+本版本按评审整改了 **P0 两项 + P1 六项 + P2 两项**，新增 13 条安全/完成门回归测试
+（`tests/test_security.py`）。关键变化：
+
+| 评审项 | 整改 |
+|---|---|
+| P0-1 父目录 symlink/Junction 越界 | `paths.resolve_in_workspace()`：realpath（含 Junction）+ 逐级 link 检查；文件工具/补丁/Shell 共用 |
+| P0-2 Shell cwd 未校验 | Policy + Handler 双层边界校验 |
+| P1-1 `write_file` 无读后写 | 已存在文件强制 `check_clean`；新文件 `create=True` |
+| P1-2 替换前不复核哈希 | `atomic_write(..., expected_sha256=)` 写前复核 + 写后校验 |
+| P1-3 证据与 Claim 不对应 | 测试类 Claim 必须引用通过的 L3 验证 |
+| P1-4 L5 只比数量 | 比较失败/错误 nodeid 集合 + 退出码 + timeout |
+| P1-5 L0 不阻断完成 | L0 未跑或失败 → 完成门拒绝 |
+| P1-6 基线异常被吞 | baseline 事件带 passed/failed/skipped/error + 原因 |
+| P2-1 事件中间损坏被忽略 | 仅容忍尾部 torn write；中间损坏/seq 缺口 → `SESSION_CORRUPTED` |
+
+仍未完成（诚实披露）：多文件崩溃事务（transaction manifest）、最终 messages 的二次 Token
+预算闭环、Artifact/自由文本统一递归脱敏、事件 hash chain、30–50 个独立真实任务评测。
+详见 `docs/REVIEW-RESPONSE.md`；Agent 自述契约见 `AGENT.md`。
+
+## F. 引用
 
 1. Macedo, S. *What makes a harness a harness: necessary and sufficient conditions for an agent harness.* arXiv:2606.10106, 2026. <https://arxiv.org/abs/2606.10106>
 2. DeepSeek Harness. <https://github.com/deepseek-ai/deepseek-harness>；架构文档 <https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md>；安全说明 <https://github.com/deepseek-ai/deepseek-harness/blob/master/SAFETY.md>
