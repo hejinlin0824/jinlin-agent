@@ -1,16 +1,16 @@
 ---
 handoff_document: true
 project: jinlin-agent (Python code-engineering agent harness)
-version: 2.0
-generated_at: "2026-11-01T12:30+08:00"
+version: 2.1
+generated_at: "2026-11-01T13:30+08:00"
 repository: https://github.com/hejinlin0824/jinlin-agent
-working_directory: "C:\\Users\\jinlin.he\\Documents\\deepseek-harness\\default-workspace\\jinlin-code-agent"
+working_directory: "E:\\codebase\\玩耍项目\\jinlin-agent"
 branches:
   main: 85854f1   # 受保护基线，评审要求不得直接改
-  review/followup-fixes: dbeb6af   # 当前整改分支（本文件提交后 HEAD +1）
+  review/followup-fixes: 22d4c7d+   # 第 3 轮整改代码提交；docs 提交后 HEAD 再 +N
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
-test_status: "python -m pytest -q => 64 passed; jinlin-agent eval --suite all => 18/18"
-review_status: "第 3 轮独立复核：Request changes（2 个 P1 待修）；L5 与 CI 已通过"
+test_status: "python -m pytest -q => 72 passed; jinlin-agent eval --suite all => 18/18"
+review_status: "第 3 轮两个 P1（TOCTOU / torn tail 恢复）已按报告修复；等待第 4 轮针对性复核后合并"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
 ---
@@ -56,28 +56,28 @@ non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
 
 ---
 
-## 2. 当前仓库状态（2026-11-01）
+## 2. 当前仓库状态（2026-11-01，第 3 轮整改后）
 
 ### 2.1 分支与提交
 
 | 分支 | HEAD | 说明 |
 |---|---|---|
 | `main` | `85854f1` | 受保护基线；评审明确要求**不要**直接改 |
-| `review/followup-fixes` | `dbeb6af` | 当前整改分支（本文件提交后 +1 个 docs commit）；所有修复在这里 |
+| `review/followup-fixes` | `22d4c7d`+ | 第 3 轮整改代码提交；其后是 docs 提交，推前用 `git log --oneline -3` 确认 |
 | `origin/main` | `85854f1` | 与本地一致 |
 
-代码基线（被第 3 轮复核审阅的代码提交）：`9a935d4`。`9a935d4 → dbeb6af` 只改了 `README.md` 与 `docs/REVIEW-SUBMISSION.md`。
+代码基线（被第 3 轮复核审阅的代码提交）：`9a935d4`。第 3 轮整改代码提交：`22d4c7d`（O_EXCL 创建 / workspace 写锁 / 先移动后校验回滚 / EventLog 尾部修复，含 8 条新测试）。仓库已迁到 `E:\codebase\玩耍项目\jinlin-agent`（原 `C:\Users\jinlin.he\Documents\deepseek-harness\default-workspace\jinlin-code-agent` 不再存在）。
 
 ### 2.2 验证状态
 
 ```bash
-python -m pytest -q            # 64 passed（42 基础 + 22 安全/完成门/事务回归）
+python -m pytest -q            # 72 passed（42 基础 + 30 安全/完成门/事务回归）
 jinlin-agent eval --suite all  # 18/18 probes passed（离线，scripted provider）
 ```
 
 CI：`.github/workflows/ci.yml`，矩阵 `windows-latest` / `ubuntu-latest`，Python 3.13；跑 pytest（junit.xml）+ 离线 eval + artifact 上传。
-已核实的成功 run（代码提交 `9a935d4`）：<https://github.com/hejinlin0824/jinlin-agent/actions/runs/41270143374>
-（`main` 尚未合并，因此 main 上可能没有 CI 成功记录。）
+上一轮已核实的成功 run（代码提交 `9a935d4`）：<https://github.com/hejinlin0824/jinlin-agent/actions/runs/41270143374>
+本轮 `22d4c7d` 的 run 见分支 Actions 页；`main` 尚未合并，因此 main 上可能没有 CI 成功记录。
 
 ### 2.3 评审历史（三轮）
 
@@ -85,15 +85,15 @@ CI：`.github/workflows/ci.yml`，矩阵 `windows-latest` / `ubuntu-latest`，Py
 |---|---|---|---|
 | 第 1 轮 | `JINLIN_AGENT_REVIEW.md` | 实验型 Harness 7.0/10；生产级 4.5/10；P0×2、P1×6、P2×4 | 已修 P0×2 + P1×6 + P2×2，见 `docs/REVIEW-RESPONSE.md` |
 | 第 2 轮 | `JINLIN_AGENT_REVIEW_FOLLOWUP.md` | 接受大部分；要求修：回滚并发、L5 `exit_code=None`、事件尾判定 | 已修，见 `docs/REVIEW-RESPONSE.md` §0 |
-| **第 3 轮（当前）** | `JINLIN_AGENT_SUBMISSION_REVIEW.md` | **Request changes / 暂缓合并**：L5 通过；**2 个 P1 待修** | **接手者要做的事**（§3） |
+| **第 3 轮（当前）** | `JINLIN_AGENT_SUBMISSION_REVIEW.md` | **Request changes / 暂缓合并**：L5 通过；**2 个 P1 待修** | **两个 P1 已修**（`22d4c7d`，见 §3 与 `docs/REVIEW-SUBMISSION-ROUND3.md`），等待针对性复核 |
 
 ⚠️ 三个评审报告目前都在所有者本机 `C:\Users\jinlin.he\Downloads\` 下，**不在仓库里**。如果接手环境读不到，请让所有者粘贴或提供文件；本文件 §3 已完整摘录第 3 轮的要求。
 
 ---
 
-## 3. 当前必须处理的第 3 轮评审（P1×2）
+## 3. 第 3 轮评审的两个 P1（**已修复**，保留本节作背景）
 
-> 以下是复核报告的原文要求 + 落地解读。**接手者的任务就是修这两项**。不要推倒重来，L5/CI/路径/回滚所有权等已通过的改动必须保留。
+> 以下是复核报告的原文要求 + 落地解读。两项已于提交 `22d4c7d` 修复（TDD：先写失败测试看红，再实现转绿），实现与测试不得回退。若下一轮复核提出新问题，按 §8 流程处理。
 
 ### 3.1 P1-A：`create=True` 不是原子 create-only；`expected_sha256` 仍有 TOCTOU
 
@@ -172,7 +172,8 @@ CI：`.github/workflows/ci.yml`，矩阵 `windows-latest` / `ubuntu-latest`，Py
 | `policy.py` | 362 | 路径/命令策略、审批（fail-closed） |
 | `paths.py` | 67 | 唯一可信路径解析（词法+realpath+Junction+link 组件） |
 | `sandbox/base.py` `null.py` `windows.py` | 98/169/1286 | 沙箱契约、L0、Windows L1（受限令牌+Job Object） |
-| `events.py` | 205 | append-only 事件日志 + 严格回放校验 |
+| `events.py` | 约 260 | append-only 事件日志 + 严格回放校验 + open() 崩溃尾部修复 |
+| `locks.py` | 71 | 跨平台顾问文件锁（SessionLock：会话单写者 / workspace 写锁） |
 | `state.py` | 319 | 事件折叠 → SessionState（33 种事件） |
 | `session.py` | 242 | 会话创建/锁/快照/恢复/baseline |
 | `artifacts.py` | 83 | artifact store（大输出、报告、快照） |
@@ -214,9 +215,10 @@ cli → loop → {context, prompt, verify, runtime, model, session, policy}
 runtime → {tools, policy, artifacts, events}
 verify → {sandbox, artifacts, domain, paths}
 policy → paths
-tools/* → {base, schema, registry}
+tools/* → {base, schema, registry, locks}
 sandbox/* → base
-events → domain/errors
+events → {domain, errors, locks}
+locks → ∅（最底层，供 events 与 tools 共用）
 state → domain
 ```
 
@@ -231,7 +233,7 @@ state → domain
 - 事件公共字段：`schema_version=1, event_id, seq, ts, session_id, turn_id, step_id, type, payload`。
 - 33 种事件类型见 `state._HANDLERS`（`session.*/workspace.snapshot/phase.changed/step.started/context.*/model.*/tool.*/approval.*/plan.updated/fact.recorded/decision.recorded/verification.*/completion.*/sandbox.mode/config.escalation_blocked/loop.detected`）。
 - 读取校验（`_iter_events_checked`）：只容忍**末尾无换行**的 torn fragment；换行终止坏 JSON、空行、schema/session 不一致、seq 缺口 → `SESSION_CORRUPTED`。
-- **恢复**：`SessionManager.open` 折叠事件 → 检测"有 intent 无 result"的工具调用 → 只读安全忽略；写类标 `RECOVERY_UNCERTAIN`；然后 `EventLog.open` 需要修复 torn tail（TODO，见 §3.2）。
+- **恢复**：`SessionManager.open` 折叠事件 → 检测"有 intent 无 result"的工具调用 → 只读安全忽略；写类标 `RECOVERY_UNCERTAIN`；`EventLog.open` 取锁后**先修复尾部再追加**（无换行坏碎片截断到最后完整事件；完整缺换行补 `\n`；换行坏 JSON 仍 fail-closed；失败释放锁，见 §3.2，已修复）。
 - **改动约束**：新增事件类型必须同时加到 `state._HANDLERS`、必要时文档描述、以及探针/测试。
 
 ### 5.2 路径边界（唯一入口）
@@ -252,7 +254,7 @@ state → domain
   - `write_file`：新文件 `create=True`；已存在文件强制读后写 + 哈希。
 - 规则：精确匹配（无模糊）、读后写、写前 hash 复核、写后校验、原子写（tmp + `os.replace`）、保留 BOM/CRLF、成功后清理该 `.py` 的 `__pycache__`（同秒 stale pyc 修复）。
 - 事务：写入成功后才登记回滚记录（含写后 hash）；回滚只回滚"仍与本事务写后 hash 一致"的路径，否则 `RECOVERY_UNCERTAIN` + `rollback_incomplete`；Delete 用原子重命名备份。
-- **尚未解决**：`create=True` 非原子 no-clobber、`expected_sha256` 最后窗口 TOCTOU、回滚 check-then-act（§3.1）。
+- **并发边界（第 3 轮整改后）**：新建文件 = `O_CREAT|O_EXCL` 独占创建（文件系统级原子 no-clobber，不再用 `os.replace`）；更新 = 写前哈希复核**缩小**（不消除）TOCTOU + workspace 写锁（`<workspace>/.jinlin/write.lock`）串行化 Jinlin 会话（`WORKSPACE_LOCKED` 可重试）；回滚 = 先移动到事务级 trash 再校验归属，Delete 恢复用 `os.link`；对外部进程的残余窗口如实写入 `docs/REPORT-AND-HANDBOOK.md` §16。
 
 ### 5.4 上下文（T3）
 
@@ -409,7 +411,7 @@ git push origin main
 5. **沙箱降级**：L1 构造失败自动 L0；报告和 `sandbox.mode` 必须一致；不要假设 L1 一定可用。
 6. **Low IL 限制**：workspace 是 Medium 标签，Low IL 写不了；不要为追求"更低完整性"重标用户 workspace。
 7. **证据语法**：测试类 claim 必须引用 `ver_*`/`artifact_*`/`L3 tests`/测试命令；只引文件路径会被拒。
-8. **事件日志**：读取允许无换行 torn tail，但 **open 后 append 前必须修复**（当前 P1-B）；中间坏/空行/seq 缺口必须 fail closed。
+8. **事件日志**：读取允许无换行 torn tail，且 `open()` 已在 append 前修复（截断/补换行）；中间坏/空行/seq 缺口必须 fail closed。
 9. **回滚边界**：只回滚本事务写后 hash 仍匹配的内容；不一致时 `RECOVERY_UNCERTAIN`，不要静默覆盖。
 10. **`main` 保护**：评审明确要求分支隔离；直接改 main 会被拒。
 11. **CI 平台差异**：仅在 Windows 验证过 L1 沙箱；Linux 上 `test_sandbox_win.py` 必须跳过（模块 import 在 Windows-only，tests 里已做 platform guard）。

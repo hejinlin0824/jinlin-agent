@@ -1,12 +1,25 @@
-# 独立评审响应与整改记录（v1.2）
+# 独立评审响应与整改记录（v1.3）
 
 | 项 | 值 |
 |---|---|
-| 评审来源 | `JINLIN_AGENT_REVIEW.md`（2026-11-01，静态代码审查）+ `JINLIN_AGENT_REVIEW_FOLLOWUP.md`（整改复核） |
-| 评审基线 | `f89384c`（首轮）、`85854f1`（复核轮） |
+| 评审来源 | `JINLIN_AGENT_REVIEW.md`（2026-11-01，静态代码审查）+ `JINLIN_AGENT_REVIEW_FOLLOWUP.md`（整改复核）+ `JINLIN_AGENT_SUBMISSION_REVIEW.md`（第 3 轮提交复核） |
+| 评审基线 | `f89384c`（首轮）、`85854f1`（复核轮）、`9a935d4`（第 3 轮代码提交） |
 | 评审评分 | 实验型工程 Harness **7.0/10**；生产级通用 Agent **4.5/10** |
-| 本响应版本 | v1.2：首轮 P0/P1 整改 + follow-up 三项残留修复 |
-| 结论 | **接受两轮评审**。首轮 P0×2、P1×6 已修；follow-up 的 P1×2、P2×1 已修；其余明确延后 |
+| 本响应版本 | v1.3：首轮 P0/P1 整改 + follow-up 三项残留修复 + 第 3 轮 P1×2（TOCTOU / torn tail 恢复） |
+| 结论 | **接受三轮评审**。首轮 P0×2、P1×6 已修；follow-up 的 P1×2、P2×1 已修；第 3 轮 P1×2 已修（L5 与 CI 该轮已通过）；其余明确延后 |
+
+## 0a. 第 3 轮复核整改（v1.3，基于 `JINLIN_AGENT_SUBMISSION_REVIEW.md`）
+
+第 3 轮结论为 **Request changes**：L5 `exit_code=None` 与 CI 基础设施已通过；两个 P1 阻止合并。本轮全部按"先写失败测试、看它红、再实现"完成，全部工作仍在 `review/followup-fixes` 分支，`main` 保持 `85854f1` 不变。
+
+| 复核项 | 处理 | 回归测试 |
+|---|---|---|
+| **P1-A** `create=True` 不是原子 create-only（`exists()` 检查后 `os.replace` 可覆盖并发创建者） | 新建路径改用 `os.open(O_CREAT\|O_EXCL)` **独占创建**（Windows/POSIX 均为文件系统级原子 no-clobber），不再经过 `os.replace`；竞争失败映射为 `PATCH_CONFLICT`；`atomic_write` docstring 删除"never overwrites"式过强表述，改为准确的 `O_EXCL` 语义 | `test_apply_patch_add_no_clobber_at_replace_window`（注入 `os.replace`：断言 Add 路径不再调用它）、`test_apply_patch_add_conflict_when_creator_wins_exclusive_create`（在独占创建前瞬间注入并发创建者：断言 `PATCH_CONFLICT` 且外部内容完好） |
+| **P1-A** Update `expected_sha256` 检查后、`os.replace` 前的 TOCTOU | 按复核允许的方案**收缩承诺**：写前哈希复核只**缩小**（不消除）窗口；新增 `<workspace>/.jinlin/write.lock` 顾问写锁，写阶段串行化多个 Jinlin 会话（竞争方得到可重试的 `WORKSPACE_LOCKED`）；残余风险写入安全模型（`REPORT-AND-HANDBOOK.md` §16 第 11 条）；写后校验与 `RECOVERY_UNCERTAIN` 保留 | `test_apply_patch_update_toctou_after_hash_check`（注入最后窗口外部写入，钉住已收缩契约的实际行为）、`test_editing_tools_serialize_on_workspace_write_lock`（持锁会话阻塞第二个会话的写阶段，释放后同补丁成功） |
+| **P1-A** 回滚自身 check-then-act（hash 检查后 unlink/replace 可破坏外部内容） | 回滚改为**先移动后校验**：先把当前内容原子改名到事务级 trash（内容保全），校验哈希归属后才删除/替换；不匹配则原样移回并报 `RECOVERY_UNCERTAIN`；Update 恢复改走 `create=True`（`O_EXCL`），外部内容抢到路径时保留双方内容；Delete 恢复改用 `os.link`（create-if-absent），不再覆盖并发重建的文件 | `test_rollback_after_check_preserves_external_content`（在 trash 改名前注入外部写入：断言外部内容原样保留 + `RECOVERY_UNCERTAIN`） |
+| **P1-B** `EventLog.open()` 容忍 torn tail 但不修复，恢复追加会把日志永久写坏 | `open()` 取锁后先解析全文件（`_parse_log_data`，读取与修复共用同一套校验规则）：末尾**无换行且无法解析**的碎片 → 截断到最后一条完整事件并 `fsync`；最后一条**完整 JSON 缺换行** → 补写 `\n` 并 `fsync`；**换行终止的坏 JSON** → 仍 fail-closed 不自动修复；`open()` 校验失败时**释放会话锁** | `test_open_repairs_torn_tail_before_append`、`test_open_repairs_missing_trailing_newline`（open → append → reopen 双路径集成测试）、`test_open_failure_releases_session_lock`（损坏日志打开失败后第二个实例可立即取锁） |
+
+不阻塞但已采纳的复核建议：无（Python 3.11/3.12 CI 矩阵、L5 失败计数比较仍按报告意见延后，见 §2）。
 
 ## 0. Follow-up 复核整改（v1.2，基于 `85854f1` 复核）
 
