@@ -174,7 +174,7 @@ def _parse_log_data(data: bytes) -> tuple[list[dict[str, Any]], str]:
                 source="events",
             )
         try:
-            evt = json.loads(raw.decode("utf-8", "replace"))
+            evt = json.loads(raw.decode("utf-8"))  # strict: invalid bytes never pass as data
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             if is_last and not ends_with_newline:
                 return events, _TAIL_TORN  # genuine torn tail: incomplete final write

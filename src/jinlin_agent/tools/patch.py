@@ -35,6 +35,7 @@ from ..errors import (
     PATCH_PARSE_ERROR,
     FILE_NOT_READ,
     FILE_CHANGED_EXTERNALLY,
+    RECOVERY_UNCERTAIN,
     WORKSPACE_LOCKED,
     AgentError,
 )
@@ -227,6 +228,29 @@ def _invalidate_bytecode(path: Path) -> None:
         pass
 
 
+def _restore_no_clobber(source: Path, dest: Path) -> bool:
+    """Move ``source`` back onto ``dest`` without ever replacing an entry.
+
+    ``os.link`` atomically creates ``dest`` only when it is absent, so a file
+    a concurrent writer placed at ``dest`` while our content sat aside can
+    never be replaced; the link is followed by removing our now-redundant
+    source name. Returns False — keeping ``source`` intact — when ``dest`` is
+    occupied or the filesystem cannot hard-link; callers must then report
+    RECOVERY_UNCERTAIN. An overwriting rename is deliberately *not* used as a
+    fallback: silent replacement of a concurrent file is the bug class this
+    helper exists to close.
+    """
+    try:
+        os.link(source, dest)
+    except OSError:
+        return False  # dest claimed concurrently, or fs without hardlink support
+    try:
+        os.unlink(source)
+    except OSError:
+        pass  # dest already holds the content; a leftover source name is harmless
+    return True
+
+
 def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
     """Revert only mutations this transaction actually made *and* still owns.
 
@@ -234,11 +258,11 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
     or overwritten in place: the current file is first renamed to a
     transaction-scoped trash name (atomic, content-preserving), the trash is
     hashed, and only when it matches what our write produced is it removed or
-    replaced. If the hash differs — a concurrent writer edited the file after
-    us — the trash is moved back untouched and the path is reported as
-    incomplete (the caller raises RECOVERY_UNCERTAIN). Delete restores through
-    ``os.link`` (atomic create-if-absent on both platforms), which can never
-    replace a file a concurrent writer recreated.
+    replaced. Every put-back — trash or backup onto the original path — goes
+    through `_restore_no_clobber`: if a concurrent writer recreated the path
+    while our content sat aside, both sides are kept and the path is reported
+    as incomplete (the caller raises RECOVERY_UNCERTAIN). An overwriting
+    rename is never used as a restore fallback.
 
     The residual window between the trash-rename and the final step is
     best-effort against uncoordinated external processes; jinlin sessions are
@@ -260,7 +284,8 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
                     trash.unlink()
                     restored.append(rel)
                 else:
-                    os.replace(trash, path)  # concurrent content — put it back untouched
+                    if not _restore_no_clobber(trash, path):
+                        pass  # path claimed concurrently: keep both sides (trash + theirs)
                     incomplete.append(rel)
             elif record["kind"] == "update":
                 if not path.exists():
@@ -269,16 +294,14 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
                 trash = path.with_name(f".{path.name}.jinlin-rollback-{uuid.uuid4().hex[:8]}")
                 os.replace(path, trash)
                 if hashlib.sha256(trash.read_bytes()).hexdigest() != record["after_sha"]:
-                    os.replace(trash, path)  # concurrent content — put it back untouched
+                    if not _restore_no_clobber(trash, path):
+                        pass  # path claimed concurrently: keep both sides (trash + theirs)
                     incomplete.append(rel)
                     continue
                 try:
                     atomic_write(path, record["before"], create=True)
                 except Exception:
-                    if not path.exists():
-                        os.replace(trash, path)  # nothing claimed the path; restore ours
-                    # else: someone else wrote the path during our failed
-                    # restore — keep their content and ours (trash), report it
+                    _restore_no_clobber(trash, path)  # put ours back unless the path was claimed
                     incomplete.append(rel)
                     continue
                 trash.unlink()
@@ -291,20 +314,9 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
                 if not backup.exists():
                     incomplete.append(rel)
                     continue
-                try:
-                    os.link(backup, path)  # atomic create-if-absent on both platforms
-                except FileExistsError:
-                    incomplete.append(rel)  # concurrent writer recreated it in the window
-                    continue
-                except OSError:
-                    # filesystem without hardlink support: best-effort re-check + rename
-                    if path.exists():
-                        incomplete.append(rel)
-                        continue
-                    os.replace(backup, path)
-                    restored.append(rel)
-                    continue
-                os.unlink(backup)
+                if not _restore_no_clobber(backup, path):
+                    incomplete.append(rel)  # claimed concurrently, or fs cannot hard-link:
+                    continue  # keep the backup, never fall back to an overwriting rename
                 restored.append(rel)
         except Exception:
             incomplete.append(rel)
@@ -599,12 +611,19 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                 os.replace(path, backup)
                 moved_sha = hashlib.sha256(backup.read_bytes()).hexdigest()
                 if moved_sha != expected:
-                    if not path.exists():
-                        os.replace(backup, path)
+                    if _restore_no_clobber(backup, path):
+                        raise AgentError(
+                            FILE_CHANGED_EXTERNALLY,
+                            f"{item['rel']} changed while being deleted; original restored",
+                            source="edit",
+                        )
                     raise AgentError(
-                        FILE_CHANGED_EXTERNALLY,
-                        f"{item['rel']} changed while being deleted; original restored",
+                        RECOVERY_UNCERTAIN,
+                        f"{item['rel']} changed while being deleted and the path was claimed "
+                        f"concurrently; the original content was kept aside at {backup.name} "
+                        "instead of replacing the concurrent file",
                         source="edit",
+                        details={"kept_aside": backup.name},
                     )
                 applied.append(
                     {"kind": "delete", "path": path, "rel": item["rel"], "backup": backup, "before_sha": expected}

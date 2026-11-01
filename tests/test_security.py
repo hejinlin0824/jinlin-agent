@@ -650,3 +650,122 @@ def test_rollback_after_check_preserves_external_content(tmp_path, monkeypatch):
     assert "a.py" in result.error.details.get("rollback_incomplete", [])
     assert first.read_bytes() == b"external-edit-in-window", "external content must survive the rollback"
 
+
+# ------------------------------------------------------------------ P1 no-clobber restore (round 4)
+
+
+@pytest.mark.parametrize("kind", ["add", "update"])
+def test_rollback_restore_is_no_clobber_when_path_recreated(tmp_path, monkeypatch, kind):
+    """Round-4 P1-1: while the rolled-back content sits in the transaction
+    trash, an external writer can recreate the original path. The restore must
+    be create-if-absent — keep both sides (external content at the path, our
+    content in the trash) and report RECOVERY_UNCERTAIN; never replace."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "a.py"
+    other = tmp_path / "b.py"
+    if kind == "update":
+        target.write_text("old\n", encoding="utf-8")
+        ctx.state.read_hashes["a.py"] = sha(target.read_bytes())
+        other.write_text("old-b\n", encoding="utf-8")
+        ctx.state.read_hashes["b.py"] = sha(other.read_bytes())
+
+    real_atomic = patch_mod.atomic_write
+    real_link = os.link
+    calls = {"n": 0}
+
+    def failing_second(path, data, mode_from=None, expected_sha256=None, create=False):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_atomic(path, data, mode_from=mode_from, expected_sha256=expected_sha256, create=create)
+        target.write_bytes(b"external-in-window")  # external edit after our write
+        raise patch_mod.AgentError("PATCH_CONFLICT", "simulated concurrent conflict", source="edit")
+
+    def racing_link(src, dst):
+        if Path(dst) == target and not target.exists():
+            target.write_bytes(b"external-recreated")  # claims the path before the restore
+        return real_link(src, dst)
+
+    monkeypatch.setattr(patch_mod, "atomic_write", failing_second)
+    monkeypatch.setattr(patch_mod.os, "link", racing_link)
+
+    if kind == "add":
+        patch = _patch_text(
+            "*** Add File: a.py", "+created by agent",
+            "*** Add File: b.py", "+created by agent b",
+        )
+    else:
+        patch = _patch_text(
+            "*** Update File: a.py", "@@", "-old", "+new",
+            "*** Update File: b.py", "@@", "-old-b", "+new-b",
+        )
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert result.error is not None and result.error.code == "RECOVERY_UNCERTAIN"
+    assert "a.py" in result.error.details.get("rollback_incomplete", [])
+    assert target.read_bytes() == b"external-recreated", "the recreated path must not be replaced by the restore"
+    trashes = list(tmp_path.glob(".a.py.jinlin-rollback-*"))
+    assert len(trashes) == 1 and trashes[0].read_bytes() == b"external-in-window", (
+        "our rolled-back content must stay recoverable in the trash"
+    )
+
+
+def test_delete_move_hash_mismatch_restore_is_no_clobber(tmp_path, monkeypatch):
+    """Round-4 P1-2: when the moved-aside backup fails ownership verification,
+    putting the original back must also be create-if-absent. A path recreated
+    concurrently is kept, the original content stays in the backup, and the
+    outcome is RECOVERY_UNCERTAIN — not an overwriting restore."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    doomed = tmp_path / "doomed.py"
+    doomed.write_text("old\n", encoding="utf-8")
+    ctx.state.read_hashes["doomed.py"] = sha(doomed.read_bytes())
+
+    real_replace = os.replace
+    real_link = os.link
+
+    def racing_replace(src, dst):
+        src_p, dst_p = Path(src), Path(dst)
+        if dst_p.name.startswith(".doomed.py.jinlin-txn-"):
+            doomed.write_bytes(b"external-in-backup")  # rides along, breaks ownership
+        elif src_p.name.startswith(".doomed.py.jinlin-txn-") and dst_p == doomed:
+            doomed.write_bytes(b"external-recreated")  # old design: recreated before restore
+        return real_replace(src, dst)
+
+    def racing_link(src, dst):
+        if Path(dst) == doomed and not doomed.exists():
+            doomed.write_bytes(b"external-recreated")  # claims the path before the restore
+        return real_link(src, dst)
+
+    monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
+    monkeypatch.setattr(patch_mod.os, "link", racing_link)
+    patch = _patch_text("*** Delete File: doomed.py")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert result.error is not None and result.error.code == "RECOVERY_UNCERTAIN"
+    assert doomed.read_bytes() == b"external-recreated", "the recreated path must not be replaced"
+    backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+    assert len(backups) == 1 and backups[0].read_bytes() == b"external-in-backup", (
+        "the original content must stay recoverable in the backup"
+    )
+
+
+# ------------------------------------------------------------------ P2 strict UTF-8 (round 4 rider)
+
+
+def test_invalid_utf8_inside_event_is_rejected(tmp_path):
+    """Strict UTF-8 decoding: invalid bytes inside a JSON string value must not
+    be silently replaced and pass as a valid event — reading and EventLog.open()
+    must both fail closed."""
+    good = (_evt(1) + "\n").encode()
+    bad = b'{"schema_version":1,"seq":2,"type":"x","payload":{"note":"\xff\xfe"}}\n'
+    _write_bytes(tmp_path / "events.jsonl", good + bad)
+    with pytest.raises(AgentError) as excinfo:
+        list(read_events(tmp_path))
+    assert excinfo.value.code == "SESSION_CORRUPTED"
+    with pytest.raises(AgentError) as excinfo:
+        EventLog(tmp_path, "sess_utf8").open()
+    assert excinfo.value.code == "SESSION_CORRUPTED"
+
