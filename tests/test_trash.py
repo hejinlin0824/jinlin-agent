@@ -837,3 +837,93 @@ def test_rescue_clean_reports_interrupted_quarantine_without_touching_it(tmp_pat
     assert report["quarantined"] == [{"path": quarantine.name, "kind": "file"}]
     assert quarantine.read_bytes() == b"interrupted cleanup evidence"
     assert report["removed"] == []
+
+
+
+def test_rescue_audit_hash_chain_and_transaction_state_lifecycle(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".audit.py.jinlin-rescue-10203040", b"audit payload")
+    record_trash(tmp_path, rescue, "audit.py", "rescue")
+    restored = trash_mod.restore_rescue(tmp_path, rescue.name)
+    assert restored["status"] == "restored"
+
+    audit = trash_mod._read_audit(tmp_path)
+    assert audit["issues"] == []
+    assert len(audit["events"]) == 1
+    event = audit["events"][0]
+    assert event["action"] == "restore"
+    assert event["status"] == "restored"
+    assert event["sha256"] == sha(b"audit payload")
+
+    report = trash_mod.inspect_rescue(tmp_path)
+    assert report["status"] == "ok"
+    assert report["counts"]["verified_rescue"] == 1
+    assert report["counts"]["audit_events"] == 1
+    assert report["transactions"][0]["state"] == "PUBLISHED"
+    assert report["stages"][0]["integrity"] == "sha256-valid"
+
+
+def test_rescue_audit_detects_tampering_and_refuses_to_extend_chain(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".tamper.py.jinlin-rescue-10203041", b"tamper payload")
+    record_trash(tmp_path, rescue, "tamper.py", "rescue")
+    assert trash_mod.restore_rescue(tmp_path, rescue.name)["status"] == "restored"
+
+    audit_path = tmp_path / ".jinlin" / "rescue-audit.jsonl"
+    original = audit_path.read_text(encoding="utf-8")
+    audit_path.write_text(original.replace('"status": "restored"', '"status": "conflict"'), encoding="utf-8")
+    audit = trash_mod._read_audit(tmp_path)
+    assert audit["issues"]
+    second = trash_mod.restore_rescue(tmp_path, rescue.name)
+    assert second["status"] == "already-published"
+    assert second["audit_warnings"]
+    assert audit_path.read_text(encoding="utf-8") != ""
+
+
+def test_rescue_inspect_reports_orphan_and_interrupted_cleanup(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    orphan = tmp_path / ".unknown.py.jinlin-restore-0123456789abcdef"
+    orphan.write_bytes(b"orphan")
+    quarantine = tmp_path / ".unknown.py.jinlin-clean-aabbccdd"
+    quarantine.write_bytes(b"quarantine")
+    report = trash_mod.inspect_rescue(tmp_path)
+    assert report["status"] == "attention-required"
+    assert report["counts"]["orphaned_stages"] == 1
+    assert report["counts"]["quarantined"] == 1
+    assert report["orphaned"][0]["state"] == "ORPHANED"
+    assert report["quarantined"][0]["state"] == "CLEANUP_INTERRUPTED"
+    assert orphan.exists() and quarantine.exists()
+
+
+def test_rescue_clean_records_cleaned_state_in_audit(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".state.py.jinlin-rescue-10203042", b"state payload")
+    record_trash(tmp_path, rescue, "state.py", "rescue")
+    assert trash_mod.restore_rescue(tmp_path, rescue.name)["status"] == "restored"
+    preview = trash_mod.clean_rescue(tmp_path)
+    assert preview["status"] == "dry-run"
+    applied = trash_mod.clean_rescue(tmp_path, apply=True)
+    assert applied["removed"] == [rescue.name]
+    audit = trash_mod._read_audit(tmp_path)
+    states = trash_mod._transaction_states(audit["events"])
+    assert len(states) == 1
+    assert states[0]["state"] == "CLEANED"
+
+
+def test_rescue_inspect_cli_is_read_only_and_reports_audit(tmp_path, capsys):
+    from jinlin_agent.cli import main
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".inspect.py.jinlin-rescue-10203043", b"inspect payload")
+    record_trash(tmp_path, rescue, "inspect.py", "rescue")
+    assert trash_mod.restore_rescue(tmp_path, rescue.name)["status"] == "restored"
+    before = (tmp_path / ".jinlin" / "rescue-audit.jsonl").read_bytes()
+    assert main(["rescue", "inspect", "--workspace", str(tmp_path)]) == 0
+    output = capsys.readouterr().out
+    assert "PUBLISHED" in output
+    assert "audit_events: 1" in output
+    assert (tmp_path / ".jinlin" / "rescue-audit.jsonl").read_bytes() == before
