@@ -433,6 +433,8 @@ def _safe_rescue_target(workspace: Path, orig: str) -> tuple[Path | None, str | 
 
 def _publish_restore_stage(stage: Path, dest: Path, digest: str) -> dict[str, Any]:
     """Publish a fully verified stage with atomic no-clobber hard-link creation."""
+    if dest.is_symlink():
+        return {"status": "conflict", "detail": "target is a symlink; stage and rescue retained"}
     try:
         if stage.is_symlink():
             return {"status": "unrecognized", "detail": "staging path is a symlink; not followed"}
