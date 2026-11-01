@@ -32,6 +32,10 @@ def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _patch_text(*ops: str) -> str:
+    return "*** Begin Patch\n" + "\n".join(ops) + "\n*** End Patch"
+
+
 def make_ctx(tmp_path: Path) -> ToolContext:
     cfg = load_config(tmp_path, home=tmp_path / "home")
     return ToolContext(
@@ -51,7 +55,7 @@ def _mk_trash(ws: Path, name: str, content: bytes = b"x\n") -> Path:
 
 def test_scan_requires_manifest_proof(tmp_path):
     proven = _mk_trash(tmp_path, ".a.py.jinlin-rollback-deadbeef")
-    record_trash(tmp_path, proven.name, "a.py", "rollback")
+    assert record_trash(tmp_path, proven, "a.py", "rollback") is True
     stranger = _mk_trash(tmp_path, ".b.py.jinlin-txn-cafebabe")
     provable, unrecognized = scan_trash(tmp_path)
     assert [e["name"] for e in provable] == [proven.name], (
@@ -62,7 +66,7 @@ def test_scan_requires_manifest_proof(tmp_path):
 
 def test_clean_dry_run_is_the_default(tmp_path):
     proven = _mk_trash(tmp_path, ".a.py.jinlin-rollback-deadbeef")
-    record_trash(tmp_path, proven.name, "a.py", "rollback")
+    record_trash(tmp_path, proven, "a.py", "rollback")
     stranger = _mk_trash(tmp_path, ".b.py.jinlin-txn-cafebabe")
     report = clean_trash(tmp_path)
     assert report["status"] == "dry-run"
@@ -73,7 +77,7 @@ def test_clean_dry_run_is_the_default(tmp_path):
 
 def test_clean_apply_removes_proven_and_keeps_unrecognized(tmp_path):
     proven = _mk_trash(tmp_path, ".a.py.jinlin-rollback-deadbeef")
-    record_trash(tmp_path, proven.name, "a.py", "rollback")
+    record_trash(tmp_path, proven, "a.py", "rollback")
     stranger = _mk_trash(tmp_path, ".b.py.jinlin-txn-cafebabe")
     report = clean_trash(tmp_path, apply=True)
     assert report["status"] == "applied"
@@ -87,7 +91,7 @@ def test_clean_apply_removes_proven_and_keeps_unrecognized(tmp_path):
 
 def test_clean_failure_keeps_manifest_entry_and_is_repeatable(tmp_path, monkeypatch):
     proven = _mk_trash(tmp_path, ".a.py.jinlin-rollback-deadbeef")
-    record_trash(tmp_path, proven.name, "a.py", "rollback")
+    record_trash(tmp_path, proven, "a.py", "rollback")
     real_unlink = os.unlink
 
     def failing_unlink(path, *args, **kwargs):
@@ -97,7 +101,7 @@ def test_clean_failure_keeps_manifest_entry_and_is_repeatable(tmp_path, monkeypa
 
     monkeypatch.setattr("jinlin_agent.trash.os.unlink", failing_unlink)
     report = clean_trash(tmp_path, apply=True)
-    assert report["failed"] == [{"name": proven.name, "error": "simulated locked file"}]
+    assert report["failed"] == [{"name": proven.name, "path": proven.name, "error": "simulated locked file"}]
     assert proven.exists(), "a failed removal keeps the file"
     monkeypatch.undo()
     report2 = clean_trash(tmp_path, apply=True)
@@ -106,7 +110,7 @@ def test_clean_failure_keeps_manifest_entry_and_is_repeatable(tmp_path, monkeypa
 
 def test_clean_refuses_while_workspace_lock_is_held(tmp_path):
     proven = _mk_trash(tmp_path, ".a.py.jinlin-rollback-deadbeef")
-    record_trash(tmp_path, proven.name, "a.py", "rollback")
+    record_trash(tmp_path, proven, "a.py", "rollback")
     blocker = SessionLock(tmp_path / ".jinlin" / "write.lock")
     blocker.acquire()
     try:
@@ -119,7 +123,7 @@ def test_clean_refuses_while_workspace_lock_is_held(tmp_path):
 
 def test_scan_tolerates_torn_manifest_tail(tmp_path):
     proven = _mk_trash(tmp_path, ".a.py.jinlin-rollback-deadbeef")
-    record_trash(tmp_path, proven.name, "a.py", "rollback")
+    record_trash(tmp_path, proven, "a.py", "rollback")
     with open(tmp_path / MANIFEST_REL, "ab") as fh:
         fh.write(b'{"name": ".tok')  # crash during a manifest append
     provable, _unrecognized = scan_trash(tmp_path)
@@ -164,8 +168,140 @@ def test_patch_records_trash_in_manifest(tmp_path, monkeypatch):
     trashes = list(tmp_path.glob(".a.py.jinlin-rollback-*"))
     assert len(trashes) == 1, "plan A keeps the redundant trash on disk"
     manifest = json.loads((tmp_path / MANIFEST_REL).read_text(encoding="utf-8").splitlines()[0])
+    assert manifest["path"] == trashes[0].name, "the manifest binds the full workspace-relative path"
     assert manifest["name"] == trashes[0].name
     assert manifest["orig"] == "a.py"
     # the recorded trash is provable and removable by the controlled cleanup
     report = clean_trash(tmp_path, apply=True)
     assert report["removed"] == [trashes[0].name]
+
+
+def test_clean_same_basename_in_subdirectory_is_not_deleted(tmp_path):
+    """Round-8 P1: manifest proof binds the full workspace-relative path. A
+    same-basename file in another directory (no manifest record of its own)
+    is report-only - a real `clean --apply` must remove exactly the recorded
+    path, not every file sharing the basename."""
+    root_trash = _mk_trash(tmp_path, ".a.py.jinlin-txn-deadbeef")
+    assert record_trash(tmp_path, root_trash, "a.py", "txn") is True
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    stranger = sub / ".a.py.jinlin-txn-deadbeef"
+    stranger.write_bytes(b"someone else")
+    report = clean_trash(tmp_path, apply=True)
+    assert report["removed"] == [root_trash.name]
+    assert not root_trash.exists()
+    assert stranger.exists(), "a same-basename file in another directory must not share the proof"
+    _provable, unrecognized = scan_trash(tmp_path)
+    assert [e["path"] for e in unrecognized] == [
+        stranger.relative_to(tmp_path).as_posix()
+    ], "the unrecorded copy stays report-only"
+
+
+def test_clean_same_basename_manifest_records_are_independent(tmp_path):
+    """Round-8 P1: two manifest records for the same basename in different
+    directories are independent - forgetting one never invalidates or
+    implicates the other."""
+    from jinlin_agent.trash import forget_trash, record_trash
+
+    root = _mk_trash(tmp_path, ".a.py.jinlin-txn-deadbeef")
+    record_trash(tmp_path, root, "a.py", "txn")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    sub_trash = sub / ".a.py.jinlin-txn-deadbeef"
+    sub_trash.write_bytes(b"x")
+    record_trash(tmp_path, sub_trash, "sub/a.py", "txn")
+    report = clean_trash(tmp_path, apply=True)
+    assert sorted(report["removed"]) == sorted(
+        [root.name, sub_trash.relative_to(tmp_path).as_posix()]
+    )
+    assert not root.exists() and not sub_trash.exists()
+    # recreate both with fresh records, then drop only the sub record:
+    # exactly one may go
+    root.write_bytes(b"x")
+    sub_trash.write_bytes(b"x")
+    assert record_trash(tmp_path, root, "a.py", "txn") is True
+    assert record_trash(tmp_path, sub_trash, "sub/a.py", "txn") is True
+    assert forget_trash(tmp_path, sub_trash) is True
+    report2 = clean_trash(tmp_path, apply=True)
+    assert report2["removed"] == [root.name]
+    assert sub_trash.exists(), "the unrecorded twin must survive"
+
+
+def test_forget_failure_keeps_manifest_intact(tmp_path, monkeypatch):
+    """Round-8 P1: the manifest is rewritten atomically (temp + fsync +
+    replace) - a failure during the rewrite leaves the original entries
+    intact instead of silently dropping ownership records."""
+    a = _mk_trash(tmp_path, ".a.py.jinlin-rollback-deadbeef")
+    b = _mk_trash(tmp_path, ".b.py.jinlin-rollback-deadbeef")
+    record_trash(tmp_path, a, "a.py", "rollback")
+    record_trash(tmp_path, b, "b.py", "rollback")
+    before = {e["path"] for e in scan_trash(tmp_path)[0]}
+    real_unlink = os.unlink
+
+    def failing_fsync(fd):
+        raise OSError("simulated crash during manifest rewrite")
+
+    monkeypatch.setattr("jinlin_agent.trash.os.fsync", failing_fsync)
+    from jinlin_agent.trash import forget_trash
+
+    assert forget_trash(tmp_path, a) is False
+    monkeypatch.undo()
+    still = {e["path"] for e in scan_trash(tmp_path)[0]}
+    assert still == before, "a failed rewrite must not lose ownership records"
+    assert real_unlink and a.exists() and b.exists()
+
+
+def test_manifest_write_failure_degrades_to_report_only(tmp_path, monkeypatch):
+    """Round-8 P1: when the manifest cannot be written the transaction still
+    succeeds, the deferred backup stays, and `clean --apply` must NOT delete
+    it - without manifest proof the file is report-only. The degradation is
+    observable in the tool result."""
+    import jinlin_agent.tools.patch as patch_mod
+    from jinlin_agent import trash as trash_mod
+
+    blocker = tmp_path / "blocker"
+    blocker.write_bytes(b"not a directory")
+    monkeypatch.setattr(trash_mod, "_manifest_path", lambda ws: blocker / "trash-manifest.jsonl")
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "doomed.py"
+    target.write_text("old\n", encoding="utf-8")
+    ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
+    real_stat = os.stat
+    real_replace = os.replace
+    armed = {"done": False}
+    replaced = {"done": False}
+
+    def racing_replace(src, dst):
+        out = real_replace(src, dst)
+        if Path(dst).name.startswith(".doomed.py.jinlin-txn-"):
+            armed["done"] = True
+        return out
+
+    def racing_stat(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        if (
+            armed["done"]
+            and not replaced["done"]
+            and Path(path).name.startswith(".doomed.py.jinlin-txn-")
+        ):
+            replaced["done"] = True
+            os.unlink(path)
+            Path(path).write_bytes(b"external-claim")
+            return real_stat(path, *args, **kwargs)
+        return st
+
+    monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
+    monkeypatch.setattr(patch_mod.os, "stat", racing_stat)
+    patch = _patch_text("*** Delete File: doomed.py")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert result.ok, "a manifest write failure must not fail the committed transaction"
+    assert result.extra.get("trash_manifest_degraded"), "the degradation must be observable"
+    deferred = result.extra.get("cleanup_deferred") or []
+    assert deferred, "the replaced backup stays on disk as deferred cleanup"
+    backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+    assert len(backups) == 1 and backups[0].read_bytes() == b"external-claim"
+    # without manifest proof the controlled cleanup reports but never deletes
+    report = clean_trash(tmp_path, apply=True)
+    assert report["removed"] == []
+    assert backups[0].exists()
