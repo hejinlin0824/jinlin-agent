@@ -34,11 +34,12 @@ defaults to a dry run.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .domain import utcnow_iso
@@ -92,7 +93,7 @@ def record_trash(workspace: Path, trash_path: Path, orig_rel: str, kind: str) ->
     rel = _relative_posix(trash_path, workspace)
     try:
         st = os.stat(trash_path)
-        identity = {"dev": st.st_dev, "ino": st.st_ino, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+        identity = {"dev": st.st_dev, "ino": st.st_ino, "size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": hashlib.sha256(Path(trash_path).read_bytes()).hexdigest()}
     except OSError:
         identity = None  # no proof captured — the file degrades to report-only
     try:
@@ -351,3 +352,144 @@ def clean_trash(workspace: Path, apply: bool = False) -> dict[str, Any]:
         return report
     finally:
         lock.release()
+
+
+RESCUE_RE = re.compile(r"^\.(?P<orig>.+)\.jinlin-rescue-(?P<tag>[0-9a-f]{8})$")
+
+
+def list_rescue(workspace: Path) -> dict[str, Any]:
+    """List only rescue files whose manifest identity and SHA-256 still match."""
+    workspace = Path(workspace).resolve()
+    report: dict[str, Any] = {"status": "ok", "rescued": [], "unrecognized": []}
+    lock = SessionLock(workspace / ".jinlin" / "write.lock")
+    try:
+        lock.acquire()
+    except SessionLockedError:
+        return {"status": "locked", "rescued": [], "unrecognized": []}
+    try:
+        manifest = _load_manifest(workspace)
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+            for name in files:
+                match = RESCUE_RE.match(name)
+                if not match:
+                    continue
+                path = Path(root) / name
+                rel = _relative_posix(path, workspace)
+                entry = manifest.get(rel)
+                try:
+                    data = path.read_bytes()
+                    st = path.stat()
+                    ident = entry.get("identity") if entry else None
+                    valid = (
+                        entry is not None
+                        and entry.get("kind") == "rescue"
+                        and Path(str(entry.get("orig", ""))).name == match.group("orig")
+                        and isinstance(ident, dict)
+                        and st.st_dev == ident.get("dev")
+                        and st.st_ino == ident.get("ino")
+                        and st.st_size == ident.get("size")
+                        and st.st_mtime_ns == ident.get("mtime_ns")
+                        and hashlib.sha256(data).hexdigest() == ident.get("sha256")
+                    )
+                except OSError:
+                    valid = False
+                    data = b""
+                item = {"path": rel, "orig": str(entry.get("orig")) if entry else match.group("orig"),
+                        "size": len(data), "sha256": hashlib.sha256(data).hexdigest() if valid else None}
+                (report["rescued"] if valid else report["unrecognized"]).append(item)
+        report["rescued"].sort(key=lambda x: x["path"])
+        report["unrecognized"].sort(key=lambda x: x["path"])
+        return report
+    finally:
+        lock.release()
+
+
+def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
+    """Restore a verified rescue copy with exclusive-create; never overwrite or consume source."""
+    workspace = Path(workspace).resolve()
+    lock = SessionLock(workspace / ".jinlin" / "write.lock")
+    try:
+        lock.acquire()
+    except SessionLockedError:
+        return {"status": "locked", "detail": "another jinlin session holds the workspace write lock"}
+    try:
+        listed = list_rescue_unlocked(workspace)
+        item = next((x for x in listed["rescued"] if x["path"] == rescue_rel), None)
+        if item is None:
+            return {"status": "rejected", "detail": "rescue file is missing, unrecognized, or failed manifest/SHA-256 verification"}
+        source = workspace / PurePosixPath(rescue_rel)
+        manifest_entry = _load_manifest(workspace).get(rescue_rel)
+        orig = str(manifest_entry.get("orig", "")) if manifest_entry else ""
+        rel = PurePosixPath(orig)
+        if not orig or rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
+            return {"status": "rejected", "detail": "manifest target path is invalid"}
+        dest = workspace.joinpath(*rel.parts)
+        try:
+            parent = dest.parent.resolve(strict=True)
+            parent.relative_to(workspace)
+        except (OSError, ValueError):
+            return {"status": "rejected", "detail": "target parent is missing or outside the workspace"}
+        if dest.is_symlink() or dest.exists():
+            return {"status": "conflict", "detail": f"target already exists; rescue preserved at {rescue_rel}"}
+        data = source.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != item["sha256"]:
+            return {"status": "rejected", "detail": "rescue content changed during restore"}
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        try:
+            fd = os.open(dest, flags, 0o666)
+        except FileExistsError:
+            return {"status": "conflict", "detail": f"target was claimed concurrently; rescue preserved at {rescue_rel}"}
+        try:
+            view = memoryview(data)
+            while view:
+                count = os.write(fd, view)
+                if count <= 0:
+                    raise OSError("write made no forward progress")
+                view = view[count:]
+            os.fsync(fd)
+        except BaseException:
+            # Leave any partial destination as evidence; never unlink by name.
+            raise
+        finally:
+            os.close(fd)
+        if hashlib.sha256(dest.read_bytes()).hexdigest() != digest:
+            return {"status": "uncertain", "detail": f"restored target failed SHA-256 verification; rescue preserved at {rescue_rel}"}
+        return {"status": "restored", "target": rel.as_posix(), "rescue": rescue_rel, "sha256": digest,
+                "detail": "restore verified; rescue source intentionally retained"}
+    finally:
+        lock.release()
+
+
+def list_rescue_unlocked(workspace: Path) -> dict[str, Any]:
+    """Internal scan for callers already holding the workspace write lock."""
+    manifest = _load_manifest(workspace)
+    rescued, unrecognized = [], []
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for name in files:
+            match = RESCUE_RE.match(name)
+            if not match:
+                continue
+            path = Path(root) / name
+            rel = _relative_posix(path, workspace)
+            entry = manifest.get(rel)
+            try:
+                data = path.read_bytes()
+                st = path.stat()
+                ident = entry.get("identity") if entry else None
+                valid = (entry is not None and entry.get("kind") == "rescue"
+                         and Path(str(entry.get("orig", ""))).name == match.group("orig")
+                         and isinstance(ident, dict) and st.st_dev == ident.get("dev")
+                         and st.st_ino == ident.get("ino") and st.st_size == ident.get("size")
+                         and st.st_mtime_ns == ident.get("mtime_ns")
+                         and hashlib.sha256(data).hexdigest() == ident.get("sha256"))
+            except OSError:
+                valid, data = False, b""
+            item = {"path": rel, "orig": str(entry.get("orig")) if entry else match.group("orig"),
+                    "size": len(data), "sha256": hashlib.sha256(data).hexdigest() if valid else None}
+            (rescued if valid else unrecognized).append(item)
+    rescued.sort(key=lambda x: x["path"])
+    unrecognized.sort(key=lambda x: x["path"])
+    return {"rescued": rescued, "unrecognized": unrecognized}
