@@ -1,11 +1,23 @@
-# 独立评审响应与整改记录（v1.6）
+# 独立评审响应与整改记录（v1.7）
 
 | 项 | 值 |
 |---|---|
-| 评审来源 | 首轮～第 6 轮独立评审与复核（详见 §0a–§0d 各表） |
+| 评审来源 | 首轮～第 8 轮独立评审与复核（详见 §0a–§0e 各表） |
 | 评审基线 | `f89384c`（首轮）→ `85854f1`（第 1–4 轮合并基线）→ `f7c008b`（第 4 轮 P1 验收线）→ `249bbab`（第 1 批 P2 加固归档线） |
-| 本响应版本 | v1.6：第 2 阶段 P2 加固第 2 批（事务清理生命周期：P0 提交清理竞态 / P1 受控清理 / P2 legacy 策略 / P3 边界矩阵） |
-| 结论 | 第 4 轮 P1 已验收合并；第 1 批 P2 加固已归档；本批（第 2 批）已完成并提交复核，**未合并 main** |
+| 本响应版本 | v1.7：第 2 批 P2 加固的第 8 轮复核整改（P0 同对象哈希+指纹 / P1 manifest 路径绑定+原子重写+降级诊断 / P2 null 与空串拒绝 / P3 四字段验证） |
+| 结论 | 第 4 轮 P1 已验收合并；第 1 批 P2 加固已归档；第 2 批暂不合并，按第 8 轮复核意见追加修复完毕（§0e），等待再次复核 |
+
+## 0e. 第 8 轮复核整改（v1.7，追加于第 2 批之上）
+
+第 8 轮复核：P0 事务状态分离、EventLog 迁移规则、边界测试获认可；两个阻断项（P0 backup 指纹捕获时序、P1 manifest basename 绑定）与配套项需先修复。全部完成，代码提交 `1c3e594` / `a98741a` / `5c69e34` / `346561d`，`main` 保持 `249bbab` 不变。逐项表见 `docs/REVIEW-SUBMISSION-P2-BATCH2.md` §8a；摘要：
+
+| 复核项 | 处理 | 测试 |
+|---|---|---|
+| P0 backup 哈希读取与身份捕获为两次独立路径访问 | 打开一次 backup：sha256 经同一 fd 读取、指纹经 fstat(同一 fd) 获取，两者绑定同一文件对象；提交清理区分 `FileNotFoundError`（无需清理）与其他 `OSError`（保留 + `cleanup_deferred` 附原因） | `test_delete_backup_identity_captured_from_same_object_as_hash`（红→绿）、`test_delete_backup_cleanup_stat_error_is_reported_as_deferred`（红→绿） |
+| P1 manifest 按 basename 认定归属（跨目录同名可被误删） | 清单记录并校验完整 workspace 相对路径 + kind + orig 对应（按原文件 basename 比对）；删除前对新鲜清单重核验；`forget` 按路径寻址，同名不同目录记录完全独立 | `test_clean_same_basename_in_subdirectory_is_not_deleted`、`test_clean_same_basename_manifest_records_are_independent`（红→绿） |
+| P1 清单重写非原子 / record 失败无诊断 | 临时文件 + fsync + `os.replace` 原子重写（失败原记录完整）；`record_trash` 返回成功与否，失败时事务照常但 `trash_manifest_degraded` 随结果上报 + 输出 note，该类遗留文件只能报告、`clean --apply` 不删 | `test_forget_failure_keeps_manifest_intact`、`test_manifest_write_failure_degrades_to_report_only`（红→绿） |
+| P2 显式 null / 空 session_id 混入 legacy 规则 | 仅字段缺失进入 legacy 规则；存在但非非空字符串 → `SESSION_CORRUPTED`（读取与 open 双路径） | `test_event_with_explicit_null_session_id_is_rejected`、`test_event_with_empty_session_id_is_rejected`（红→绿） |
+| P3 指纹碰撞测试未验证四字段全等 | 重写为显式测量 (dev, ino, size, mtime_ns) 四分量碰撞：全等平台（Linux）钉死 documented residual；不复用平台（Windows）断言替换存活 + `RECOVERY_UNCERTAIN`——结论不超出实际验证 | `test_atomic_create_failure_fingerprint_collision_documents_residual`（重写） |
 
 ## 0d. 第二阶段 P2 安全加固第 2 批（v1.6，事务清理生命周期）
 

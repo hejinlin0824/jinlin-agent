@@ -101,6 +101,24 @@
 |---|---|
 | 第 4 轮 P1×2（已验收合并）；第 6 轮 source 清理竞态；P2-2 实例校验；P2-3 身份清理；本批 P0/P1/P2/P3 | 同 size+同 mtime 的原子身份删除（平台 API 不支持，保守策略已声明）；`clean` 并入 `doctor` 的会话开启自动清扫（可选）；P3 大项：Python 3.11/3.12 矩阵、30–50 真实任务评测、覆盖率基线 |
 
+## 8a. 第二轮复核整改（追加提交，代码 HEAD `346561d`）
+
+第 8 轮复核意见指出两个阻断项（P0 指纹捕获时序、P1 manifest basename 绑定）与若干补强项。本轮追加修复（每项独立提交），未改动已验收语义：
+
+| 复核项 | 处理 | 回归测试 |
+|---|---|---|
+| **P0** backup 的哈希读取与身份捕获是两次独立路径访问：替换落在两者之间会被登记为本事务 backup，提交后被删除 | `os.open(backup, O_RDONLY | O_BINARY)` 打开一次：sha256 经**同一 fd** 读取、指纹经 **fstat(同一 fd)** 获取——两者绑定同一文件对象；"哈希后、捕获前"的窗口在结构上消失（哈希读到什么，指纹就是什么；若替换发生在移动与打开之间，则哈希失配 → 原路恢复 + `FILE_CHANGED_EXTERNALLY`） | `test_delete_backup_identity_captured_from_same_object_as_hash`（替换注入于首个 backup 路径 stat：旧实现误登记并删除 → 红；新实现 mismatch → 替换存活 + deferred） |
+| **P0** 提交清理把一切 `OSError` 当作"文件已消失"静默吞掉 | 区分 `FileNotFoundError`（确实无需清理）与其他 `OSError`（stat 失败：保留 backup + `cleanup_deferred` 附 `{"name", "reason": "stat failed: ..."}`）；unlink 失败同样附 reason；deferred 条目由字符串改为 `{name, reason}` 字典 | `test_delete_backup_cleanup_stat_error_is_reported_as_deferred`（PermissionError 注入：旧实现静默 → 红） |
+| **P1** manifest 只按 basename 认定归属：不同目录同名文件共享证明，`clean --apply` 可误删 | 清单记录并校验**完整 workspace 相对路径**（`path` 字段为主键），同时校验 kind 与 orig 对应（orig 按原文件 basename 比对——trash 名内嵌的只有 basename，子目录 trash 的 orig 合法携带目录）；`forget` 按路径寻址，同 basename 不同目录的记录完全独立；`clean --apply` 每个文件删除前对**新鲜加载**的清单重新核验归属 | `test_clean_same_basename_in_subdirectory_is_not_deleted`（真实 `clean --apply`：只删清单记录的路径）、`test_clean_same_basename_manifest_records_are_independent`（双记录独立 forget/删除） |
+| **P1** 清单重写非原子（`open("w")` 截断后崩溃会丢记录） | 临时文件 + fsync + `os.replace` 原子替换；失败清理临时文件，原清单完整保留 | `test_forget_failure_keeps_manifest_intact`（fsync 失败注入：两条记录原样保留） |
+| **P1** `record_trash` 失败被静默吞掉，遗留文件不可自动清理却无诊断 | `record_trash` 返回成功与否；失败时事务照常（提交/回滚语义不变），但 `extra["trash_manifest_degraded"]` / 错误 `details` + 输出 note 明确"该遗留文件只能报告、不能自动清理"；无清单证明的文件 `clean --apply` 不删 | `test_manifest_write_failure_degrades_to_report_only`（清单不可写 + 替换竞争：事务成功、backup 留存、`clean --apply` 不删） |
+| **P2** `session_id: null` 与空字符串被混入 legacy 规则 | 只有**字段缺失**进入 legacy 规则；字段存在但非非空字符串 → `SESSION_CORRUPTED`（读取与 open 双路径） | `test_event_with_explicit_null_session_id_is_rejected`、`test_event_with_empty_session_id_is_rejected`（旧实现静默接受 → 红） |
+| **P3** 指纹碰撞测试未验证四字段全等 | 重写：替换后**显式测量四分量是否全等**；全等（如 Linux inode 复用）→ 钉死 documented residual（按自身删除）；不等（如 Windows file id 不复用）→ 断言替换存活 + `RECOVERY_UNCERTAIN`。测试名与结论不再超出实际验证范围 | `test_atomic_create_failure_fingerprint_collision_documents_residual`（条件断言 + 显式测量，两种平台结果都有断言） |
+
+追加后状态：`python -m pytest -q` → **103 passed**（80 基线 + 23 加固回归）；`eval` 18/18。代码提交：`1c3e594`（P0）→ `a98741a`（P2）→ `5c69e34`（P1 三合一）→ `346561d`（P3）。
+
+---
+
 ## 9. 审查清单
 
 - [ ] `python -m pytest -q` = 95 passed（Windows 全量；Ubuntu 另有平台守卫 skip）；`eval` 18/18
