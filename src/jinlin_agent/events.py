@@ -62,17 +62,31 @@ class EventLog:
           last complete event, fsync;
         * complete event missing its newline: write the terminator, fsync;
         * newline-terminated corruption: not repaired — `_parse_log_data`
-          already raised SESSION_CORRUPTED (fail closed).
+          already raised SESSION_CORRUPTED (fail closed);
+        * an event whose session_id names **another** session: this log does
+          not belong to the opening instance — fail closed before touching
+          anything (the reader's internal-consistency check alone would let a
+          whole foreign log be accepted and appended to).
         """
         if not self.path.exists():
             return
         data = self.path.read_bytes()
         if not data:
             return
+        from .errors import SESSION_CORRUPTED, AgentError
+
         events, tail = _parse_log_data(data)
         for evt in events:
             if isinstance(evt.get("seq"), int):
                 self._last_seq = max(self._last_seq, evt["seq"])
+            sid = evt.get("session_id")
+            if sid is not None and sid != self.session_id:
+                raise AgentError(
+                    SESSION_CORRUPTED,
+                    f"event log belongs to session {sid!r}, not {self.session_id!r}; "
+                    "refusing to open it for append",
+                    source="events",
+                )
         if tail == _TAIL_TORN:
             good_end = data.rfind(b"\n") + 1
             with open(self.path, "r+b") as fh:

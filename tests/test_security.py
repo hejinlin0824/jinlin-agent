@@ -771,3 +771,116 @@ def test_invalid_utf8_inside_event_is_rejected(tmp_path):
         EventLog(tmp_path, "sess_utf8").open()
     assert excinfo.value.code == "SESSION_CORRUPTED"
 
+
+# ------------------------------------------------------------------ P2 security hardening (phase 2)
+
+
+def test_restore_no_clobber_does_not_unlink_recreated_source(tmp_path, monkeypatch):
+    """Round-6 P2: between os.link and an unconditional os.unlink, an external
+    process can replace the source path; deleting by name then removes the
+    replacement. Plan A: the helper never unlinks — the restored content is
+    safe at dest, and the redundant source entry is left intact for
+    inspection (reported as redundant trash by the caller)."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    source = tmp_path / ".a.py.jinlin-rollback-deadbeef"
+    dest = tmp_path / "a.py"
+    source.write_bytes(b"ours")
+    real_unlink = os.unlink
+    calls = {"unlink": 0}
+
+    def racing_unlink(path, *args, **kwargs):
+        if Path(path) == source:
+            calls["unlink"] += 1
+            source.write_bytes(b"external-recreated-source")  # external claims the name
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(patch_mod.os, "unlink", racing_unlink)
+    assert patch_mod._restore_no_clobber(source, dest) is True
+    assert calls["unlink"] == 0, "restore must never unlink the source path by name"
+    assert dest.read_bytes() == b"ours"
+    assert source.exists() and source.read_bytes() == b"ours", (
+        "the redundant source entry must be left intact for inspection"
+    )
+
+
+def test_open_rejects_mismatched_session_id(tmp_path):
+    """P2-2: a log belonging to another session must not be accepted and
+    appended to by this instance; the lock must be released on failure so the
+    owning session can still open its log."""
+    _write_events(
+        tmp_path / "events.jsonl",
+        [json.dumps({"schema_version": 1, "seq": 1, "type": "session.created", "payload": {}, "session_id": "sess_other"})],
+    )
+    with pytest.raises(AgentError) as excinfo:
+        EventLog(tmp_path, "sess_mine").open()
+    assert excinfo.value.code == "SESSION_CORRUPTED"
+    second = EventLog(tmp_path, "sess_other")
+    second.open()
+    try:
+        assert second.append("step.started")["seq"] == 2
+    finally:
+        second.close()
+    events = list(read_events(tmp_path))
+    assert [e["seq"] for e in events] == [1, 2]
+
+
+def test_atomic_create_failure_does_not_unlink_replaced_path(tmp_path, monkeypatch):
+    """P2-3: when an exclusive create fails midway and the path no longer
+    provably holds the file this call created, cleanup must not delete by
+    name — the foreign content stays and the outcome is RECOVERY_UNCERTAIN."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    target = tmp_path / "new.py"
+    real_stat = os.stat
+    real_unlink = os.unlink
+    failed = {"done": False}
+    replaced = {"done": False}
+
+    def failing_fsync(fd):
+        failed["done"] = True
+        raise OSError("simulated mid-write failure")
+
+    def racing_stat(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        # once the write failed and our fd is closed, an external writer
+        # replaces the path with a different inode before cleanup runs
+        if failed["done"] and not replaced["done"] and Path(path) == target:
+            replaced["done"] = True
+            real_unlink(path)
+            target.write_bytes(b"external-partial-claim")
+            return real_stat(path, *args, **kwargs)
+        return st
+
+    def racing_unlink(path, *args, **kwargs):
+        # old design: cleanup deletes by name and removes the replacement
+        if Path(path) == target:
+            target.write_bytes(b"external-partial-claim")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(patch_mod.os, "fsync", failing_fsync)
+    monkeypatch.setattr(patch_mod.os, "stat", racing_stat)
+    monkeypatch.setattr(patch_mod.os, "unlink", racing_unlink)
+    with pytest.raises(AgentError) as excinfo:
+        patch_mod.atomic_write(target, b"created by agent", create=True)
+    assert excinfo.value.code == "RECOVERY_UNCERTAIN"
+    assert target.exists() and target.read_bytes() == b"external-partial-claim", (
+        "cleanup must not delete a path that no longer holds our file"
+    )
+
+
+def test_atomic_create_failure_cleans_own_partial_file(tmp_path, monkeypatch):
+    """P2-3 (identity match): when the path still provably holds the file this
+    call created, the partial file is removed and the original error surfaces."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    target = tmp_path / "new.py"
+
+    def failing_fsync(fd):
+        raise OSError("simulated mid-write failure")
+
+    monkeypatch.setattr(patch_mod.os, "fsync", failing_fsync)
+    with pytest.raises(OSError):
+        patch_mod.atomic_write(target, b"created by agent", create=True)
+    assert not target.exists(), "our own partial file must be cleaned up"
+

@@ -186,8 +186,11 @@ def _atomic_create_new(path: Path, data: bytes) -> None:
     """Create ``path`` exclusively and write ``data`` (atomic no-clobber).
 
     ``O_CREAT | O_EXCL`` makes establishment and the does-it-exist decision a
-    single filesystem operation on both Windows and POSIX. If the write itself
-    fails midway, the partial file is removed again (it is ours).
+    single filesystem operation on both Windows and POSIX. If the write fails,
+    the partial file is removed **only while the path still provably holds the
+    inode this call created** (device + file id captured from the open fd); a
+    path that was replaced concurrently is left untouched and the outcome is
+    reported as RECOVERY_UNCERTAIN instead of deleting by name.
     """
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
@@ -197,17 +200,34 @@ def _atomic_create_new(path: Path, data: bytes) -> None:
             f"{path.name} was created concurrently; refusing to overwrite",
             source="edit",
         ) from exc
+    identity: tuple[int, int] | None = None
     try:
+        st = os.fstat(fd)
+        identity = (st.st_dev, st.st_ino)
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
-    except BaseException:
+    except BaseException as exc:
+        provably_ours = False
         try:
-            os.unlink(path)
+            current = os.stat(path)
+            provably_ours = (current.st_dev, current.st_ino) == identity
         except OSError:
-            pass
-        raise
+            provably_ours = False  # path vanished — nothing of ours to clean
+        if provably_ours:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise
+        # the path no longer provably holds our file: never delete by name
+        raise AgentError(
+            RECOVERY_UNCERTAIN,
+            f"{path.name}: the create failed and the path no longer provably holds "
+            "the file this call created; it was left in place for inspection",
+            source="edit",
+        ) from exc
     actual = hashlib.sha256(path.read_bytes()).hexdigest()
     if actual != hashlib.sha256(data).hexdigest():
         raise AgentError(TOOL_EXECUTION_FAILED, f"{path.name}: written content failed verification", source="edit")
@@ -229,29 +249,32 @@ def _invalidate_bytecode(path: Path) -> None:
 
 
 def _restore_no_clobber(source: Path, dest: Path) -> bool:
-    """Move ``source`` back onto ``dest`` without ever replacing an entry.
+    """Move ``source`` onto ``dest`` without ever replacing an entry — and
+    without unlinking the source path afterwards.
 
     ``os.link`` atomically creates ``dest`` only when it is absent, so a file
-    a concurrent writer placed at ``dest`` while our content sat aside can
-    never be replaced; the link is followed by removing our now-redundant
-    source name. Returns False — keeping ``source`` intact — when ``dest`` is
-    occupied or the filesystem cannot hard-link; callers must then report
-    RECOVERY_UNCERTAIN. An overwriting rename is deliberately *not* used as a
-    fallback: silent replacement of a concurrent file is the bug class this
-    helper exists to close.
+    a concurrent writer placed at ``dest`` can never be replaced. The source
+    name is deliberately **left in place** (plan A of the round-6 review):
+    deleting it by name after the link could remove a file an external
+    process created at that path between the two directory operations. The
+    redundant entry is harmless, keeps the move-time content recoverable for
+    inspection, and is reported by the caller as ``redundant_trash`` —
+    safe-to-remove litter for a controlled cleanup, never a target for
+    by-name deletion inside the recovery path.
+
+    Returns False — keeping ``source`` intact — when ``dest`` is occupied or
+    the filesystem cannot hard-link; callers must then report
+    RECOVERY_UNCERTAIN. An overwriting rename is deliberately *not* used as
+    a fallback.
     """
     try:
         os.link(source, dest)
     except OSError:
         return False  # dest claimed concurrently, or fs without hardlink support
-    try:
-        os.unlink(source)
-    except OSError:
-        pass  # dest already holds the content; a leftover source name is harmless
     return True
 
 
-def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], list[str], list[str]]:
     """Revert only mutations this transaction actually made *and* still owns.
 
     Ownership is verified by content hash, and the live path is never deleted
@@ -262,7 +285,10 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
     through `_restore_no_clobber`: if a concurrent writer recreated the path
     while our content sat aside, both sides are kept and the path is reported
     as incomplete (the caller raises RECOVERY_UNCERTAIN). An overwriting
-    rename is never used as a restore fallback.
+    rename is never used as a restore fallback, and **no cleanup unlinks by
+    name**: trash/backup entries whose content is safely back at the path (or
+    deliberately reverted) are left in place and returned as ``redundant`` —
+    inspect-then-remove litter, not a deletion target (round-6 finding).
 
     The residual window between the trash-rename and the final step is
     best-effort against uncoordinated external processes; jinlin sessions are
@@ -271,6 +297,7 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
     """
     restored: list[str] = []
     incomplete: list[str] = []
+    redundant: list[str] = []
     for record in reversed(applied):
         path: Path = record["path"]
         rel: str = record["rel"]
@@ -281,11 +308,13 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
                 trash = path.with_name(f".{path.name}.jinlin-rollback-{uuid.uuid4().hex[:8]}")
                 os.replace(path, trash)  # content-preserving: never unlink in place
                 if hashlib.sha256(trash.read_bytes()).hexdigest() == record["after_sha"]:
-                    trash.unlink()
+                    redundant.append(trash.name)  # reverted content, verified ours
                     restored.append(rel)
                 else:
-                    if not _restore_no_clobber(trash, path):
-                        pass  # path claimed concurrently: keep both sides (trash + theirs)
+                    if _restore_no_clobber(trash, path):
+                        redundant.append(trash.name)  # content back at the path
+                    # else: path claimed concurrently — the trash holds the
+                    # move-time content and stays as the recoverable copy
                     incomplete.append(rel)
             elif record["kind"] == "update":
                 if not path.exists():
@@ -294,17 +323,20 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
                 trash = path.with_name(f".{path.name}.jinlin-rollback-{uuid.uuid4().hex[:8]}")
                 os.replace(path, trash)
                 if hashlib.sha256(trash.read_bytes()).hexdigest() != record["after_sha"]:
-                    if not _restore_no_clobber(trash, path):
-                        pass  # path claimed concurrently: keep both sides (trash + theirs)
+                    if _restore_no_clobber(trash, path):
+                        redundant.append(trash.name)  # content back at the path
+                    # else: path claimed concurrently — keep both sides
                     incomplete.append(rel)
                     continue
                 try:
                     atomic_write(path, record["before"], create=True)
                 except Exception:
-                    _restore_no_clobber(trash, path)  # put ours back unless the path was claimed
+                    if _restore_no_clobber(trash, path):
+                        redundant.append(trash.name)  # ours is back at the path
+                    # else: someone else holds the path — trash keeps our content
                     incomplete.append(rel)
                     continue
-                trash.unlink()
+                redundant.append(trash.name)  # reverted content, verified ours
                 restored.append(rel)
             else:  # delete: restore from the moved-aside backup
                 if path.exists():
@@ -317,10 +349,11 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
                 if not _restore_no_clobber(backup, path):
                     incomplete.append(rel)  # claimed concurrently, or fs cannot hard-link:
                     continue  # keep the backup, never fall back to an overwriting rename
+                redundant.append(backup.name)  # content back at the path
                 restored.append(rel)
         except Exception:
             incomplete.append(rel)
-    return restored, incomplete
+    return restored, incomplete, redundant
 
 
 def check_clean(ctx: ToolContext, rel: str, current_sha: str) -> AgentError | None:
@@ -651,8 +684,12 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                     }
                 )
     except Exception as exc:
-        restored, incomplete = _rollback_transaction(applied)
-        details = {"rolled_back": restored, "rollback_incomplete": incomplete}
+        restored, incomplete, redundant = _rollback_transaction(applied)
+        details = {
+            "rolled_back": restored,
+            "rollback_incomplete": incomplete,
+            "redundant_trash": redundant,
+        }
         if not applied and isinstance(exc, AgentError):
             # nothing was written, so there is nothing to roll back — surface
             # the precise error (e.g. PATCH_CONFLICT on a lost create race)
