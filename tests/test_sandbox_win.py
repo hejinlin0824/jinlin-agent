@@ -27,10 +27,17 @@ if str(SRC) not in sys.path:  # allow running without `pip install -e .`
     sys.path.insert(0, str(SRC))
 
 from jinlin_agent.sandbox.base import RunResult, Sandbox  # noqa: E402
-from jinlin_agent.sandbox.windows import WindowsSandbox  # noqa: E402
-import jinlin_agent.sandbox.windows as windows_module  # noqa: E402
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows-only sandbox")
+
+# The sandbox module is Windows-only by design (it binds kernel32/advapi32 at
+# import time), so it must not be imported during collection on other platforms.
+if os.name == "nt":
+    from jinlin_agent.sandbox.windows import WindowsSandbox  # noqa: E402
+    import jinlin_agent.sandbox.windows as windows_module  # noqa: E402
+else:  # pragma: no cover - collection happens on non-Windows CI
+    WindowsSandbox = None  # type: ignore[assignment]
+    windows_module = None  # type: ignore[assignment]
 
 
 # --------------------------------------------------------------------------- #
