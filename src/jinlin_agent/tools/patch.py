@@ -255,34 +255,49 @@ def _write_exclusive(path: Path, data: bytes) -> None:
         view = memoryview(data)
         while view:
             written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("write made no forward progress")
             view = view[written:]
         os.fsync(fd)
     finally:
         os.close(fd)
 
 
-def _park_rescue_file(workspace: Path, orig_rel: str, original_bytes: bytes) -> Path:
-    """Persist original content that could not be restored to its path: an
-    exclusively created, fsync'ed, uniquely named rescue file next to the
-    original location, recorded in the trash manifest for provenance. Raises
-    OSError if even the rescue cannot be written (reported by the caller)."""
-    rescue = None
+def _park_rescue_file(
+    workspace: Path,
+    orig_rel: str,
+    original_bytes: bytes,
+    manifest_degraded: list[str],
+) -> Path:
+    """Persist original bytes in a unique, exclusive, fsync'ed rescue file.
+
+    If a write or verification fails, preserve the candidate for inspection:
+    never unlink a path by name after an identity/content check, because an
+    external writer could have replaced it in the meantime. The raised error
+    includes the candidate path so the caller can report the remaining
+    evidence accurately.
+    """
     for _ in range(5):
         candidate = Path(workspace) / f".{Path(orig_rel).name}.jinlin-rescue-{uuid.uuid4().hex[:8]}"
         try:
             _write_exclusive(candidate, original_bytes)
-            rescue = candidate
-            break
         except FileExistsError:
-            continue  # astronomically unlikely (uuid) — retry with a new name
-    if rescue is None:
-        raise OSError("could not create a rescue file after 5 attempts")
-    # verify what landed on disk is exactly the original content
-    if Path(rescue).read_bytes() != original_bytes:
-        rescue.unlink()
-        raise OSError("rescue file verification failed")
-    record_trash(workspace, rescue, orig_rel, "rescue")
-    return rescue
+            continue  # exclusive-create collision; choose a fresh unpredictable name
+        except OSError as exc:
+            raise OSError(f"rescue write failed at {candidate}; partial evidence preserved: {exc}") from exc
+
+        try:
+            actual = candidate.read_bytes()
+        except OSError as exc:
+            raise OSError(f"rescue verification could not read {candidate}; evidence preserved: {exc}") from exc
+        if actual != original_bytes:
+            raise OSError(f"rescue verification failed at {candidate}; evidence preserved")
+
+        if not record_trash(workspace, candidate, orig_rel, "rescue"):
+            manifest_degraded.append(f"{candidate.name} (rescue persisted; manifest record failed)")
+        return candidate
+
+    raise OSError("could not create a unique rescue file after 5 exclusive-create attempts")
 
 
 def _invalidate_bytecode(path: Path) -> None:
@@ -411,35 +426,29 @@ def _rollback_transaction(
                 original_bytes = record.get("original_bytes")
                 identity = record.get("backup_identity")
                 verified = record.get("backup_verified", True)  # legacy records were hash-verified
-                # is the backup still provably the original we moved?
-                backup_ok = verified and backup.exists() and before_sha is not None
-                if backup_ok:
+                # Restore only from the original bytes captured and hashed
+                # before the move. Never use the backup pathname as a source:
+                # even a prior stat/hash check cannot prevent that name from
+                # being swapped immediately before a link/rename.
+                if original_bytes is not None:
                     try:
-                        backup_ok = hashlib.sha256(backup.read_bytes()).hexdigest() == before_sha
-                    except OSError:
-                        backup_ok = False
-                if backup_ok and identity is not None:
-                    try:
-                        st = os.stat(backup)
-                        backup_ok = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) == identity
-                    except OSError:
-                        backup_ok = False
-                if backup_ok:
-                    if _restore_no_clobber(backup, path):
-                        redundant.append(backup.name)  # content back at the path
+                        _write_exclusive(path, original_bytes)
                         restored.append(rel)
                         continue
-                    # The restore was blocked (the path was claimed
-                    # concurrently): the original bytes are parked in a rescue
-                    # file — they must not exist only in memory or in the
-                    # unverified backup (round-10 P0).
-                    if original_bytes is not None:
-                        try:
-                            rescue = _park_rescue_file(workspace, rel, original_bytes)
-                            rescued.append(str(rescue))
-                        except OSError as exc:
-                            rescued.append(f"FAILED to persist original bytes of {rel}: {exc}")
-                    incomplete.append(rel)
+                    except FileExistsError:
+                        # An external writer claimed the destination. Preserve
+                        # our original bytes under a separate exclusive name.
+                        pass
+                    except OSError:
+                        # A failed/partial destination write must not cause the
+                        # only in-memory copy to be discarded.
+                        pass
+                    try:
+                        rescue = _park_rescue_file(workspace, rel, original_bytes, manifest_degraded)
+                        rescued.append(str(rescue))
+                    except OSError as exc:
+                        rescued.append(f"FAILED to persist original bytes of {rel}: {exc}")
+                incomplete.append(rel)
                     continue
                 # The backup is missing, replaced, or no longer provably the
                 # original: it is never presented as one. Re-create the original
@@ -457,7 +466,7 @@ def _rollback_transaction(
                     except OSError:
                         pass  # fall through to the rescue park below
                     try:
-                        rescue = _park_rescue_file(workspace, rel, original_bytes)
+                        rescue = _park_rescue_file(workspace, rel, original_bytes, manifest_degraded)
                         rescued.append(str(rescue))
                     except OSError as exc:
                         rescued.append(f"FAILED to persist original bytes of {rel}: {exc}")
