@@ -1245,17 +1245,20 @@ def test_atomic_create_failure_fingerprint_collision_documents_residual(tmp_path
         return new
 
     state["on_cleanup_stat"] = claim_identical_fingerprint
-    with pytest.raises(AgentError) as excinfo:
+    with pytest.raises((OSError, AgentError)) as excinfo:
         patch_mod.atomic_write(target, our_data, create=True)
     assert observed["collision"] is not None, "the test must measure the four-field collision"
     if observed["collision"]:
-        # documented residual: full fingerprint collision (dev/ino/size/mtime all equal)
-        assert excinfo.value.code != "RECOVERY_UNCERTAIN"
+        # documented residual: full fingerprint collision (dev/ino/size/mtime
+        # all equal) — the path is treated as ours and deleted, and the
+        # original create failure surfaces as-is (not wrapped)
+        assert not isinstance(excinfo.value, AgentError)
         assert not target.exists(), (
             "documented residual: a full stat fingerprint collision is indistinguishable from our file"
         )
     else:
         # the platform did not reproduce the identity reuse: the replacement is preserved
+        assert isinstance(excinfo.value, AgentError)
         assert excinfo.value.code == "RECOVERY_UNCERTAIN"
         assert target.exists() and target.read_bytes() == our_data
 
