@@ -677,7 +677,9 @@ def recover_rescue(workspace: Path) -> dict[str, Any]:
         lock.release()
 
 
-def _quarantine_and_unlink_verified(path: Path, digest: str) -> tuple[bool, str]:
+def _quarantine_and_unlink_verified(
+    path: Path, digest: str, expected_identity: tuple[int, int, int, int] | None = None
+) -> tuple[bool, str]:
     """Move a candidate out of its public name, verify the moved object, then unlink.
 
     If the moved object is not the expected regular file, retain it in
@@ -686,6 +688,13 @@ def _quarantine_and_unlink_verified(path: Path, digest: str) -> tuple[bool, str]
     """
     if path.is_symlink():
         return False, "candidate is a symlink"
+    try:
+        before = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        return False, f"candidate identity could not be captured: {exc}"
+    before_identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    if expected_identity is not None and before_identity != expected_identity:
+        return False, "candidate identity changed after eligibility scan"
     quarantine = path.with_name(f".{path.name}.jinlin-clean-{uuid.uuid4().hex[:8]}")
     try:
         os.replace(path, quarantine)
@@ -693,8 +702,12 @@ def _quarantine_and_unlink_verified(path: Path, digest: str) -> tuple[bool, str]
         return False, f"could not move candidate to quarantine: {exc}"
     try:
         st = os.stat(quarantine, follow_symlinks=False)
+        moved_identity = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
         if not stat.S_ISREG(st.st_mode) or quarantine.is_symlink():
             return False, f"quarantined object is not a regular file; retained at {quarantine.name}"
+        if moved_identity != before_identity:
+            link_no_clobber(quarantine, path)
+            return False, f"quarantined object identity differs from scanned candidate; evidence retained at {quarantine.name}"
         data = quarantine.read_bytes()
         if hashlib.sha256(data).hexdigest() != digest:
             link_no_clobber(quarantine, path)
@@ -772,6 +785,10 @@ def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
                     continue
             eligible.append({"rescue": rescue["path"], "target": rescue["orig"],
                              "stage": _relative_posix(stage, workspace) if stage_exists else None,
+                             "stage_identity": ((stage_st.st_dev, stage_st.st_ino, stage_st.st_size, stage_st.st_mtime_ns)
+                                               if stage_exists else None),
+                             "rescue_identity": ((ident.get("dev"), ident.get("ino"), ident.get("size"), ident.get("mtime_ns"))
+                                                 if isinstance((ident := entry.get("identity")), dict) else None),
                              "sha256": rescue["sha256"]})
         report["eligible"] = eligible
         if not apply:
@@ -791,12 +808,12 @@ def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
                 continue
             if item["stage"]:
                 stage = workspace / PurePosixPath(item["stage"])
-                ok, detail = _quarantine_and_unlink_verified(stage, item["sha256"])
+                ok, detail = _quarantine_and_unlink_verified(stage, item["sha256"], item.get("stage_identity"))
                 if not ok:
                     report["failed"].append({"rescue": item["rescue"], "reason": detail})
                     continue
             rescue_path = workspace / PurePosixPath(item["rescue"])
-            ok, detail = _quarantine_and_unlink_verified(rescue_path, item["sha256"])
+            ok, detail = _quarantine_and_unlink_verified(rescue_path, item["sha256"], item.get("rescue_identity"))
             if not ok:
                 report["failed"].append({"rescue": item["rescue"], "reason": detail})
                 continue
