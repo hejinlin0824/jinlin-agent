@@ -668,8 +668,18 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                         source="edit",
                         details={"kept_aside": backup.name},
                     )
+                st = os.stat(backup)
                 applied.append(
-                    {"kind": "delete", "path": path, "rel": item["rel"], "backup": backup, "before_sha": expected}
+                    {
+                        "kind": "delete",
+                        "path": path,
+                        "rel": item["rel"],
+                        "backup": backup,
+                        "before_sha": expected,
+                        # fingerprint captured right after our own move: the post-commit
+                        # cleanup may only delete the backup while it still matches this
+                        "backup_identity": (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns),
+                    }
                 )
                 deleted.append(item["rel"])
             else:
@@ -727,13 +737,35 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             ),
         )
 
-    # transaction committed: drop delete backups
+    # transaction committed: drop delete backups. A committed transaction and
+    # a successful cleanup are different outcomes — the delete is final and
+    # never reopened here. Cleanup deletes a backup only while it still
+    # provably holds the fingerprint captured at move time; anything else
+    # (replaced, vanished-with-different-identity, unlink failure) is left in
+    # place and reported as deferred, never turned into a tool failure.
+    cleanup_deferred: list[str] = []
     for record in applied:
-        if record["kind"] == "delete":
-            try:
-                record["backup"].unlink()
-            except OSError:
-                pass
+        if record["kind"] != "delete":
+            continue
+        backup: Path = record["backup"]
+        identity = record.get("backup_identity")
+        try:
+            st = os.stat(backup)
+        except OSError:
+            continue  # already gone; nothing of ours left to clean
+        provable = identity is not None and (
+            st.st_dev,
+            st.st_ino,
+            st.st_size,
+            st.st_mtime_ns,
+        ) == identity
+        if not provable:
+            cleanup_deferred.append(backup.name)
+            continue
+        try:
+            backup.unlink()
+        except OSError:
+            cleanup_deferred.append(backup.name)
 
     read_hashes = {w["path"]: w["hash_after"] for w in written}
     summary = [f"applied {len(plan)} file operation(s):"]
@@ -741,12 +773,18 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         summary.append(f"  M {w['path']} (+{w.get('lines_added', 0)}/-{w.get('lines_removed', 0)})")
     for d in deleted:
         summary.append(f"  D {d}")
+    if cleanup_deferred:
+        summary.append(
+            "note: backup file(s) kept after commit (ownership not provable or unlink failed): "
+            + ", ".join(cleanup_deferred)
+            + " — the transaction is committed; inspect before removing"
+        )
     return ToolResult(
         output="\n".join(summary),
         written_files=written,
         deleted_files=deleted,
         read_hashes=read_hashes,
-        extra={"files": [w["path"] for w in written]},
+        extra={"files": [w["path"] for w in written], "cleanup_deferred": cleanup_deferred},
     )
 
 
