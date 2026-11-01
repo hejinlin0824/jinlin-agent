@@ -245,6 +245,46 @@ def _atomic_create_new(path: Path, data: bytes) -> None:
     _invalidate_bytecode(path)
 
 
+def _write_exclusive(path: Path, data: bytes) -> None:
+    """Exclusive-create ``path`` and write ``data`` completely — short-write
+    safe (loops until every byte is written) and fsync'ed before close.
+    Raises FileExistsError when the path is claimed, other OSError on I/O
+    failure."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o666)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _park_rescue_file(workspace: Path, orig_rel: str, original_bytes: bytes) -> Path:
+    """Persist original content that could not be restored to its path: an
+    exclusively created, fsync'ed, uniquely named rescue file next to the
+    original location, recorded in the trash manifest for provenance. Raises
+    OSError if even the rescue cannot be written (reported by the caller)."""
+    rescue = None
+    for _ in range(5):
+        candidate = Path(workspace) / f".{Path(orig_rel).name}.jinlin-rescue-{uuid.uuid4().hex[:8]}"
+        try:
+            _write_exclusive(candidate, original_bytes)
+            rescue = candidate
+            break
+        except FileExistsError:
+            continue  # astronomically unlikely (uuid) — retry with a new name
+    if rescue is None:
+        raise OSError("could not create a rescue file after 5 attempts")
+    # verify what landed on disk is exactly the original content
+    if Path(rescue).read_bytes() != original_bytes:
+        rescue.unlink()
+        raise OSError("rescue file verification failed")
+    record_trash(workspace, rescue, orig_rel, "rescue")
+    return rescue
+
+
 def _invalidate_bytecode(path: Path) -> None:
     """Remove cached bytecode for an edited Python source file (best effort)."""
     if path.suffix.lower() != ".py":
@@ -287,7 +327,7 @@ def _restore_no_clobber(source: Path, dest: Path) -> bool:
 
 def _rollback_transaction(
     applied: list[dict[str, Any]], workspace: Path, manifest_degraded: list[str]
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str]]:
     """Revert only mutations this transaction actually made *and* still owns.
 
     Ownership is verified by content hash, and the live path is never deleted
@@ -295,13 +335,21 @@ def _rollback_transaction(
     transaction-scoped trash name (atomic, content-preserving), the trash is
     hashed, and only when it matches what our write produced is it removed or
     replaced. Every put-back — trash or backup onto the original path — goes
-    through `_restore_no_clobber`: if a concurrent writer recreated the path
+    through ``_restore_no_clobber``: if a concurrent writer recreated the path
     while our content sat aside, both sides are kept and the path is reported
-    as incomplete (the caller raises RECOVERY_UNCERTAIN). An overwriting
-    rename is never used as a restore fallback, and **no cleanup unlinks by
-    name**: trash/backup entries whose content is safely back at the path (or
-    deliberately reverted) are left in place and returned as ``redundant`` —
-    inspect-then-remove litter, not a deletion target (round-6 finding).
+    as incomplete. An overwriting rename is never used as a restore fallback,
+    and **no cleanup unlinks by name**: trash/backup entries whose content is
+    safely back at the path (or deliberately reverted) are left in place and
+    returned as ``redundant`` — inspect-then-remove litter, not a deletion
+    target (round-6 finding).
+
+    The delete lifecycle (round-9) registers the backup immediately after the
+    move and verifies it through one freshly opened file object; a backup that
+    no longer provably holds the moved object is never restored as the
+    original. When the original cannot be re-created at its path (claimed
+    concurrently), its bytes are parked in a uniquely named rescue file
+    (exclusive create, short-write-safe, fsync'ed, manifest-recorded) — the
+    original data is never silently dropped (round-10 finding).
 
     The residual window between the trash-rename and the final step is
     best-effort against uncoordinated external processes; jinlin sessions are
@@ -311,9 +359,11 @@ def _rollback_transaction(
     restored: list[str] = []
     incomplete: list[str] = []
     redundant: list[str] = []
+    rescued: list[str] = []
     for record in reversed(applied):
         path: Path = record["path"]
         rel: str = record["rel"]
+        original_bytes = record.get("original_bytes")
         try:
             if record["kind"] == "add":
                 if not path.exists():
@@ -375,34 +425,46 @@ def _rollback_transaction(
                     except OSError:
                         backup_ok = False
                 if backup_ok:
-                    if not _restore_no_clobber(backup, path):
-                        incomplete.append(rel)  # claimed concurrently / no hardlink support
+                    if _restore_no_clobber(backup, path):
+                        redundant.append(backup.name)  # content back at the path
+                        restored.append(rel)
                         continue
-                    redundant.append(backup.name)  # content back at the path
-                    restored.append(rel)
+                    # The restore was blocked (the path was claimed
+                    # concurrently): the original bytes are parked in a rescue
+                    # file — they must not exist only in memory or in the
+                    # unverified backup (round-10 P0).
+                    if original_bytes is not None:
+                        try:
+                            rescue = _park_rescue_file(workspace, rel, original_bytes)
+                            rescued.append(str(rescue))
+                        except OSError as exc:
+                            rescued.append(f"FAILED to persist original bytes of {rel}: {exc}")
+                    incomplete.append(rel)
                     continue
                 # The backup is missing, replaced, or no longer provably the
                 # original: it is never presented as one. Re-create the original
                 # from the bytes recorded at hash time; the unverifiable backup
-                # stays untouched for inspection.
+                # stays untouched for inspection. When the path is claimed, the
+                # original bytes are parked in a rescue file instead of being
+                # dropped — losing them would be permanent data loss.
                 if original_bytes is not None and not path.exists():
                     try:
-                        out_fd = os.open(
-                            path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o666
-                        )
-                        try:
-                            os.write(out_fd, original_bytes)
-                            os.fsync(out_fd)
-                        finally:
-                            os.close(out_fd)
+                        _write_exclusive(path, original_bytes)
                         restored.append(rel)  # content-wise restored; the backup is kept aside
                         continue
+                    except FileExistsError:
+                        pass  # the path was claimed concurrently — park the bytes
                     except OSError:
-                        pass
+                        pass  # fall through to the rescue park below
+                    try:
+                        rescue = _park_rescue_file(workspace, rel, original_bytes)
+                        rescued.append(str(rescue))
+                    except OSError as exc:
+                        rescued.append(f"FAILED to persist original bytes of {rel}: {exc}")
                 incomplete.append(rel)
         except Exception:
             incomplete.append(rel)
-    return restored, incomplete, redundant
+    return restored, incomplete, redundant, rescued
 
 
 def check_clean(ctx: ToolContext, rel: str, current_sha: str) -> AgentError | None:
@@ -817,11 +879,12 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                     }
                 )
     except Exception as exc:
-        restored, incomplete, redundant = _rollback_transaction(applied, ctx.workspace, manifest_degraded)
+        restored, incomplete, redundant, rescued = _rollback_transaction(applied, ctx.workspace, manifest_degraded)
         details = {
             "rolled_back": restored,
             "rollback_incomplete": incomplete,
             "redundant_trash": redundant,
+            "rescued_files": rescued,
             "trash_manifest_degraded": manifest_degraded,
         }
         if not applied and isinstance(exc, AgentError):

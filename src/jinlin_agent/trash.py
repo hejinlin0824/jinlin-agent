@@ -4,18 +4,28 @@ Ownership policy (phase-2 principle: never overwrite, never delete by
 unproven name, keep the scene and report): a leftover file is *removable*
 only when its name matches the strict trash pattern AND the trash manifest
 (``<workspace>/.jinlin/trash-manifest.jsonl``) records **its full
-workspace-relative path** with a matching kind and original path. The
-manifest entry is appended by the transaction that created the file, so
-manifest membership is a transaction record — not a name-prefix guess: two
-files sharing a basename in different directories never share a proof, and
-each removal is re-verified against a freshly loaded manifest before the
-unlink.
+workspace-relative path** with a matching kind, original path and creation
+fingerprint. The manifest entry is appended by the transaction that created
+the file, so manifest membership is a transaction record — not a name-prefix
+guess. Pattern-matched names without full manifest proof are reported and
+never removed.
+
+Deletion goes through a quarantine: the candidate is first atomically moved
+to a unique quarantine name, the MOVED object's fingerprint is verified
+against the manifest, and only a verified object is deleted. A mismatched
+object is restored to its base path without ever overwriting and reported.
+This removes the `stat → unlink` race as the final safety boundary: what is
+deleted is always the object that was just verified, never whatever happens
+to sit at the scanned path.
 
 The manifest itself is rewritten atomically (temp file + fsync + replace):
 a crash during a rewrite leaves the previous records intact instead of
 silently dropping ownership. Manifest write failures never break the
 transaction that produced the trash — the file then degrades to
 "unrecognized" (report-only) and the degradation is reported to the caller.
+Note: the directory-entry rename is not fsynced, so a power-loss exactly at
+the replace is not covered — atomicity under normal operation is claimed,
+not power-loss durability of the directory entry.
 
 Cleanup runs under the workspace write lock (it cannot race an active jinlin
 session), is repeatable, keeps manifest entries whose deletion failed, and
@@ -34,7 +44,9 @@ from typing import Any
 from .domain import utcnow_iso
 from .locks import SessionLock, SessionLockedError
 
-TRASH_RE = re.compile(r"^\.(?P<orig>.+)\.jinlin-(?P<kind>rollback|txn)-(?P<tag>[0-9a-f]{8})$")
+TRASH_RE = re.compile(
+    r"^\.(?P<orig>.+)\.jinlin-(?P<kind>rollback|txn)-(?P<tag>[0-9a-f]{8})(?P<q>\.q-[0-9a-f]{8})?$"
+)
 MANIFEST_REL = Path(".jinlin") / "trash-manifest.jsonl"
 _SKIP_DIRS = {".git", ".jinlin"}
 
@@ -50,13 +62,30 @@ def _relative_posix(path: Path, workspace: Path) -> str:
         return Path(path).as_posix()  # outside the workspace: keep an absolute posix id
 
 
+def link_no_clobber(source: Path, dest: Path) -> bool:
+    """Move ``source`` onto ``dest`` without ever replacing an entry: ``os.link``
+    creates ``dest`` only when absent, then the redundant source name is
+    dropped. Returns False — keeping ``source`` intact — when ``dest`` is
+    occupied or the filesystem cannot hard-link."""
+    try:
+        os.link(source, dest)
+    except OSError:
+        return False
+    try:
+        os.unlink(source)
+    except OSError:
+        pass
+    return True
+
+
 def record_trash(workspace: Path, trash_path: Path, orig_rel: str, kind: str) -> bool:
     """Append a manifest entry for a trash/backup file this harness created.
 
     The entry binds the file's **workspace-relative path** (not just its
-    basename), so same-named files in different directories never share a
-    proof. Best effort by design: the manifest is an ownership aid, and its
-    failure must never break the transaction that produced the trash — the
+    basename) plus its creation fingerprint, so same-named files in different
+    directories never share a proof and replacements at the same path are
+    detectable. Best effort by design: the manifest is an ownership aid, and
+    its failure must never break the transaction that produced the trash — the
     file then degrades to "unrecognized" (report-only) during cleanup and the
     caller is expected to surface the returned False.
     """
@@ -113,7 +142,9 @@ def _load_manifest(workspace: Path) -> dict[str, dict[str, Any]]:
 
 def _write_manifest_atomic(workspace: Path, entries: dict[str, dict[str, Any]]) -> bool:
     """Rewrite the whole manifest atomically; a failure leaves the previous
-    file (and therefore all ownership records) untouched."""
+    file (and therefore all ownership records) untouched. The directory-entry
+    rename is not fsynced — power-loss durability of the rename itself is not
+    claimed (see the module docstring)."""
     path = _manifest_path(workspace)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.tmp")
     try:
@@ -147,10 +178,10 @@ def forget_trash(workspace: Path, trash_path: Path) -> bool:
 def scan_trash(workspace: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return ``(provable, unrecognized)`` trash candidates.
 
-    ``provable``: name matches the strict pattern AND the manifest records the
-    same workspace-relative path with the same kind and original path.
-    ``unrecognized``: pattern-matched names without full manifest proof —
-    report-only.
+    ``provable``: name matches the strict pattern (quarantine suffix
+    included) AND the manifest records the base workspace-relative path with
+    the same kind, original path and creation fingerprint. ``unrecognized``:
+    pattern-matched names without full manifest proof — report-only.
     """
     workspace = Path(workspace)
     manifest = _load_manifest(workspace)
@@ -164,17 +195,25 @@ def scan_trash(workspace: Path) -> tuple[list[dict[str, Any]], list[dict[str, An
                 continue
             full = Path(root) / fname
             rel = _relative_posix(full, workspace)
+            quarantined = match.group("q") is not None
+            # the manifest records the pre-quarantine location: strip the
+            # quarantine suffix to address the record
+            base_rel = rel[: -len(match.group("q"))] if quarantined else rel
             entry = {
                 "name": fname,
                 "path": rel,
+                "base_rel": base_rel,
                 "abs": str(full),
                 "orig": match.group("orig"),
                 "kind": match.group("kind"),
+                "quarantined": quarantined,
             }
-            recorded = manifest.get(rel)
+            recorded = manifest.get(base_rel)
             # the trash NAME embeds only the original file's basename; the
             # manifest's orig may carry its directory (e.g. "sub/a.py"), so
-            # correspondence is checked on the basename part
+            # correspondence is checked on the basename part. The recorded
+            # creation fingerprint must also still match the file on disk —
+            # a replacement at the same path is report-only.
             orig_ok = recorded is not None and Path(str(recorded.get("orig", ""))).name == match.group("orig")
             identity_ok = False
             if recorded is not None and isinstance(recorded.get("identity"), dict):
@@ -207,10 +246,12 @@ def clean_trash(workspace: Path, apply: bool = False) -> dict[str, Any]:
     """List (default, dry run) or remove provable jinlin trash.
 
     Runs under the workspace write lock so it cannot race an active jinlin
-    session. Each removal re-verifies ownership against a freshly loaded
-    manifest immediately before the unlink; per-file failures keep the
-    manifest entry (repeatable runs converge) and are reported; unrecognized
-    files are never touched.
+    session. Each candidate is first atomically moved OUT of its path into a
+    unique quarantine name, the moved object is verified against the manifest
+    fingerprint, and only a verified object is deleted. A mismatched object is
+    restored to its base path without ever overwriting and reported as failed;
+    per-file failures keep the manifest entry (repeatable runs converge) and
+    are reported; unrecognized files are never touched.
     """
     workspace = Path(workspace)
     report: dict[str, Any] = {
@@ -220,6 +261,8 @@ def clean_trash(workspace: Path, apply: bool = False) -> dict[str, Any]:
         "unrecognized": [],
         "removed": [],
         "failed": [],
+        "uncertain": [],
+        "manifest_degraded": [],
     }
     lock = SessionLock(workspace / ".jinlin" / "write.lock")
     try:
@@ -231,42 +274,76 @@ def clean_trash(workspace: Path, apply: bool = False) -> dict[str, Any]:
     try:
         provable, unrecognized = scan_trash(workspace)
         report["removable"] = [e["path"] for e in provable]
-        report["unrecognized"] = [e["path"] for e in unrecognized]
+        report["unrecognized"] = [(e["path"], e.get("reason", "")) for e in unrecognized]
         if not apply:
             return report
         report["status"] = "applied"
         for entry in provable:
-            manifest = _load_manifest(workspace)  # fresh proof, per file
-            recorded = manifest.get(entry["path"])
-            orig_ok = recorded is not None and Path(str(recorded.get("orig", ""))).name == entry["orig"]
-            identity_ok = False
-            if recorded is not None and isinstance(recorded.get("identity"), dict):
+            abs_path = Path(entry["abs"])
+            base_abs = workspace / entry["base_rel"]
+            if entry["quarantined"]:
+                # already in quarantine from a previous run: verify + delete
+                # without touching the scanned path again
+                loc = abs_path
+            else:
+                # 1. atomically move the candidate OUT of its path into
+                #    quarantine. Whatever sits at the path afterwards was put
+                #    there by someone else and is never touched by this cleanup.
+                quarantine = abs_path.with_name(f"{abs_path.name}.q-{uuid.uuid4().hex[:8]}")
                 try:
-                    cur = os.stat(entry["abs"])  # re-verify the file object NOW, not at scan time
-                    ident = recorded["identity"]
+                    os.replace(abs_path, quarantine)
+                except OSError as exc:
+                    report["failed"].append(
+                        {"name": entry["name"], "path": entry["path"], "error": f"quarantine move failed: {exc}"}
+                    )
+                    continue
+                loc = quarantine
+            # 2. verify the MOVED object against the manifest fingerprint
+            identity_ok = False
+            try:
+                cur = os.stat(loc)
+                ident = _load_manifest(workspace).get(entry["base_rel"], {}).get("identity")
+                if isinstance(ident, dict):
                     identity_ok = (
                         cur.st_dev == ident.get("dev")
                         and cur.st_ino == ident.get("ino")
                         and cur.st_size == ident.get("size")
                         and cur.st_mtime_ns == ident.get("mtime_ns")
                     )
-                except OSError:
-                    identity_ok = False
-            if recorded is None or recorded.get("kind") != entry["kind"] or not orig_ok or not identity_ok:
+            except OSError:
+                identity_ok = False
+            if not identity_ok:
+                # 3. not provably ours: restore the moved object to its base
+                #    path without ever overwriting, and report instead of
+                #    deleting.
+                if not link_no_clobber(loc, base_abs):
+                    report["uncertain"].append(
+                        {
+                            "name": entry["name"],
+                            "path": entry["path"],
+                            "quarantine": str(loc),
+                            "reason": "identity mismatch and the base path was claimed concurrently",
+                        }
+                    )
+                    continue
                 report["failed"].append(
                     {
                         "name": entry["name"],
                         "path": entry["path"],
-                        "error": "ownership no longer provable (manifest or file identity mismatch)",
+                        "error": "ownership no longer provable (manifest or file identity mismatch); object restored",
                     }
                 )
+                forget_trash(workspace, base_abs)  # the stale record describes nothing anymore
                 continue
+            # 4. proven ours: delete the verified object (in quarantine)
             try:
-                os.unlink(entry["abs"])
-                forget_trash(workspace, Path(entry["abs"]))
-                report["removed"].append(entry["path"])
+                os.unlink(loc)
             except OSError as exc:
-                report["failed"].append({"name": entry["name"], "path": entry["path"], "error": str(exc)})
+                report["failed"].append({"name": entry["name"], "path": entry["path"], "error": f"unlink failed: {exc}"})
+                continue
+            if not forget_trash(workspace, base_abs):
+                report["manifest_degraded"].append(entry["path"])
+            report["removed"].append(entry["path"])
         return report
     finally:
         lock.release()

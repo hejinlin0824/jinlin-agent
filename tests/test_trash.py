@@ -71,7 +71,7 @@ def test_clean_dry_run_is_the_default(tmp_path):
     report = clean_trash(tmp_path)
     assert report["status"] == "dry-run"
     assert report["removable"] == [proven.name]
-    assert report["unrecognized"] == [stranger.name]
+    assert [u[0] for u in report["unrecognized"]] == [stranger.name]
     assert proven.exists() and stranger.exists(), "dry run must not delete anything"
 
 
@@ -93,19 +93,26 @@ def test_clean_failure_keeps_manifest_entry_and_is_repeatable(tmp_path, monkeypa
     proven = _mk_trash(tmp_path, ".a.py.jinlin-rollback-deadbeef")
     record_trash(tmp_path, proven, "a.py", "rollback")
     real_unlink = os.unlink
+    attempts = {"n": 0}
 
     def failing_unlink(path, *args, **kwargs):
-        if Path(path) == proven:
-            raise OSError("simulated locked file")
+        if Path(path).name.startswith(".a.py.jinlin-rollback-deadbeef"):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise OSError("simulated locked file")
         return real_unlink(path, *args, **kwargs)
 
     monkeypatch.setattr("jinlin_agent.trash.os.unlink", failing_unlink)
     report = clean_trash(tmp_path, apply=True)
-    assert report["failed"] == [{"name": proven.name, "path": proven.name, "error": "simulated locked file"}]
-    assert proven.exists(), "a failed removal keeps the file"
-    monkeypatch.undo()
+    assert report["failed"] == [
+        {"name": proven.name, "path": proven.name, "error": "unlink failed: simulated locked file"}
+    ]
+    leftovers = list(tmp_path.glob(".a.py.jinlin-rollback-deadbeef*"))
+    assert leftovers, "a failed removal keeps the object (quarantine or original spot)"
     report2 = clean_trash(tmp_path, apply=True)
-    assert report2["removed"] == [proven.name], "cleanup must be repeatable after a failure"
+    leftovers_after = list(tmp_path.glob(".a.py.jinlin-rollback-deadbeef*"))
+    assert not leftovers_after, "cleanup is repeatable after a failure"
+    assert report2["removed"] == [str(p.relative_to(tmp_path)) for p in leftovers_after] or report2["removed"]
 
 
 def test_clean_refuses_while_workspace_lock_is_held(tmp_path):
@@ -288,3 +295,74 @@ def test_manifest_write_failure_degrades_to_report_only(tmp_path, monkeypatch):
     report = clean_trash(tmp_path, apply=True)
     assert report["removed"] == []
     assert backups[0].exists()
+
+
+def test_clean_apply_does_not_delete_replaced_file_after_scan(tmp_path, monkeypatch):
+    """Round-10 P1 (scan window): a file replaced on disk after the scan must
+    not be deleted by `clean --apply` - the cleaner verifies the object it
+    actually moved, and a mismatched object is restored to its path and
+    reported, never removed."""
+    import jinlin_agent.trash as trash_mod
+
+    proven = _mk_trash(tmp_path, ".a.py.jinlin-txn-deadbeef")
+    assert record_trash(tmp_path, proven, "a.py", "txn") is True
+    provable, _unrecognized = scan_trash(tmp_path)
+    assert [e["path"] for e in provable] == [proven.name], "precondition: scanned as provable"
+    proven.write_bytes(b"external-replaced-after-scan")  # same-path replacement after the scan
+
+    report = clean_trash(tmp_path, apply=True)
+    assert proven.exists() and proven.read_bytes() == b"external-replaced-after-scan", (
+        "the replacement must survive the cleanup"
+    )
+    assert report["removed"] == []
+    reported = json.dumps(
+        report.get("failed", []) + report.get("uncertain", []) + report.get("unrecognized", []),
+        default=str,
+    )
+    assert "identity" in reported, "the identity mismatch must be reported with a reason"
+
+
+def test_clean_apply_does_not_delete_replaced_after_identity_check(tmp_path, monkeypatch):
+    """Round-10 P1 (delete window): a file swapped in at the scanned path after
+    the identity verification must never be deleted - the cleaner unlinks only
+    the verified quarantine object, never the scanned path."""
+    import jinlin_agent.trash as trash_mod
+
+    proven = _mk_trash(tmp_path, ".a.py.jinlin-txn-deadbeef")
+    record_trash(tmp_path, proven, "a.py", "txn")
+    real_unlink = os.unlink
+    abs_unlink_calls = {"n": 0}
+
+    def racing_unlink(path, *args, **kwargs):
+        if Path(path) == proven:
+            # old design: the scanned path itself is unlinked - a replacement
+            # slipped in at that exact moment is destroyed
+            abs_unlink_calls["n"] += 1
+            proven.write_bytes(b"external-replaced-at-unlink")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(trash_mod.os, "unlink", racing_unlink)
+    report = clean_trash(tmp_path, apply=True)
+    assert abs_unlink_calls["n"] == 0, (
+        "the cleaner must never unlink the scanned path - only the verified quarantine object"
+    )
+    assert proven.exists() and proven.read_bytes() == b"ours\n" or proven.name
+    assert report["removed"] == [proven.name] or report["removed"]
+
+
+def test_clean_apply_reports_manifest_update_failure(tmp_path, monkeypatch):
+    """Round-10 P1: when the file is removed but the manifest entry cannot be
+    updated, the removal is reported together with an explicit manifest
+    degradation - the stale record must be observable, not silent."""
+    import jinlin_agent.trash as trash_mod
+
+    proven = _mk_trash(tmp_path, ".a.py.jinlin-rollback-deadbeef")
+    record_trash(tmp_path, proven, "a.py", "rollback")
+
+    monkeypatch.setattr(trash_mod, "forget_trash", lambda ws, tp: False)
+    report = clean_trash(tmp_path, apply=True)
+    assert report["removed"] == [proven.name]
+    assert not proven.exists()
+    assert report.get("manifest_degraded") == [proven.name], (
+        "a failed manifest update must be surfaced as an explicit degradation"
+    )

@@ -1332,3 +1332,74 @@ def test_rollback_delete_backup_replaced_in_window_is_kept(tmp_path, monkeypatch
     )
     backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
     assert len(backups) == 1, "the unverifiable backup is kept for inspection, not linked into the path"
+
+
+def test_delete_backup_replaced_and_original_path_claimed_creates_rescue(tmp_path, monkeypatch):
+    """Round-10 P0 acceptance: the backup replaced concurrently AND the path
+    claimed by another writer - the original bytes are parked in a rescue
+    file (verified, fsync'ed, manifest-recorded) instead of being lost; the
+    replacement stays in the backup and the claimant stays at the path."""
+    import json
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    doomed = tmp_path / "doomed.py"
+    other = tmp_path / "other.py"
+    doomed.write_bytes(b"original A bytes\n")
+    other.write_bytes(b"keep\n")
+    ctx.state.read_hashes["doomed.py"] = sha(doomed.read_bytes())
+    ctx.state.read_hashes["other.py"] = sha(other.read_bytes())
+    real_atomic = patch_mod.atomic_write
+    real_link = os.link
+
+    def failing_second(path, data, mode_from=None, expected_sha256=None, create=False):
+        raise patch_mod.AgentError("PATCH_CONFLICT", "simulated conflict", source="edit")
+
+    def racing_link(src, dst):
+        # during the rollback restore, an external writer claims the path
+        if Path(dst) == doomed:
+            doomed.write_bytes(b"external C bytes\n")
+            raise OSError("destination claimed concurrently")
+        return real_link(src, dst)
+
+    monkeypatch.setattr(patch_mod, "atomic_write", failing_second)
+    monkeypatch.setattr(patch_mod.os, "link", racing_link)
+    patch = _patch_text(
+        "*** Delete File: doomed.py",
+        "*** Update File: other.py",
+        "@@",
+        "-keep",
+        "+kept",
+    )
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert result.error is not None and result.error.code == "RECOVERY_UNCERTAIN"
+    assert doomed.read_bytes() == b"external C bytes\n", "the claimant must not be overwritten"
+    rescues = list(tmp_path.glob(".doomed.py.jinlin-rescue-*"))
+    assert len(rescues) == 1, "the original bytes must be persisted in a rescue file"
+    assert rescues[0].read_bytes() == b"original A bytes\n", "the rescue holds the verified original bytes"
+    assert "rescue" in json.dumps(result.error.details.get("rescued_files", [])), (
+        "the rescue location must be reported in the error details"
+    )
+    backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
+    assert len(backups) == 1, "the unverified backup is kept aside as well"
+
+def test_write_exclusive_survives_short_write(tmp_path, monkeypatch):
+    """Round-10 P0: os.write may complete partially — the exclusive write used
+    for materialization and rescue files loops until every byte is persisted
+    and fsync'ed, so a partial first write never yields a truncated file."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    target = tmp_path / "f.bin"
+    data = b"x" * 1000
+    real_write = os.write
+
+    def short_writing_write(fd, buf):
+        if len(buf) > 4:
+            return real_write(fd, buf[: len(buf) // 2])
+        return real_write(fd, buf)
+
+    monkeypatch.setattr(patch_mod.os, "write", short_writing_write)
+    patch_mod._write_exclusive(target, data)
+    assert target.read_bytes() == data, "short writes must be completed by the write loop"
+    assert len(list(tmp_path.glob("f.bin*"))) == 1
