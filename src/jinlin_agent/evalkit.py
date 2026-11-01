@@ -461,7 +461,7 @@ def _bugfix_script(bogus_evidence: bool = False) -> list[dict[str, Any]]:
                 }
             ]
         },
-        {"tool_calls": [{"name": "run_command", "arguments": {"command": ["python", "-m", "pytest", "-q"], "cwd": "."}}]},
+        {"tool_calls": [{"name": "run_command", "arguments": {"command": [PY, "-m", "pytest", "-q"], "cwd": "."}}]},
         {
             "tool_calls": [
                 {
@@ -584,7 +584,7 @@ def eval_e3_cross_file(tmp: Path) -> tuple[bool, str]:
                 }
             ]
         },
-        {"tool_calls": [{"name": "run_command", "arguments": {"command": ["python", "-m", "pytest", "-q"], "cwd": "."}}]},
+        {"tool_calls": [{"name": "run_command", "arguments": {"command": [PY, "-m", "pytest", "-q"], "cwd": "."}}]},
         {
             "tool_calls": [
                 {
@@ -652,7 +652,7 @@ def eval_e4_new_file(tmp: Path) -> tuple[bool, str]:
                 }
             ]
         },
-        {"tool_calls": [{"name": "run_command", "arguments": {"command": ["python", "-m", "pytest", "-q", "test_version.py"], "cwd": "."}}]},
+        {"tool_calls": [{"name": "run_command", "arguments": {"command": [PY, "-m", "pytest", "-q", "test_version.py"], "cwd": "."}}]},
         {
             "tool_calls": [
                 {

@@ -50,6 +50,9 @@ def resolve_command(ctx: ToolContext, argv: list[str], cwd: Path) -> list[str]:
     if head in ("python", "python3") and venv_py is not None:
         return [str(venv_py), *argv[1:]]
     found = shutil.which(head)
+    if found is None and head in ("python", "python3"):
+        # Linux CI images sometimes expose only one of python/python3
+        found = shutil.which("python3" if head == "python" else "python")
     if found:
         if found.lower().endswith((".cmd", ".bat")):
             raise AgentError(
