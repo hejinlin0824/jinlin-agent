@@ -78,7 +78,21 @@ jinlin-agent eval --suite all -> 18/18 probes passed
 
 | 已关闭 | 仍排期 |
 |---|---|
-| 第 4 轮 P1×2（已合并）；第 6/8/9 轮全部 P0/P1/P2 项；clean 身份核验；事务登记时序 | 隔离区移动硬化（复核建议，评估中）；`clean` 并入会话自动清扫；Python 3.11/3.12 矩阵；30–50 真实任务评测；覆盖率基线 |
+| 第 4 轮 P1×2（已合并）；第 6/8/9 轮全部 P0/P1/P2 项；clean 身份核验；事务登记时序 | `clean` 并入会话自动清扫；Python 3.11/3.12 矩阵；30–50 真实任务评测；覆盖率基线 |
+
+## 7a. 第 10 轮复核整改（追加提交，代码 HEAD `17b2262`）
+
+第 10 轮复核确认 P0 移动后替换窗口基本关闭，但指出三项：rescue 未实现（阻断）、clean 的 stat→unlink 竞态（阻断）、clean 路径忽略 forget 失败（部分完成）。本轮全部完成：
+
+| 复核项 | 处理 | 测试 |
+|---|---|---|
+| **P0** rescue 文件机制 | `_park_rescue_file(workspace, orig_rel, original_bytes)`：唯一命名（uuid）排他创建、**短写安全循环写入**、fsync、内容逐字节验证、trash 清单记录归属；回滚中原文无法在路径重建（路径被并发占用）时调用；rescue 路径写入 `details["rescued_files"]`；rescue 创建失败时 `rescued` 中记录 "FAILED to persist..." —— 绝不声称已保存 | `test_delete_backup_replaced_and_original_path_claimed_creates_rescue`（backup 替换 + 路径被占双注入：占用者存活、原文完整入 rescue、details 可见） |
+| **P0** 恢复/救援写入的短写 | `_write_exclusive`：memoryview 循环直到全部字节写入 + fsync；materialize 与 rescue 共用 | `test_write_exclusive_survives_short_write`（首次半写注入 → 内容完整） |
+| **P1** clean 的 stat→unlink 竞态 | **隔离区移动后验证**：候选先原子移入唯一隔离名 → 对**移动后的对象**校验清单指纹 → 匹配才删除隔离对象；不匹配 → `link_no_clobber` 无覆盖放回路径 + failed 报告；放回失败（路径再被占）→ `uncertain` 记录隔离现场。被扫描路径本身**永不被 unlink** | `test_clean_apply_does_not_delete_replaced_after_identity_check`（unlink 注入：旧实现删除替换文件 → 红；新实现从不 unlink 被扫描路径 → 绿）、`test_clean_apply_does_not_delete_replaced_file_after_scan`（scan 窗口：替换文件存活 + 原因可见） |
+| **P1** clean 忽略 forget 失败 | unlink 成功而清单更新失败 → `manifest_degraded` 显式报告 | `test_clean_apply_reports_manifest_update_failure`（旧实现静默 → 红） |
+| 清理可重复性 | 隔离区残留（`.q-` 后缀）纳入扫描模式；第二次运行继续完成清理 | `test_clean_failure_keeps_manifest_entry_and_is_repeatable`（更新后断言） |
+
+残余边界更新（手册 §16）：隔离区"验证后删除隔离对象"之间仍有微秒级窗口，但对象处于唯一不可猜测的隔离名下且已验证；清单原子替换的目录项重命名**未 fsync**——正常运行下原子，断电场景的目录项持久性不作声明。
 
 ## 8. 审查清单
 
