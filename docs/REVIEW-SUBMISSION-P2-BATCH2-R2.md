@@ -65,9 +65,14 @@ python -m pytest -q          -> 100 passed
 jinlin-agent eval --suite all -> 18/18 probes passed
 ```
 
-## 6. CI
+## 6. CI（真实 Run ID 与 Job 结果）
 
-最终 HEAD 的 Run ID 与双平台 Job 链接：推送后由文档提交补记（见分支 Actions 页与本报告更新）；判定标准：两 Job 均 success。过程记录：本轮中途一次 Ubuntu 失败（run 41297593358，见上一轮报告 §8a）暴露了异常处理器控制流跌落缺陷（§1 诚实记录），修复后转绿。
+| Run | HEAD | 结果 |
+|---|---|---|
+| **[41306414718](https://github.com/hejinlin0824/jinlin-agent/actions/runs/41306414718)** | `bcc892f`（本报告前最后一个提交，含全部四项代码修复） | Windows 与 Ubuntu 两 Job 均 **success** |
+| 两平台测试数字（artifact `reports/junit.xml` + `eval.txt` 已解析） | Windows：tests=**100**, failures=0, errors=0, skipped=0；Ubuntu：tests=**100**, failures=0, errors=0, **skipped=16**（Windows 专属 L1 沙箱测试的平台守卫） | 双平台 eval **18/18 probes passed** |
+
+最终代码 HEAD：`fa9150b`（P1 清单身份）；其后 `bcc892f`（本报告）为纯文档提交。过程记录：本轮中途 Ubuntu 一次失败（run 41297593358，第 8 轮报告 §8a）暴露异常处理器控制流跌落缺陷（§1 诚实记录），修复后转绿。
 
 ## 7. 关闭与排期
 
