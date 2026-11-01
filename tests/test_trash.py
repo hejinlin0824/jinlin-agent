@@ -323,31 +323,48 @@ def test_clean_apply_does_not_delete_replaced_file_after_scan(tmp_path, monkeypa
 
 
 def test_clean_apply_does_not_delete_replaced_after_identity_check(tmp_path, monkeypatch):
-    """Round-10 P1 (delete window): a file swapped in at the scanned path after
-    the identity verification must never be deleted - the cleaner unlinks only
-    the verified quarantine object, never the scanned path."""
+    """Round-10 P1 (delete window): once the verified object has been moved to
+    quarantine, a new file created at the scanned pathname must survive. The
+    cleaner may unlink only the quarantined object, never the pathname that an
+    external writer can reclaim."""
     import jinlin_agent.trash as trash_mod
 
     proven = _mk_trash(tmp_path, ".a.py.jinlin-txn-deadbeef")
     record_trash(tmp_path, proven, "a.py", "txn")
     real_unlink = os.unlink
-    abs_unlink_calls = {"n": 0}
+    unlinked = []
 
     def racing_unlink(path, *args, **kwargs):
-        if Path(path) == proven:
-            # old design: the scanned path itself is unlinked - a replacement
-            # slipped in at that exact moment is destroyed
-            abs_unlink_calls["n"] += 1
-            proven.write_bytes(b"external-replaced-at-unlink")
+        candidate = Path(path)
+        if candidate.name.startswith(proven.name + ".q-"):
+            # The original object has already been moved and identity-checked.
+            # An external writer now reclaims the scanned pathname.
+            proven.write_bytes(b"external-replaced-after-identity-check")
+            unlinked.append(candidate)
+        elif candidate == proven:
+            pytest.fail("cleaner must never unlink the scanned pathname")
         return real_unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(trash_mod.os, "unlink", racing_unlink)
     report = clean_trash(tmp_path, apply=True)
-    assert abs_unlink_calls["n"] == 0, (
-        "the cleaner must never unlink the scanned path - only the verified quarantine object"
-    )
-    assert proven.exists() and proven.read_bytes() == b"ours\n" or proven.name
-    assert report["removed"] == [proven.name] or report["removed"]
+
+    assert len(unlinked) == 1, "the verified quarantine object should be removed"
+    assert proven.exists()
+    assert proven.read_bytes() == b"external-replaced-after-identity-check"
+    assert report["removed"] == [proven.name]
+    assert report["failed"] == []
+
+
+def test_write_exclusive_rejects_zero_progress(tmp_path, monkeypatch):
+    """A zero-byte os.write must fail rather than spin forever or report success."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    target = tmp_path / "stalled.bin"
+    monkeypatch.setattr(patch_mod.os, "write", lambda fd, data: 0)
+    with pytest.raises(OSError, match="no forward progress"):
+        patch_mod._write_exclusive(target, b"payload")
+    assert target.exists()
+    assert target.read_bytes() == b""
 
 
 def test_clean_apply_reports_manifest_update_failure(tmp_path, monkeypatch):
