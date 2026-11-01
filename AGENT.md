@@ -6,11 +6,11 @@ generated_at: "2026-11-01T15:40+08:00"
 repository: https://github.com/hejinlin0824/jinlin-agent
 working_directory: "E:\\codebase\\玩耍项目\\jinlin-agent"
 branches:
-  main: f7c008b   # 第 4 轮 P1 验收归档线；P2 加固批经 review/followup-fixes ff 推进
-  review/followup-fixes: dad2dda+   # P2 安全加固第 1 批（含 Ubuntu 抓到的 inode 复用修正）；docs 提交后 HEAD 再 +N
+  main: 249bbab   # 已归档（第 4 轮 P1 验收 + 第 2 阶段第 1 批）；与 review/followup-fixes 同步
+  review/followup-fixes: 249bbab   # 第 2 批 P2 加固在分支开发：dad2dda 为第 1 批最后代码提交，其后至 249bbab 均为纯文档
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
 test_status: "python -m pytest -q => 80 passed; jinlin-agent eval --suite all => 18/18"
-review_status: "第 4 轮 P1 已验收合并（f7c008b 归档线）；第 6 轮 source 清理竞态 + P2-2/P2-3 已修复（第二阶段第 1 批，dad2dda 双平台 CI 绿），待复核"
+review_status: "第 1 批 P2 加固已归档（249bbab）；第 2 批按复核顺序开发中：P0 Delete backup 提交清理竞态 → P1 受控清理 → P2 legacy session_id → P3 边界测试；完成前不合 main"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
 ---
