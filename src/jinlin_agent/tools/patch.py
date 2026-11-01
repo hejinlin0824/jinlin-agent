@@ -420,51 +420,23 @@ def _rollback_transaction(
                     continue
                 redundant.append(trash.name)  # reverted content, verified ours
                 restored.append(rel)
-            else:  # delete: restore the original content to its path
-                backup: Path = record["backup"]
-                before_sha = record.get("before_sha")
+            else:  # delete: restore only from captured original bytes
                 original_bytes = record.get("original_bytes")
-                identity = record.get("backup_identity")
-                verified = record.get("backup_verified", True)  # legacy records were hash-verified
-                # Restore only from the original bytes captured and hashed
-                # before the move. Never use the backup pathname as a source:
-                # even a prior stat/hash check cannot prevent that name from
-                # being swapped immediately before a link/rename.
+                # Never restore from the backup pathname. Even if its hash and
+                # stat matched a moment ago, that name can be replaced before
+                # a link/rename. The pre-move bytes are the only trusted source.
                 if original_bytes is not None:
                     try:
                         _write_exclusive(path, original_bytes)
                         restored.append(rel)
                         continue
                     except FileExistsError:
-                        # An external writer claimed the destination. Preserve
-                        # our original bytes under a separate exclusive name.
+                        # An external writer claimed the destination.
                         pass
                     except OSError:
-                        # A failed/partial destination write must not cause the
-                        # only in-memory copy to be discarded.
+                        # A failed/partial destination write must not discard
+                        # the only in-memory copy.
                         pass
-                    try:
-                        rescue = _park_rescue_file(workspace, rel, original_bytes, manifest_degraded)
-                        rescued.append(str(rescue))
-                    except OSError as exc:
-                        rescued.append(f"FAILED to persist original bytes of {rel}: {exc}")
-                incomplete.append(rel)
-                    continue
-                # The backup is missing, replaced, or no longer provably the
-                # original: it is never presented as one. Re-create the original
-                # from the bytes recorded at hash time; the unverifiable backup
-                # stays untouched for inspection. When the path is claimed, the
-                # original bytes are parked in a rescue file instead of being
-                # dropped — losing them would be permanent data loss.
-                if original_bytes is not None and not path.exists():
-                    try:
-                        _write_exclusive(path, original_bytes)
-                        restored.append(rel)  # content-wise restored; the backup is kept aside
-                        continue
-                    except FileExistsError:
-                        pass  # the path was claimed concurrently — park the bytes
-                    except OSError:
-                        pass  # fall through to the rescue park below
                     try:
                         rescue = _park_rescue_file(workspace, rel, original_bytes, manifest_degraded)
                         rescued.append(str(rescue))
