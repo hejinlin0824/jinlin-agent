@@ -115,7 +115,9 @@
 | **P2** `session_id: null` 与空字符串被混入 legacy 规则 | 只有**字段缺失**进入 legacy 规则；字段存在但非非空字符串 → `SESSION_CORRUPTED`（读取与 open 双路径） | `test_event_with_explicit_null_session_id_is_rejected`、`test_event_with_empty_session_id_is_rejected`（旧实现静默接受 → 红） |
 | **P3** 指纹碰撞测试未验证四字段全等 | 重写：替换后**显式测量四分量是否全等**；全等（如 Linux inode 复用）→ 钉死 documented residual（按自身删除）；不等（如 Windows file id 不复用）→ 断言替换存活 + `RECOVERY_UNCERTAIN`。测试名与结论不再超出实际验证范围 | `test_atomic_create_failure_fingerprint_collision_documents_residual`（条件断言 + 显式测量，两种平台结果都有断言） |
 
-追加后状态：`python -m pytest -q` → **103 passed**（80 基线 + 23 加固回归）；`eval` 18/18。代码提交：`1c3e594`（P0）→ `a98741a`（P2）→ `5c69e34`（P1 三合一）→ `346561d`（P3）。
+追加后状态：`python -m pytest -q` → **103 passed**（80 基线 + 23 加固回归）；`eval` 18/18。代码提交：`1c3e594`（P0）→ `a98741a`（P2）→ `5c69e34`（P1 三合一）→ `346561d`（P3）→ `a6c75a0`（碰撞分支异常预期修正）。
+
+**CI 跨平台差异记录（如实）**：首轮推送（`6c71888`）Ubuntu 失败（[run 41297593358](https://github.com/hejinlin0824/jinlin-agent/actions/runs/41297593358)）——指纹碰撞测试在 Ubuntu（ext4，inode 复用成立）走碰撞分支，而该分支重抛的是 fsync 的**原始 OSError**，测试却只捕获 `AgentError`；Windows（file id 不复用）走保留分支故本地通过。修正为碰撞分支断言"原始失败浮出 + 替换被删"、保留分支断言 `RECOVERY_UNCERTAIN` + 替换存活（`a6c75a0`）。修正后最终 CI：[run，`a6c75a0`] Windows + Ubuntu 均 **success**。注意：碰撞分支下"删除路径上具有完整同指纹的替换文件"这一行为，目前仅在 Ubuntu（inode 复用）上被真实执行过；Windows 因 file id 不复用从未走到该分支。
 
 ---
 
