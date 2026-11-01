@@ -1350,20 +1350,21 @@ def test_delete_backup_replaced_and_original_path_claimed_creates_rescue(tmp_pat
     ctx.state.read_hashes["doomed.py"] = sha(doomed.read_bytes())
     ctx.state.read_hashes["other.py"] = sha(other.read_bytes())
     real_atomic = patch_mod.atomic_write
-    real_link = os.link
+    real_write_exclusive = patch_mod._write_exclusive
 
     def failing_second(path, data, mode_from=None, expected_sha256=None, create=False):
         raise patch_mod.AgentError("PATCH_CONFLICT", "simulated conflict", source="edit")
 
-    def racing_link(src, dst):
-        # during the rollback restore, an external writer claims the path
-        if Path(dst) == doomed:
+    def claiming_exclusive_write(path, data):
+        # during the rollback reconstruction, an external writer claims the
+        # original path before our O_EXCL create can establish ownership.
+        if Path(path) == doomed:
             doomed.write_bytes(b"external C bytes\n")
-            raise OSError("destination claimed concurrently")
-        return real_link(src, dst)
+            raise FileExistsError("destination claimed concurrently")
+        return real_write_exclusive(path, data)
 
     monkeypatch.setattr(patch_mod, "atomic_write", failing_second)
-    monkeypatch.setattr(patch_mod.os, "link", racing_link)
+    monkeypatch.setattr(patch_mod, "_write_exclusive", claiming_exclusive_write)
     patch = _patch_text(
         "*** Delete File: doomed.py",
         "*** Update File: other.py",
