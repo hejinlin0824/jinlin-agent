@@ -340,7 +340,7 @@ def cmd_clean(args: Any) -> int:
 
 
 def cmd_rescue(args: Any) -> int:
-    from .trash import clean_rescue, list_rescue, recover_rescue, restore_rescue
+    from .trash import clean_rescue, inspect_rescue, list_rescue, recover_rescue, restore_rescue
 
     workspace = Path(args.workspace or ".").expanduser().resolve()
     if args.rescue_action == "recover":
@@ -369,6 +369,26 @@ def cmd_rescue(args: Any) -> int:
         for item in report.get("quarantined", []):
             _print(f"  quarantined evidence (manual inspection required): {item['path']} [{item['kind']}]")
         return 0 if report["status"] in ("dry-run", "applied") and not report["failed"] and not report.get("quarantined") else 2
+    if args.rescue_action == "inspect":
+        report = inspect_rescue(workspace)
+        _print(f"workspace: {workspace}")
+        _print(f"status: {report['status']}")
+        for key, value in report.get("counts", {}).items():
+            _print(f"  {key}: {value}")
+        for item in report.get("transactions", []):
+            _print(f"  transaction {item['txid']}: {item['state']} (last={item.get('last_action')}/{item.get('last_status')})")
+        for item in report.get("stages", []):
+            _print(f"  stage {item['path']}: {item['state']} [{item['integrity']}]")
+        for item in report.get("orphaned", []):
+            _print(f"  orphaned {item['path']} [{item['kind']}]")
+        for item in report.get("quarantined", []):
+            _print(f"  interrupted-cleanup {item['path']} [{item['kind']}]")
+        for item in report.get("issues", []):
+            _print(f"  issue: {item}")
+        if report.get("audit", {}).get("issues"):
+            for item in report["audit"]["issues"]:
+                _print(f"  audit-integrity-error: line {item['line']}: {item['reason']}")
+        return 0 if report["status"] == "ok" else 2
     if args.rescue_action == "list":
         report = list_rescue(workspace)
         _print(f"workspace: {workspace}")
@@ -480,6 +500,9 @@ def build_parser() -> argparse.ArgumentParser:
     rescue_clean.add_argument("--workspace", default=".")
     rescue_clean.add_argument("--apply", action="store_true", help="perform verified cleanup (default: dry run)")
     rescue_clean.set_defaults(func=cmd_rescue)
+    rescue_inspect = rescue_sub.add_parser("inspect", help="read-only consistency and transaction audit report")
+    rescue_inspect.add_argument("--workspace", default=".")
+    rescue_inspect.set_defaults(func=cmd_rescue)
 
     ev = sub.add_parser("eval", help="run the harness conformance / evaluation suite")
     ev.add_argument("--suite", default="all", choices=["all", "hcs", "e1e8"])
