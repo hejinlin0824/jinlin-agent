@@ -976,11 +976,16 @@ def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
         if not apply:
             _audit_result(workspace, action, {"status": "dry-run"}, rescue=item.get("rescue"),
                           target=item.get("target"), stage=item.get("stage"), sha256=item.get("sha256"))
+    eligible_by_rescue = {item.get("rescue"): item for item in result.get("eligible", [])}
     for path in result.get("removed", []):
-        _audit_result(workspace, "clean", {"status": "removed"}, rescue=path)
+        item = eligible_by_rescue.get(path, {})
+        _audit_result(workspace, "clean", {"status": "removed"}, rescue=path,
+                      target=item.get("target"), stage=item.get("stage"), sha256=item.get("sha256"))
     for item in result.get("failed", []):
+        eligible = eligible_by_rescue.get(item.get("rescue"), {})
         _audit_result(workspace, "clean", {"status": "cleanup-blocked", "detail": item.get("reason")},
-                      rescue=item.get("rescue"))
+                      rescue=item.get("rescue"), target=eligible.get("target"),
+                      stage=eligible.get("stage"), sha256=eligible.get("sha256"))
     return result
 
 
