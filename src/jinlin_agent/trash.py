@@ -588,13 +588,6 @@ def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
             fd = os.open(stage, flags, 0o600)
         except FileExistsError:
             return {"status": "staged", "detail": "another recovery attempt created the staging path; run rescue recover"}
-        # Persist the newly-created staging directory entry where the
-        # platform exposes a directory fsync barrier, before publication.
-        stage_dir_sync = _fsync_directory(stage.parent)
-        if stage_dir_sync["supported"] and not stage_dir_sync["synced"]:
-            return {"status": "incomplete", "target": orig, "rescue": rescue_rel,
-                    "stage": _relative_posix(stage, workspace), "sha256": digest,
-                    "detail": stage_dir_sync["detail"] + "; stage and rescue retained"}
         try:
             view = memoryview(data)
             while view:
@@ -608,6 +601,13 @@ def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
                     "sha256": digest, "detail": f"staging write/fsync failed ({exc}); stage and rescue retained for inspection"}
         finally:
             os.close(fd)
+        # Data must be fsynced before syncing the directory entry; if this
+        # barrier fails, retain a complete stage that a later recover can retry.
+        stage_dir_sync = _fsync_directory(stage.parent)
+        if stage_dir_sync["supported"] and not stage_dir_sync["synced"]:
+            return {"status": "incomplete", "target": orig, "rescue": rescue_rel,
+                    "stage": _relative_posix(stage, workspace), "sha256": digest,
+                    "detail": stage_dir_sync["detail"] + "; complete stage and rescue retained"}
         published = _publish_restore_stage(stage, dest, digest)
         published.update({"target": orig, "rescue": rescue_rel, "stage": _relative_posix(stage, workspace), "sha256": digest})
         return published
