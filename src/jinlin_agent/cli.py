@@ -339,6 +339,31 @@ def cmd_clean(args: Any) -> int:
     return 0
 
 
+def cmd_rescue(args: Any) -> int:
+    from .trash import list_rescue, restore_rescue
+
+    workspace = Path(args.workspace or ".").expanduser().resolve()
+    if args.rescue_action == "list":
+        report = list_rescue(workspace)
+        _print(f"workspace: {workspace}")
+        _print(f"status: {report['status']}")
+        _print(f"verified rescue files: {len(report['rescued'])}")
+        for item in report["rescued"]:
+            _print(f"  {item['path']} -> {item['orig']} ({item['size']} bytes, sha256={item['sha256']})")
+        _print(f"unrecognized rescue files: {len(report['unrecognized'])}")
+        for item in report["unrecognized"]:
+            _print(f"  {item['path']} (not verified; do not restore automatically)")
+        return 0 if report["status"] == "ok" else 2
+    result = restore_rescue(workspace, args.path)
+    _print(f"status: {result['status']}")
+    _print(result.get("detail", ""))
+    if result.get("target"):
+        _print(f"restored: {result['target']}")
+        _print(f"rescue copy retained: {result['rescue']}")
+        _print(f"sha256: {result['sha256']}")
+    return 0 if result["status"] == "restored" else 2
+
+
 def cmd_eval(args: Any) -> int:
     from .evalkit import run_suite
 
@@ -408,6 +433,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="remove the provable leftovers (default: dry run; unrecognized files are never removed)",
     )
     clean.set_defaults(func=cmd_clean)
+
+    rescue = sub.add_parser("rescue", help="inspect and safely restore preserved original files")
+    rescue_sub = rescue.add_subparsers(dest="rescue_action", required=True)
+    rescue_list = rescue_sub.add_parser("list", help="list manifest- and SHA-256-verified rescue files")
+    rescue_list.add_argument("--workspace", default=".")
+    rescue_list.set_defaults(func=cmd_rescue)
+    rescue_restore = rescue_sub.add_parser("restore", help="restore a rescue file without overwriting its target")
+    rescue_restore.add_argument("path", help="workspace-relative rescue path shown by rescue list")
+    rescue_restore.add_argument("--workspace", default=".")
+    rescue_restore.set_defaults(func=cmd_rescue)
 
     ev = sub.add_parser("eval", help="run the harness conformance / evaluation suite")
     ev.add_argument("--suite", default="all", choices=["all", "hcs", "e1e8"])
