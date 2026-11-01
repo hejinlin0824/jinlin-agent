@@ -797,3 +797,31 @@ def test_rescue_directory_fsync_reports_platform_boundary(tmp_path):
     else:
         assert result["supported"] is True
         assert result["synced"] is True
+
+
+
+def test_rescue_cli_clean_requires_explicit_apply(tmp_path, capsys):
+    from jinlin_agent.cli import main
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".cli-clean.py.jinlin-rescue-01020319", b"cli clean")
+    record_trash(tmp_path, rescue, "cli-clean.py", "rescue")
+    assert trash_mod.restore_rescue(tmp_path, rescue.name)["status"] == "restored"
+
+    assert main(["rescue", "clean", "--workspace", str(tmp_path)]) == 0
+    assert rescue.exists()
+    assert "eligible: 1" in capsys.readouterr().out
+
+    assert main(["rescue", "clean", "--apply", "--workspace", str(tmp_path)]) == 0
+    assert not rescue.exists()
+    assert (tmp_path / "cli-clean.py").read_bytes() == b"cli clean"
+
+
+def test_rescue_cli_recover_returns_nonzero_for_orphan_stage(tmp_path, capsys):
+    from jinlin_agent.cli import main
+
+    orphan = tmp_path / ".lost.py.jinlin-restore-fedcba9876543210"
+    orphan.write_bytes(b"orphan")
+    assert main(["rescue", "recover", "--workspace", str(tmp_path)]) == 2
+    assert "orphaned:" in capsys.readouterr().out
+    assert orphan.read_bytes() == b"orphan"
