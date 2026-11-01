@@ -63,18 +63,18 @@ def _relative_posix(path: Path, workspace: Path) -> str:
 
 
 def link_no_clobber(source: Path, dest: Path) -> bool:
-    """Move ``source`` onto ``dest`` without ever replacing an entry: ``os.link``
-    creates ``dest`` only when absent, then the redundant source name is
-    dropped. Returns False — keeping ``source`` intact — when ``dest`` is
-    occupied or the filesystem cannot hard-link."""
+    """Create ``dest`` as a no-clobber hard link to ``source``.
+
+    The source name is deliberately retained. Unlinking it after a successful
+    link would introduce a second path-replacement race: another process could
+    replace the source name between ``link`` and ``unlink``, causing this
+    helper to delete an object it never linked. Callers may later clean the
+    retained quarantine name through the normal manifest/identity workflow.
+    Returns False when ``dest`` is occupied or hard links are unsupported."""
     try:
         os.link(source, dest)
     except OSError:
         return False
-    try:
-        os.unlink(source)
-    except OSError:
-        pass
     return True
 
 
@@ -330,10 +330,14 @@ def clean_trash(workspace: Path, apply: bool = False) -> dict[str, Any]:
                     {
                         "name": entry["name"],
                         "path": entry["path"],
-                        "error": "ownership no longer provable (manifest or file identity mismatch); object restored",
+                        "error": (
+                            "ownership no longer provable (manifest or file identity mismatch); "
+                            "object linked back without overwrite; quarantine evidence retained"
+                        ),
                     }
                 )
-                forget_trash(workspace, base_abs)  # the stale record describes nothing anymore
+                if not forget_trash(workspace, base_abs):
+                    report["manifest_degraded"].append(entry["path"])
                 continue
             # 4. proven ours: delete the verified object (in quarantine)
             try:
