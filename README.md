@@ -80,6 +80,7 @@ jinlin-agent rescue restore <rescue-path> --workspace .  # 暂存后原子无覆
 jinlin-agent rescue recover --workspace .                # 检查并恢复中断的暂存事务
 jinlin-agent rescue clean --workspace .                  # 预览可安全清理的冗余证据
 jinlin-agent rescue clean --apply --workspace .          # 显式清理已验证的 stage / Rescue 副本
+jinlin-agent rescue inspect --workspace .                # 只读检查事务状态、审计链和遗留证据
 ```
 
 安装为命令行（可选）：
@@ -273,3 +274,18 @@ python -m jinlin_agent eval --suite all
 ```
 
 约定：零第三方运行时依赖；所有副作用必须落事件；工具必须返回可序列化结果；先写测试再改行为。
+
+
+### Rescue 事务审计与一键验收
+
+每次 Rescue restore / recover / clean 都会尝试向 `.jinlin/rescue-audit.jsonl` 追加一条带 SHA-256 hash chain 的审计事件。审计日志是追加式证据，不是恢复数据的权威来源；日志损坏时系统会报告完整性问题并拒绝继续追加，不会自动修复或覆盖旧日志。
+
+`rescue inspect` 是只读检查命令，汇总已验证 Rescue、暂存文件、孤立暂存、清理中断 quarantine、事务状态和审计链完整性。事务状态由审计事件投影得到：`STAGED`、`PUBLISHED`、`CONFLICT`、`UNCERTAIN`、`ORPHANED`、`CLEANED` 等；它不替代文件内容与 manifest 的实际校验。
+
+Windows 一键验收：
+
+```powershell
+.\test-all.bat
+```
+
+也可以在 PowerShell 中运行 `.scripts\test-all.ps1`。脚本会安装 editable dev 依赖、执行全量 pytest、Harness eval，并在系统临时目录创建隔离工作区执行 Rescue 生命周期 smoke test。不会在当前仓库里创建或删除测试 Rescue 文件。日志写入系统临时目录。
