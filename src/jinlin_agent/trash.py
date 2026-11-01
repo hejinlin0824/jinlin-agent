@@ -398,7 +398,8 @@ def list_rescue(workspace: Path) -> dict[str, Any]:
                     valid = False
                     data = b""
                 item = {"path": rel, "orig": str(entry.get("orig")) if entry else match.group("orig"),
-                        "size": len(data), "sha256": hashlib.sha256(data).hexdigest() if valid else None}
+                        "size": len(data), "sha256": hashlib.sha256(data).hexdigest() if valid else None,
+                        "integrity": ("sha256" if isinstance(ident, dict) and ident.get("sha256") else "legacy-stat") if valid else "unverified"}
                 (report["rescued"] if valid else report["unrecognized"]).append(item)
         report["rescued"].sort(key=lambda x: x["path"])
         report["unrecognized"].sort(key=lambda x: x["path"])
