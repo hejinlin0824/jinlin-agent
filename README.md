@@ -6,7 +6,7 @@
 > CLI 直接可用，不是演示脚本：每条"完成"都有可复查的证据。
 
 📄 完整技术报告 + 产品手册（含评分建议与 DSH/ZCode 基线对比）：[`docs/REPORT-AND-HANDBOOK.md`](docs/REPORT-AND-HANDBOOK.md)
-🤖 Agent 自述（可移植的 agent 契约 / handoff 说明）：[`AGENT.md`](AGENT.md)
+🤖 **项目交接手册（接手 AI 必读）**：[`AGENT.md`](AGENT.md) — 背景、当前状态、三轮评审、架构细节、操作手册、待修 P1、踩坑清单
 🛠 独立评审响应与整改记录：[`docs/REVIEW-RESPONSE.md`](docs/REVIEW-RESPONSE.md)
 📋 整改提交报告（供审查）：[`docs/REVIEW-SUBMISSION.md`](docs/REVIEW-SUBMISSION.md)
 
