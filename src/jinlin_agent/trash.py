@@ -38,6 +38,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -431,37 +432,100 @@ def _safe_rescue_target(workspace: Path, orig: str) -> tuple[Path | None, str | 
     return dest, None
 
 
+def _fsync_directory(directory: Path) -> dict[str, Any]:
+    """Best-effort directory-entry durability barrier.
+
+    POSIX filesystems generally support fsync on directory descriptors.
+    Python's portable Windows APIs do not expose an equivalent directory
+    handle flush, so Windows is reported as an explicit unsupported boundary.
+    """
+    if os.name == "nt":
+        return {"supported": False, "synced": False, "detail": "directory fsync is not exposed by the portable Windows API"}
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        fd = os.open(directory, flags)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return {"supported": True, "synced": True, "detail": "parent directory fsynced"}
+    except OSError as exc:
+        return {"supported": True, "synced": False, "detail": f"parent directory fsync failed: {exc}"}
+
+
+def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return (left.st_dev, left.st_ino, left.st_size, left.st_mtime_ns) == (
+        right.st_dev, right.st_ino, right.st_size, right.st_mtime_ns
+    )
+
+
 def _publish_restore_stage(stage: Path, dest: Path, digest: str) -> dict[str, Any]:
-    """Publish a fully verified stage with atomic no-clobber hard-link creation."""
+    """Verify an opened regular stage, fsync it, then publish without clobbering.
+
+    File-descriptor identity checks narrow path replacement races. The final
+    path-based hard-link operation still has a small cross-platform TOCTOU
+    window against hostile same-user processes; this is not claimed as a
+    security boundary against such an attacker.
+    """
     if dest.is_symlink():
         return {"status": "conflict", "detail": "target is a symlink; stage and rescue retained"}
+    flags_read = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags_sync = os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    read_fd = sync_fd = None
     try:
-        if stage.is_symlink():
-            return {"status": "unrecognized", "detail": "staging path is a symlink; not followed"}
-        data = stage.read_bytes()
-        if hashlib.sha256(data).hexdigest() != digest:
+        read_fd = os.open(stage, flags_read)
+        sync_fd = os.open(stage, flags_sync)
+        read_st = os.fstat(read_fd)
+        sync_st = os.fstat(sync_fd)
+        path_st = os.stat(stage, follow_symlinks=False)
+        if not stat.S_ISREG(read_st.st_mode) or not _same_file_identity(read_st, sync_st) or not _same_file_identity(read_st, path_st):
+            return {"status": "unrecognized", "detail": "staging path is not a stable regular file; retained"}
+        if read_st.st_nlink != 1:
+            return {"status": "uncertain", "detail": "staging file has unexpected hard links; retained for inspection"}
+        chunks = []
+        while True:
+            chunk = os.read(read_fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        if hashlib.sha256(b"".join(chunks)).hexdigest() != digest:
             return {"status": "incomplete", "detail": "staging file does not match the rescue SHA-256; retained for inspection"}
-        # Open with write access: Windows _commit/fsync rejects a read-only
-        # descriptor even when the intent is only to flush existing data.
-        # Recovery re-establishes the durability barrier before publication.
-        with stage.open("ab") as fh:
-            fh.flush()
-            os.fsync(fh.fileno())
-    except OSError as exc:
-        return {"status": "uncertain", "detail": f"staging file could not be verified/fsynced: {exc}"}
-    try:
-        os.link(stage, dest)
-    except FileExistsError:
+        if not _same_file_identity(read_st, os.fstat(sync_fd)) or not _same_file_identity(read_st, os.stat(stage, follow_symlinks=False)):
+            return {"status": "uncertain", "detail": "staging path changed during verification; retained"}
+        os.fsync(sync_fd)
+        if not _same_file_identity(read_st, os.stat(stage, follow_symlinks=False)):
+            return {"status": "uncertain", "detail": "staging path changed before publication; retained"}
         try:
-            existing = dest.read_bytes()
+            os.link(stage, dest)
+        except FileExistsError:
+            try:
+                existing = dest.read_bytes()
+            except OSError as exc:
+                return {"status": "conflict", "detail": f"target exists but cannot be verified ({exc}); stage and rescue retained"}
+            if hashlib.sha256(existing).hexdigest() == digest and not dest.is_symlink():
+                return {"status": "already-published", "detail": "target already contains the verified bytes; staging and rescue retained"}
+            return {"status": "conflict", "detail": "target exists with different content; staging and rescue retained"}
         except OSError as exc:
-            return {"status": "conflict", "detail": f"target exists but cannot be verified ({exc}); stage and rescue retained"}
-        if hashlib.sha256(existing).hexdigest() == digest:
-            return {"status": "already-published", "detail": "target already contains the verified bytes; staging and rescue retained"}
-        return {"status": "conflict", "detail": "target exists with different content; staging and rescue retained"}
+            return {"status": "staged", "detail": f"verified staging file is ready but atomic no-clobber publish failed ({exc}); run rescue recover later"}
+        try:
+            published_st = os.stat(dest, follow_symlinks=False)
+            if not _same_file_identity(read_st, published_st):
+                return {"status": "uncertain", "detail": "published entry identity differs from the verified stage; preserve all evidence and inspect manually"}
+        except OSError as exc:
+            return {"status": "uncertain", "detail": f"published entry could not be identity-checked: {exc}"}
+        directory_sync = _fsync_directory(dest.parent)
+        if directory_sync["supported"] and not directory_sync["synced"]:
+            return {"status": "published-not-durable", "detail": directory_sync["detail"] + "; target is present, stage and rescue retained"}
+        if not directory_sync["supported"]:
+            return {"status": "restored", "detail": "verified stage atomically published; Windows directory-entry durability is best-effort and not confirmed"}
+        return {"status": "restored", "detail": "verified stage atomically published and parent directory fsynced"}
     except OSError as exc:
-        return {"status": "staged", "detail": f"verified staging file is ready but atomic no-clobber publish failed ({exc}); run rescue recover later"}
-    return {"status": "restored", "detail": "verified staging file atomically published; staging and rescue sources retained"}
+        return {"status": "uncertain", "detail": f"staging file could not be safely verified/fsynced: {exc}"}
+    finally:
+        if read_fd is not None:
+            os.close(read_fd)
+        if sync_fd is not None:
+            os.close(sync_fd)
 
 
 def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
@@ -516,6 +580,13 @@ def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
             fd = os.open(stage, flags, 0o600)
         except FileExistsError:
             return {"status": "staged", "detail": "another recovery attempt created the staging path; run rescue recover"}
+        # Persist the newly-created staging directory entry where the
+        # platform exposes a directory fsync barrier, before publication.
+        stage_dir_sync = _fsync_directory(stage.parent)
+        if stage_dir_sync["supported"] and not stage_dir_sync["synced"]:
+            return {"status": "incomplete", "target": orig, "rescue": rescue_rel,
+                    "stage": _relative_posix(stage, workspace), "sha256": digest,
+                    "detail": stage_dir_sync["detail"] + "; stage and rescue retained"}
         try:
             view = memoryview(data)
             while view:
