@@ -644,7 +644,7 @@ def test_rescue_recover_refuses_symlink_target(tmp_path):
 
     outside = tmp_path.parent / (tmp_path.name + "-outside-target")
     outside.write_bytes(b"same payload")
-    rescue = _mk_trash(tmp_path, ".symlink-target.py.jinlin-rescue-01020312", b"same payload")
+    rescue = _mk_trash(tmp_path, ".restored.py.jinlin-rescue-01020312", b"same payload")
     record_trash(tmp_path, rescue, "restored.py", "rescue")
     stage = trash_mod._restore_stage_path(tmp_path / "restored.py", sha(b"same payload"))
     stage.write_bytes(b"same payload")
