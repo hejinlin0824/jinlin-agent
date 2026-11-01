@@ -349,7 +349,7 @@ def cmd_rescue(args: Any) -> int:
         _print(f"status: {report['status']}")
         _print(f"verified rescue files: {len(report['rescued'])}")
         for item in report["rescued"]:
-            _print(f"  {item['path']} -> {item['orig']} ({item['size']} bytes, sha256={item['sha256']})")
+            _print(f"  {item['path']} -> {item['orig']} ({item['size']} bytes, {item['integrity']}, sha256={item['sha256']})")
         _print(f"unrecognized rescue files: {len(report['unrecognized'])}")
         for item in report["unrecognized"]:
             _print(f"  {item['path']} (not verified; do not restore automatically)")
