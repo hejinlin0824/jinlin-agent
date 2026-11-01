@@ -488,3 +488,89 @@ def test_legacy_rescue_manifest_remains_discoverable_and_restorable(tmp_path):
     assert restored["status"] == "restored"
     assert (tmp_path / "legacy.py").read_bytes() == b"legacy original"
     assert rescue.exists()
+
+
+
+def test_rescue_scan_handles_unreadable_file_without_unbound_identity(tmp_path, monkeypatch):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".unreadable.py.jinlin-rescue-01020304", b"evidence")
+    record_trash(tmp_path, rescue, "unreadable.py", "rescue")
+    real_read_bytes = Path.read_bytes
+
+    def denied(path):
+        if path == rescue:
+            raise PermissionError("simulated sharing violation")
+        return real_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", denied)
+    report = trash_mod.list_rescue(tmp_path)
+    assert report["rescued"] == []
+    assert [x["path"] for x in report["unrecognized"]] == [rescue.name]
+    # Exercise the lock-already-held scan used by restore as well.
+    report2 = trash_mod.list_rescue_unlocked(tmp_path)
+    assert report2["rescued"] == []
+    assert [x["path"] for x in report2["unrecognized"]] == [rescue.name]
+
+
+def test_rescue_restore_zero_progress_is_uncertain_and_preserves_source(tmp_path, monkeypatch):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".stalled.py.jinlin-rescue-01020305", b"original payload")
+    record_trash(tmp_path, rescue, "stalled.py", "rescue")
+    monkeypatch.setattr(trash_mod.os, "write", lambda fd, data: 0)
+
+    result = trash_mod.restore_rescue(tmp_path, rescue.name)
+    assert result["status"] == "uncertain"
+    assert (tmp_path / "stalled.py").exists()
+    assert (tmp_path / "stalled.py").read_bytes() == b""
+    assert rescue.read_bytes() == b"original payload"
+    # Retry must refuse to overwrite the partial evidence.
+    retry = trash_mod.restore_rescue(tmp_path, rescue.name)
+    assert retry["status"] == "conflict"
+    assert rescue.read_bytes() == b"original payload"
+
+
+def test_rescue_restore_fsync_failure_is_uncertain_and_retry_safe(tmp_path, monkeypatch):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".sync.py.jinlin-rescue-01020306", b"original payload")
+    record_trash(tmp_path, rescue, "sync.py", "rescue")
+    monkeypatch.setattr(trash_mod.os, "fsync", lambda fd: (_ for _ in ()).throw(OSError("simulated fsync failure")))
+
+    result = trash_mod.restore_rescue(tmp_path, rescue.name)
+    assert result["status"] == "uncertain"
+    assert (tmp_path / "sync.py").read_bytes() == b"original payload"
+    assert rescue.read_bytes() == b"original payload"
+    retry = trash_mod.restore_rescue(tmp_path, rescue.name)
+    assert retry["status"] == "conflict"
+
+
+def test_rescue_restore_repeated_after_success_is_non_destructive(tmp_path):
+    from jinlin_agent.trash import restore_rescue
+
+    rescue = _mk_trash(tmp_path, ".repeat.py.jinlin-rescue-01020307", b"original")
+    record_trash(tmp_path, rescue, "repeat.py", "rescue")
+    first = restore_rescue(tmp_path, rescue.name)
+    second = restore_rescue(tmp_path, rescue.name)
+    assert first["status"] == "restored"
+    assert second["status"] == "conflict"
+    assert (tmp_path / "repeat.py").read_bytes() == b"original"
+    assert rescue.read_bytes() == b"original"
+
+
+def test_rescue_restore_rejects_symlink_parent_escape(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    try:
+        (tmp_path / "linked").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("directory symlinks unavailable on this platform")
+    rescue = _mk_trash(tmp_path, ".payload.py.jinlin-rescue-01020308", b"original")
+    record_trash(tmp_path, rescue, "linked/payload.py", "rescue")
+    result = trash_mod.restore_rescue(tmp_path, rescue.name)
+    assert result["status"] == "rejected"
+    assert not (outside / "payload.py").exists()
+    assert rescue.read_bytes() == b"original"
