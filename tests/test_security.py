@@ -1039,3 +1039,119 @@ def test_delete_backup_vanished_before_cleanup_is_not_an_error(tmp_path, monkeyp
     assert not result.extra.get("cleanup_deferred"), "a vanished backup is not deferred cleanup"
     assert not list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
 
+
+# ------------------------------------------------------------------ P3 create-cleanup boundary matrix (batch 2)
+
+
+def _armed_create_failure_hooks(monkeypatch):
+    """Shared rig: the exclusive create succeeds, then fsync fails; the test
+    decides what the world looks like when the cleanup ownership stat runs
+    (the second stat of the target after the failure)."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    state: dict[str, Any] = {
+        "failed": False, "seen": 0, "on_cleanup_stat": None, "target": None, "real_stat": os.stat,
+    }
+
+    def failing_fsync(fd):
+        state["failed"] = True
+        raise OSError("simulated mid-write failure")
+
+    def racing_stat(path, *args, **kwargs):
+        real_stat = state["real_stat"]
+        st = real_stat(path, *args, **kwargs)
+        if state["failed"] and state["target"] is not None and Path(path) == state["target"]:
+            state["seen"] += 1
+            # the identity fingerprint is taken via fstat(fd), so the FIRST
+            # stat of the target after the failure is the ownership check in
+            # cleanup — exactly where an external writer slips the swap in
+            if state["seen"] >= 1 and state["on_cleanup_stat"] is not None:
+                replacement = state["on_cleanup_stat"](path)
+                if replacement is not None:
+                    return replacement
+        return st
+
+    monkeypatch.setattr(patch_mod.os, "fsync", failing_fsync)
+    monkeypatch.setattr(patch_mod.os, "stat", racing_stat)
+    return state
+
+
+def test_atomic_create_failure_replaced_same_size_is_not_unlinked(tmp_path, monkeypatch):
+    """P3 boundary: an external replacement can reuse the freed inode and even
+    match the original byte size — the fingerprint's size+mtime_ns components
+    must still tell the two files apart, so the replacement survives."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    target = tmp_path / "new.py"
+    our_data = b"created by agent\n"  # 17 bytes
+    assert len(our_data) == 17
+    state = _armed_create_failure_hooks(monkeypatch)
+    state["target"] = target
+
+    real_stat = state["real_stat"]
+
+    def claim_same_size(path):
+        os.unlink(path)
+        target.write_bytes(b"external 17 byte")  # same size, different mtime
+        return real_stat(path)
+
+    state["on_cleanup_stat"] = claim_same_size
+    with pytest.raises(AgentError) as excinfo:
+        patch_mod.atomic_write(target, our_data, create=True)
+    assert excinfo.value.code == "RECOVERY_UNCERTAIN"
+    assert target.exists() and target.read_bytes() == b"external 17 byte", (
+        "a same-size replacement with a different mtime must not be deleted by name"
+    )
+
+
+def test_atomic_create_failure_fingerprint_collision_documents_residual(tmp_path, monkeypatch):
+    """P3 boundary (documented residual): an adversary who replicates the full
+    stat fingerprint (size AND mtime_ns) is outside the threat model — the
+    helper then treats the path as ours and deletes it, and the original
+    failure surfaces. This pins the honest limit of a stat-based identity
+    instead of claiming atomic identity deletion."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    target = tmp_path / "new.py"
+    our_data = b"created by agent\n"
+    state = _armed_create_failure_hooks(monkeypatch)
+    state["target"] = target
+
+    real_stat = state["real_stat"]
+
+    def claim_identical_fingerprint(path):
+        # capture the fingerprint of the file as it stands (ours), then swap
+        # in a replacement carrying that exact fingerprint
+        st = real_stat(path)
+        target.write_bytes(our_data)  # same bytes → same size
+        os.utime(target, ns=(st.st_mtime_ns, st.st_mtime_ns))
+        return real_stat(path)
+
+    state["on_cleanup_stat"] = claim_identical_fingerprint
+    with pytest.raises(OSError):
+        patch_mod.atomic_write(target, our_data, create=True)
+    assert not target.exists(), (
+        "documented residual: an identical stat fingerprint is indistinguishable from our file"
+    )
+
+
+def test_atomic_create_failure_vanished_path_is_reported_uncertain(tmp_path, monkeypatch):
+    """P3 boundary: the file is deleted externally before the ownership check
+    and never recreated — nothing is deleted by name and the outcome is
+    RECOVERY_UNCERTAIN."""
+    import jinlin_agent.tools.patch as patch_mod
+
+    target = tmp_path / "new.py"
+    state = _armed_create_failure_hooks(monkeypatch)
+    state["target"] = target
+
+    def vanish(path):
+        os.unlink(path)
+        raise FileNotFoundError(path)  # the name is gone when the check runs
+
+    state["on_cleanup_stat"] = vanish
+    with pytest.raises(AgentError) as excinfo:
+        patch_mod.atomic_write(target, b"created by agent", create=True)
+    assert excinfo.value.code == "RECOVERY_UNCERTAIN"
+    assert not target.exists()
+
