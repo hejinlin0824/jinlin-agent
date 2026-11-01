@@ -202,9 +202,19 @@ def _failure_digest(out: RunOutcome) -> str:
     rejections = [
         evt["payload"].get("reasons", []) for evt in out.events if evt.get("type") == "completion.rejected"
     ]
-    parts = [f"status={state.status}", f"error={error.get('code')}: {str(error.get('message', ''))[:160]}"]
+    parts = [f"status={state.status}", f"error={error.get('code')}: {str(error.get('message', ''))[:120]}"]
     if rejections:
         parts.append("last_rejection=" + "; ".join(str(r) for r in rejections[-1][:2]))
+    verifications = []
+    for run in state.verification_runs[-4:]:
+        detail = f"{run.level}={run.status}"
+        if run.exit_code is not None:
+            detail += f"(exit={run.exit_code})"
+        if run.findings:
+            detail += "[" + "; ".join(run.findings[:2])[:200] + "]"
+        verifications.append(detail)
+    if verifications:
+        parts.append("verification=" + " ".join(verifications))
     failed_tools = [
         f"{evt['payload'].get('tool')}:{(evt['payload'].get('error') or {}).get('code')}"
         for evt in out.events
