@@ -379,10 +379,10 @@ def list_rescue(workspace: Path) -> dict[str, Any]:
                 path = Path(root) / name
                 rel = _relative_posix(path, workspace)
                 entry = manifest.get(rel)
+                ident = entry.get("identity") if entry else None
                 try:
                     data = path.read_bytes()
                     st = path.stat()
-                    ident = entry.get("identity") if entry else None
                     valid = (
                         entry is not None
                         and entry.get("kind") == "rescue"
@@ -444,6 +444,7 @@ def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
             fd = os.open(dest, flags, 0o666)
         except FileExistsError:
             return {"status": "conflict", "detail": f"target was claimed concurrently; rescue preserved at {rescue_rel}"}
+        write_error: OSError | None = None
         try:
             view = memoryview(data)
             while view:
@@ -452,13 +453,23 @@ def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
                     raise OSError("write made no forward progress")
                 view = view[count:]
             os.fsync(fd)
-        except BaseException:
-            # Leave any partial destination as evidence; never unlink by name.
-            raise
+        except OSError as exc:
+            write_error = exc
         finally:
             os.close(fd)
-        if hashlib.sha256(dest.read_bytes()).hexdigest() != digest:
-            return {"status": "uncertain", "detail": f"restored target failed SHA-256 verification; rescue preserved at {rescue_rel}"}
+        if write_error is not None:
+            # A partial target is deliberately retained as evidence. The
+            # rescue source remains intact; a retry will refuse to overwrite.
+            return {"status": "uncertain", "target": rel.as_posix(), "rescue": rescue_rel,
+                    "detail": f"restore write/fsync failed ({write_error}); partial target retained, rescue preserved"}
+        try:
+            restored_data = dest.read_bytes()
+        except OSError as exc:
+            return {"status": "uncertain", "target": rel.as_posix(), "rescue": rescue_rel,
+                    "detail": f"restored target could not be re-opened for verification ({exc}); rescue preserved"}
+        if hashlib.sha256(restored_data).hexdigest() != digest:
+            return {"status": "uncertain", "target": rel.as_posix(), "rescue": rescue_rel,
+                    "detail": f"restored target failed SHA-256 verification; rescue preserved at {rescue_rel}"}
         return {"status": "restored", "target": rel.as_posix(), "rescue": rescue_rel, "sha256": digest,
                 "detail": "restore verified; rescue source intentionally retained"}
     finally:
@@ -478,10 +489,10 @@ def list_rescue_unlocked(workspace: Path) -> dict[str, Any]:
             path = Path(root) / name
             rel = _relative_posix(path, workspace)
             entry = manifest.get(rel)
+            ident = entry.get("identity") if entry else None
             try:
                 data = path.read_bytes()
                 st = path.stat()
-                ident = entry.get("identity") if entry else None
                 valid = (entry is not None and entry.get("kind") == "rescue"
                          and Path(str(entry.get("orig", ""))).name == match.group("orig")
                          and isinstance(ident, dict) and st.st_dev == ident.get("dev")
