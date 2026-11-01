@@ -637,3 +637,47 @@ def test_rescue_cli_recover_lists_staged_restore(tmp_path, capsys):
     stage.write_bytes(b"cli payload")
     assert main(["rescue", "recover", "--workspace", str(tmp_path)]) == 0
     assert (tmp_path / "cli-recover.py").read_bytes() == b"cli payload"
+
+
+def test_rescue_recover_refuses_symlink_target(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    outside = tmp_path.parent / (tmp_path.name + "-outside-target")
+    outside.write_bytes(b"same payload")
+    rescue = _mk_trash(tmp_path, ".symlink-target.py.jinlin-rescue-01020312", b"same payload")
+    record_trash(tmp_path, rescue, "restored.py", "rescue")
+    stage = trash_mod._restore_stage_path(tmp_path / "restored.py", sha(b"same payload"))
+    stage.write_bytes(b"same payload")
+    try:
+        (tmp_path / "restored.py").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("file symlinks unavailable on this platform")
+
+    report = trash_mod.recover_rescue(tmp_path)
+    assert report["items"][0]["status"] == "conflict"
+    assert outside.read_bytes() == b"same payload"
+    assert (tmp_path / "restored.py").is_symlink()
+    assert stage.read_bytes() == b"same payload"
+    assert rescue.read_bytes() == b"same payload"
+
+
+def test_rescue_restore_short_writes_are_completed(tmp_path, monkeypatch):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".short.py.jinlin-rescue-01020313", b"short-write-payload")
+    record_trash(tmp_path, rescue, "short.py", "rescue")
+    real_write = trash_mod.os.write
+    calls = {"n": 0}
+
+    def short_write(fd, data):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_write(fd, data[:3])
+        return real_write(fd, data)
+
+    monkeypatch.setattr(trash_mod.os, "write", short_write)
+    result = trash_mod.restore_rescue(tmp_path, rescue.name)
+    assert result["status"] == "restored"
+    assert calls["n"] > 1
+    assert (tmp_path / "short.py").read_bytes() == b"short-write-payload"
+    assert rescue.read_bytes() == b"short-write-payload"
