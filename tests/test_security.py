@@ -825,6 +825,36 @@ def test_open_rejects_mismatched_session_id(tmp_path):
     assert [e["seq"] for e in events] == [1, 2]
 
 
+def test_legacy_log_without_session_id_migrates_on_append(tmp_path):
+    """P2 (batch 2): a log whose events all lack session_id is the documented
+    legacy class — opening it for append is allowed and the appended events
+    carry the opening session's id (the explicit migration path)."""
+    _write_events(tmp_path / "events.jsonl", [_evt(1)])
+    log = EventLog(tmp_path, "sess_x").open()
+    try:
+        log.append("step.started")
+    finally:
+        log.close()
+    events = list(read_events(tmp_path))
+    assert [e["seq"] for e in events] == [1, 2]
+    assert events[1]["session_id"] == "sess_x"  # migrated suffix is attributed
+
+
+def test_mixed_log_attributed_then_unattributed_is_rejected(tmp_path):
+    """P2 (batch 2): once a log carries attributed events, a later event
+    without session_id is a shape our writer can never produce — reading and
+    opening must fail closed instead of silently accepting a mixed log."""
+    first = json.dumps({"schema_version": 1, "seq": 1, "type": "x", "payload": {}, "session_id": "sess_a"})
+    second = json.dumps({"schema_version": 1, "seq": 2, "type": "y", "payload": {}})
+    _write_events(tmp_path / "events.jsonl", [first, second])
+    with pytest.raises(AgentError) as excinfo:
+        list(read_events(tmp_path))
+    assert excinfo.value.code == "SESSION_CORRUPTED"
+    with pytest.raises(AgentError) as excinfo:
+        EventLog(tmp_path, "sess_a").open()
+    assert excinfo.value.code == "SESSION_CORRUPTED"
+
+
 def test_atomic_create_failure_does_not_unlink_replaced_path(tmp_path, monkeypatch):
     """P2-3: when an exclusive create fails midway and the path no longer
     provably holds the file this call created, cleanup must not delete by

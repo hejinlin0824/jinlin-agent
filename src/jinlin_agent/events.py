@@ -211,7 +211,21 @@ def _parse_log_data(data: bytes) -> tuple[list[dict[str, Any]], str]:
         if not isinstance(evt.get("payload", {}), dict):
             raise AgentError(SESSION_CORRUPTED, f"invalid event at line {line_no}: payload must be an object", source="events")
         sid = evt.get("session_id")
-        if sid is not None:
+        if sid is None:
+            # Legacy logs (every event unattributed) and the explicit migration
+            # shape (unattributed prefix, then events attributed to one session)
+            # are the only tolerated attribution layouts. A missing session_id
+            # AFTER an attributed event is a shape this writer can never
+            # produce — reject instead of silently accepting a mixed log.
+            if session_id is not None:
+                raise AgentError(
+                    SESSION_CORRUPTED,
+                    f"session_id missing at line {line_no} after attributed events; "
+                    "a log is either fully unattributed (legacy) or attributed from "
+                    "its first attributed event onward",
+                    source="events",
+                )
+        else:
             if not isinstance(sid, str):
                 raise AgentError(SESSION_CORRUPTED, f"invalid session_id at line {line_no}", source="events")
             if session_id is None:
