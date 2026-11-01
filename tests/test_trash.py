@@ -927,3 +927,17 @@ def test_rescue_inspect_cli_is_read_only_and_reports_audit(tmp_path, capsys):
     assert "PUBLISHED" in output
     assert "audit_events: 1" in output
     assert (tmp_path / ".jinlin" / "rescue-audit.jsonl").read_bytes() == before
+
+
+
+def test_rescue_state_machine_flags_published_to_staged_regression():
+    from jinlin_agent.trash import _transaction_states
+
+    events = [
+        {"txid": "tx-regression", "action": "restore", "status": "restored", "ts": "2026-01-01T00:00:00Z"},
+        {"txid": "tx-regression", "action": "recover", "status": "incomplete", "ts": "2026-01-01T00:01:00Z"},
+    ]
+    states = _transaction_states(events)
+    assert states[0]["state"] == "TRANSITION_INVALID"
+    assert states[0]["transition_issues"][0]["from"] == "PUBLISHED"
+    assert states[0]["transition_issues"][0]["to"] == "STAGED"
