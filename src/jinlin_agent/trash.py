@@ -408,8 +408,58 @@ def list_rescue(workspace: Path) -> dict[str, Any]:
         lock.release()
 
 
+def _restore_stage_path(dest: Path, digest: str) -> Path:
+    """Deterministic sibling staging path, discoverable after process interruption."""
+    return dest.with_name(f".{dest.name}.jinlin-restore-{digest[:16]}")
+
+
+def _safe_rescue_target(workspace: Path, orig: str) -> tuple[Path | None, str | None]:
+    # Manifest paths are POSIX relative paths on every platform. Reject
+    # backslashes and drive/ADS syntax rather than interpreting them differently.
+    if (not orig or chr(92) in orig or ":" in orig or chr(0) in orig
+            or orig.startswith("/") or orig.startswith("//")):
+        return None, "manifest target path is invalid"
+    rel = PurePosixPath(orig)
+    if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
+        return None, "manifest target path is invalid"
+    dest = workspace.joinpath(*rel.parts)
+    try:
+        parent = dest.parent.resolve(strict=True)
+        parent.relative_to(workspace)
+    except (OSError, ValueError):
+        return None, "target parent is missing or outside the workspace"
+    return dest, None
+
+
+def _publish_restore_stage(stage: Path, dest: Path, digest: str) -> dict[str, Any]:
+    """Publish a fully verified stage with atomic no-clobber hard-link creation."""
+    try:
+        if hashlib.sha256(stage.read_bytes()).hexdigest() != digest:
+            return {"status": "incomplete", "detail": "staging file does not match the rescue SHA-256; retained for inspection"}
+    except OSError as exc:
+        return {"status": "uncertain", "detail": f"staging file could not be verified: {exc}"}
+    try:
+        os.link(stage, dest)
+    except FileExistsError:
+        try:
+            existing = dest.read_bytes()
+        except OSError as exc:
+            return {"status": "conflict", "detail": f"target exists but cannot be verified ({exc}); stage and rescue retained"}
+        if hashlib.sha256(existing).hexdigest() == digest:
+            return {"status": "already-published", "detail": "target already contains the verified bytes; staging and rescue retained"}
+        return {"status": "conflict", "detail": "target exists with different content; staging and rescue retained"}
+    except OSError as exc:
+        return {"status": "staged", "detail": f"verified staging file is ready but atomic no-clobber publish failed ({exc}); run rescue recover later"}
+    return {"status": "restored", "detail": "verified staging file atomically published; staging and rescue sources retained"}
+
+
 def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
-    """Restore a verified rescue copy with exclusive-create; never overwrite or consume source."""
+    """Stage, fsync, verify, then atomically publish without clobbering a target.
+
+    A process crash can leave a deterministic sibling staging file. It is
+    never mistaken for a restored target; rescue recover can verify and
+    publish a complete stage, while incomplete stages remain untouched.
+    """
     workspace = Path(workspace).resolve()
     lock = SessionLock(workspace / ".jinlin" / "write.lock")
     try:
@@ -421,30 +471,38 @@ def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
         item = next((x for x in listed["rescued"] if x["path"] == rescue_rel), None)
         if item is None:
             return {"status": "rejected", "detail": "rescue file is missing, unrecognized, or failed manifest/SHA-256 verification"}
-        source = workspace / PurePosixPath(rescue_rel)
         manifest_entry = _load_manifest(workspace).get(rescue_rel)
         orig = str(manifest_entry.get("orig", "")) if manifest_entry else ""
-        rel = PurePosixPath(orig)
-        if not orig or rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
-            return {"status": "rejected", "detail": "manifest target path is invalid"}
-        dest = workspace.joinpath(*rel.parts)
+        dest, error = _safe_rescue_target(workspace, orig)
+        if error or dest is None:
+            return {"status": "rejected", "detail": error or "invalid target"}
+        source = workspace / PurePosixPath(rescue_rel)
         try:
-            parent = dest.parent.resolve(strict=True)
-            parent.relative_to(workspace)
-        except (OSError, ValueError):
-            return {"status": "rejected", "detail": "target parent is missing or outside the workspace"}
-        if dest.is_symlink() or dest.exists():
-            return {"status": "conflict", "detail": f"target already exists; rescue preserved at {rescue_rel}"}
-        data = source.read_bytes()
+            data = source.read_bytes()
+        except OSError as exc:
+            return {"status": "uncertain", "detail": f"rescue source could not be read: {exc}"}
         digest = hashlib.sha256(data).hexdigest()
         if digest != item["sha256"]:
             return {"status": "rejected", "detail": "rescue content changed during restore"}
+        stage = _restore_stage_path(dest, digest)
+        if dest.is_symlink() or dest.exists():
+            try:
+                existing = dest.read_bytes()
+            except OSError:
+                existing = b""
+            if hashlib.sha256(existing).hexdigest() == digest:
+                return {"status": "already-published", "target": orig, "rescue": rescue_rel, "sha256": digest,
+                        "detail": "target already contains the verified bytes; rescue retained"}
+            return {"status": "conflict", "detail": f"target already exists; rescue preserved at {rescue_rel}"}
+        if stage.exists() or stage.is_symlink():
+            published = _publish_restore_stage(stage, dest, digest)
+            published.update({"target": orig, "rescue": rescue_rel, "sha256": digest})
+            return published
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
         try:
-            fd = os.open(dest, flags, 0o666)
+            fd = os.open(stage, flags, 0o600)
         except FileExistsError:
-            return {"status": "conflict", "detail": f"target was claimed concurrently; rescue preserved at {rescue_rel}"}
-        write_error: OSError | None = None
+            return {"status": "staged", "detail": "another recovery attempt created the staging path; run rescue recover"}
         try:
             view = memoryview(data)
             while view:
@@ -454,27 +512,49 @@ def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
                 view = view[count:]
             os.fsync(fd)
         except OSError as exc:
-            write_error = exc
+            return {"status": "incomplete", "target": orig, "rescue": rescue_rel, "stage": _relative_posix(stage, workspace),
+                    "sha256": digest, "detail": f"staging write/fsync failed ({exc}); stage and rescue retained for inspection"}
         finally:
             os.close(fd)
-        if write_error is not None:
-            # A partial target is deliberately retained as evidence. The
-            # rescue source remains intact; a retry will refuse to overwrite.
-            return {"status": "uncertain", "target": rel.as_posix(), "rescue": rescue_rel,
-                    "detail": f"restore write/fsync failed ({write_error}); partial target retained, rescue preserved"}
-        try:
-            restored_data = dest.read_bytes()
-        except OSError as exc:
-            return {"status": "uncertain", "target": rel.as_posix(), "rescue": rescue_rel,
-                    "detail": f"restored target could not be re-opened for verification ({exc}); rescue preserved"}
-        if hashlib.sha256(restored_data).hexdigest() != digest:
-            return {"status": "uncertain", "target": rel.as_posix(), "rescue": rescue_rel,
-                    "detail": f"restored target failed SHA-256 verification; rescue preserved at {rescue_rel}"}
-        return {"status": "restored", "target": rel.as_posix(), "rescue": rescue_rel, "sha256": digest,
-                "detail": "restore verified; rescue source intentionally retained"}
+        published = _publish_restore_stage(stage, dest, digest)
+        published.update({"target": orig, "rescue": rescue_rel, "stage": _relative_posix(stage, workspace), "sha256": digest})
+        return published
     finally:
         lock.release()
 
+
+def recover_rescue(workspace: Path) -> dict[str, Any]:
+    """Reconcile deterministic restore stages against verified rescue sources."""
+    workspace = Path(workspace).resolve()
+    lock = SessionLock(workspace / ".jinlin" / "write.lock")
+    try:
+        lock.acquire()
+    except SessionLockedError:
+        return {"status": "locked", "items": []}
+    try:
+        listed = list_rescue_unlocked(workspace)
+        items: list[dict[str, Any]] = []
+        manifest = _load_manifest(workspace)
+        for rescue in listed["rescued"]:
+            entry = manifest.get(rescue["path"], {})
+            dest, error = _safe_rescue_target(workspace, str(entry.get("orig", "")))
+            if error or dest is None:
+                continue
+            digest = rescue["sha256"]
+            stage = _restore_stage_path(dest, digest)
+            if not stage.exists() and not stage.is_symlink():
+                continue
+            if stage.is_symlink():
+                items.append({"rescue": rescue["path"], "stage": _relative_posix(stage, workspace),
+                              "status": "unrecognized", "detail": "staging path is a symlink; not followed"})
+                continue
+            result = _publish_restore_stage(stage, dest, digest)
+            result.update({"rescue": rescue["path"], "target": str(entry.get("orig", "")),
+                           "stage": _relative_posix(stage, workspace), "sha256": digest})
+            items.append(result)
+        return {"status": "ok", "items": items}
+    finally:
+        lock.release()
 
 def list_rescue_unlocked(workspace: Path) -> dict[str, Any]:
     """Internal scan for callers already holding the workspace write lock."""
