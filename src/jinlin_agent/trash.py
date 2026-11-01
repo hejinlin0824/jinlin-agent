@@ -152,12 +152,24 @@ def _audit_result(workspace: Path, action: str, result: dict[str, Any], **fields
 
 
 def _transaction_states(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project audit events through an explicit lifecycle transition table."""
+    allowed = {
+        "CREATED": {"STAGED", "PUBLISHED", "CONFLICT", "UNCERTAIN", "ORPHANED", "CLEANUP_BLOCKED"},
+        "STAGED": {"STAGED", "PUBLISHED", "CONFLICT", "UNCERTAIN", "CLEANUP_BLOCKED"},
+        "PUBLISHED": {"PUBLISHED", "CLEANED", "CLEANUP_BLOCKED"},
+        "CONFLICT": {"CONFLICT", "PUBLISHED", "UNCERTAIN"},
+        "UNCERTAIN": {"UNCERTAIN", "STAGED", "PUBLISHED", "CLEANUP_BLOCKED"},
+        "ORPHANED": {"ORPHANED", "UNCERTAIN"},
+        "CLEANUP_BLOCKED": {"CLEANUP_BLOCKED", "CLEANED", "PUBLISHED"},
+        "CLEANED": {"CLEANED"},
+        "TRANSITION_INVALID": {"TRANSITION_INVALID"},
+    }
     states: dict[str, dict[str, Any]] = {}
     for event in events:
         txid = str(event.get("txid", ""))
         if not txid:
             continue
-        item = states.setdefault(txid, {"txid": txid, "state": "CREATED", "history": []})
+        item = states.setdefault(txid, {"txid": txid, "state": "CREATED", "history": [], "transition_issues": []})
         status = str(event.get("status", "unknown"))
         action = str(event.get("action", ""))
         if action == "clean" and status == "removed":
@@ -176,6 +188,13 @@ def _transaction_states(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             state = "CLEANUP_BLOCKED"
         else:
             state = item["state"]
+        previous_state = item["state"]
+        if state != previous_state and state not in allowed.get(previous_state, set()):
+            item["transition_issues"].append({
+                "from": previous_state, "to": state, "action": action, "status": status,
+                "reason": "transition is not allowed by the Rescue lifecycle state machine",
+            })
+            state = "TRANSITION_INVALID"
         item["state"] = state
         item["last_action"] = action
         item["last_status"] = status
@@ -1040,6 +1059,10 @@ def inspect_rescue(workspace: Path) -> dict[str, Any]:
         audit = _read_audit(workspace)
         states = _transaction_states(audit["events"])
         issues = list(audit["issues"])
+        for transaction in states:
+            if transaction.get("transition_issues"):
+                issues.append({"kind": "invalid-state-transition", "txid": transaction["txid"],
+                               "details": transaction["transition_issues"]})
         if listed["unrecognized"]:
             issues.append({"kind": "unrecognized-rescue", "count": len(listed["unrecognized"])})
         if orphaned:
