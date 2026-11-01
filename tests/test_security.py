@@ -1385,7 +1385,7 @@ def test_rollback_delete_never_restores_from_backup_path(tmp_path, monkeypatch):
     result = patch_mod.apply_patch(ctx, {"patch": patch})
 
     assert not result.ok
-    assert result.error is not None and result.error.code == "RECOVERY_UNCERTAIN"
+    assert result.error is not None and result.error.code == "PATCH_CONFLICT"
     assert doomed.read_bytes() == original, "the original bytes, not the backup-path replacement, must be restored"
     backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
     assert len(backups) == 1 and backups[0].read_bytes() == replacement, (
