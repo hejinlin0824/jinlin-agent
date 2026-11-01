@@ -681,3 +681,119 @@ def test_rescue_restore_short_writes_are_completed(tmp_path, monkeypatch):
     assert calls["n"] > 1
     assert (tmp_path / "short.py").read_bytes() == b"short-write-payload"
     assert rescue.read_bytes() == b"short-write-payload"
+
+
+
+def test_rescue_recover_reports_orphan_stage_without_publishing_or_deleting(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    orphan = tmp_path / ".ghost.py.jinlin-restore-0123456789abcdef"
+    orphan.write_bytes(b"unclaimed bytes")
+    report = trash_mod.recover_rescue(tmp_path)
+    assert report["status"] == "ok"
+    assert report["items"] == []
+    assert [item["path"] for item in report["orphaned"]] == [orphan.name]
+    assert orphan.read_bytes() == b"unclaimed bytes"
+
+
+def test_rescue_recover_does_not_call_a_verified_stage_orphan(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".known.py.jinlin-rescue-01020314", b"known payload")
+    record_trash(tmp_path, rescue, "known.py", "rescue")
+    stage = trash_mod._restore_stage_path(tmp_path / "known.py", sha(b"known payload"))
+    stage.write_bytes(b"known payload")
+    report = trash_mod.recover_rescue(tmp_path)
+    assert report["items"][0]["status"] == "restored"
+    assert report["orphaned"] == []
+
+
+def test_rescue_clean_is_dry_run_by_default_and_removes_only_verified_evidence(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".cleaned.py.jinlin-rescue-01020315", b"cleanable payload")
+    record_trash(tmp_path, rescue, "cleaned.py", "rescue")
+    restored = trash_mod.restore_rescue(tmp_path, rescue.name)
+    assert restored["status"] == "restored"
+    stage = trash_mod._restore_stage_path(tmp_path / "cleaned.py", sha(b"cleanable payload"))
+
+    preview = trash_mod.clean_rescue(tmp_path)
+    assert preview["status"] == "dry-run"
+    assert len(preview["eligible"]) == 1
+    assert rescue.exists() and stage.exists()
+
+    applied = trash_mod.clean_rescue(tmp_path, apply=True)
+    assert applied["status"] == "applied"
+    assert applied["removed"] == [rescue.name]
+    assert not rescue.exists() and not stage.exists()
+    assert (tmp_path / "cleaned.py").read_bytes() == b"cleanable payload"
+    assert rescue.name not in trash_mod._load_manifest(tmp_path)
+
+
+def test_rescue_clean_refuses_when_restored_target_changed(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".changed.py.jinlin-rescue-01020316", b"original payload")
+    record_trash(tmp_path, rescue, "changed.py", "rescue")
+    assert trash_mod.restore_rescue(tmp_path, rescue.name)["status"] == "restored"
+    (tmp_path / "changed.py").write_bytes(b"external replacement")
+    report = trash_mod.clean_rescue(tmp_path, apply=True)
+    assert report["removed"] == []
+    assert report["failed"]
+    assert rescue.exists()
+
+
+def test_rescue_clean_quarantines_and_verifies_before_unlink(tmp_path, monkeypatch):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".quarantine.py.jinlin-rescue-01020317", b"payload")
+    record_trash(tmp_path, rescue, "quarantine.py", "rescue")
+    assert trash_mod.restore_rescue(tmp_path, rescue.name)["status"] == "restored"
+    real_replace = trash_mod.os.replace
+    swapped = {"done": False}
+
+    def replace_with_swap(src, dst):
+        if Path(src) == rescue and not swapped["done"]:
+            rescue.write_bytes(b"changed after scan")
+            swapped["done"] = True
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(trash_mod.os, "replace", replace_with_swap)
+    report = trash_mod.clean_rescue(tmp_path, apply=True)
+    assert report["failed"]
+    assert not report["removed"]
+    # The mismatching object is preserved in quarantine, not deleted.
+    quarantines = list(tmp_path.glob(".*.jinlin-clean-*"))
+    assert quarantines and quarantines[0].read_bytes() == b"changed after scan"
+
+
+def test_rescue_publish_refuses_unexpected_stage_hardlinks(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".linked.py.jinlin-rescue-01020318", b"linked payload")
+    record_trash(tmp_path, rescue, "linked.py", "rescue")
+    digest = sha(b"linked payload")
+    stage = trash_mod._restore_stage_path(tmp_path / "linked.py", digest)
+    stage.write_bytes(b"linked payload")
+    extra_link = tmp_path / "extra-link"
+    try:
+        os.link(stage, extra_link)
+    except OSError:
+        pytest.skip("hard links unavailable on this filesystem")
+    report = trash_mod.recover_rescue(tmp_path)
+    assert report["items"][0]["status"] == "uncertain"
+    assert not (tmp_path / "linked.py").exists()
+    assert stage.read_bytes() == b"linked payload"
+    assert extra_link.read_bytes() == b"linked payload"
+
+
+def test_rescue_directory_fsync_reports_platform_boundary(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    result = trash_mod._fsync_directory(tmp_path)
+    if os.name == "nt":
+        assert result["supported"] is False
+        assert result["synced"] is False
+    else:
+        assert result["supported"] is True
+        assert result["synced"] is True
