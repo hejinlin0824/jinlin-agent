@@ -53,6 +53,137 @@ MANIFEST_REL = Path(".jinlin") / "trash-manifest.jsonl"
 _SKIP_DIRS = {".git", ".jinlin"}
 
 
+AUDIT_REL = Path(".jinlin") / "rescue-audit.jsonl"
+AUDIT_LOCK_REL = Path(".jinlin") / "rescue-audit.lock"
+
+
+def _audit_path(workspace: Path) -> Path:
+    return Path(workspace) / AUDIT_REL
+
+
+def _read_audit(workspace: Path) -> dict[str, Any]:
+    """Read and verify the append-only, hash-chained rescue audit log."""
+    path = _audit_path(workspace)
+    events: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    previous = "0" * 64
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raw = b""
+    except OSError as exc:
+        return {"events": [], "issues": [{"line": 0, "reason": f"read failed: {exc}"}], "last_hash": previous}
+    for number, line in enumerate(raw.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line.decode("utf-8"))
+            if not isinstance(event, dict):
+                raise ValueError("event is not an object")
+            supplied = event.get("event_hash")
+            body = {key: value for key, value in event.items() if key != "event_hash"}
+            expected = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+            if event.get("prev_hash") != previous:
+                raise ValueError("previous hash does not match")
+            if supplied != expected:
+                raise ValueError("event hash does not match")
+            previous = supplied
+            events.append(event)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            issues.append({"line": number, "reason": str(exc)})
+            # A broken chain is never silently repaired or extended.
+            break
+    return {"events": events, "issues": issues, "last_hash": previous}
+
+
+def _append_audit_event(workspace: Path, action: str, status: str, **fields: Any) -> tuple[bool, str | None]:
+    """Append one fsynced event under a dedicated lock; never rewrite damaged logs."""
+    workspace = Path(workspace)
+    lock = SessionLock(workspace / AUDIT_LOCK_REL)
+    try:
+        lock.acquire()
+    except SessionLockedError:
+        return False, "audit log is locked by another writer"
+    try:
+        audit = _read_audit(workspace)
+        if audit["issues"]:
+            return False, "audit log has integrity issues; refusing to append"
+        identity = "|".join(str(fields.get(key, "")) for key in ("rescue", "target", "sha256"))
+        txid = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+        body = {
+            "version": 1, "ts": utcnow_iso(), "txid": txid,
+            "action": action, "status": status, "prev_hash": audit["last_hash"],
+            **fields,
+        }
+        body["event_hash"] = hashlib.sha256(
+            json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        encoded = (json.dumps(body, sort_keys=True, ensure_ascii=False) + "\\n").encode("utf-8")
+        path = _audit_path(workspace)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o600)
+        try:
+            view = memoryview(encoded)
+            while view:
+                count = os.write(fd, view)
+                if count <= 0:
+                    raise OSError("audit append made no forward progress")
+                view = view[count:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return True, None
+    except OSError as exc:
+        return False, f"audit append failed: {exc}"
+    finally:
+        lock.release()
+
+
+def _audit_result(workspace: Path, action: str, result: dict[str, Any], **fields: Any) -> dict[str, Any]:
+    status = str(result.get("status", "unknown"))
+    event_fields = dict(fields)
+    for key in ("rescue", "target", "stage", "sha256", "detail"):
+        if result.get(key) is not None:
+            event_fields.setdefault(key, result[key])
+    ok, warning = _append_audit_event(workspace, action, status, **event_fields)
+    if not ok:
+        result.setdefault("audit_warnings", []).append(warning or "audit append failed")
+    return result
+
+
+def _transaction_states(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    states: dict[str, dict[str, Any]] = {}
+    for event in events:
+        txid = str(event.get("txid", ""))
+        if not txid:
+            continue
+        item = states.setdefault(txid, {"txid": txid, "state": "CREATED", "history": []})
+        status = str(event.get("status", "unknown"))
+        action = str(event.get("action", ""))
+        if action == "clean" and status == "removed":
+            state = "CLEANED"
+        elif status in ("restored", "already-published"):
+            state = "PUBLISHED"
+        elif status in ("staged", "incomplete"):
+            state = "STAGED"
+        elif status == "conflict":
+            state = "CONFLICT"
+        elif status in ("rejected", "uncertain", "unrecognized", "published-not-durable"):
+            state = "UNCERTAIN"
+        elif status == "orphaned":
+            state = "ORPHANED"
+        elif action == "clean" and status not in ("dry-run", "applied"):
+            state = "CLEANUP_BLOCKED"
+        else:
+            state = item["state"]
+        item["state"] = state
+        item["last_action"] = action
+        item["last_status"] = status
+        item["last_ts"] = event.get("ts")
+        item["history"].append({"action": action, "status": status, "ts": event.get("ts")})
+    return sorted(states.values(), key=lambda item: item["last_ts"] or "")
+
+
 def _manifest_path(workspace: Path) -> Path:
     return Path(workspace) / MANIFEST_REL
 
@@ -537,7 +668,7 @@ def _publish_restore_stage(stage: Path, dest: Path, digest: str) -> dict[str, An
             os.close(sync_fd)
 
 
-def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
+def _restore_rescue_impl(workspace: Path, rescue_rel: str) -> dict[str, Any]:
     """Stage, fsync, verify, then atomically publish without clobbering a target.
 
     A process crash can leave a deterministic sibling staging file. It is
@@ -616,7 +747,7 @@ def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
         lock.release()
 
 
-def recover_rescue(workspace: Path) -> dict[str, Any]:
+def _recover_rescue_impl(workspace: Path) -> dict[str, Any]:
     """Reconcile deterministic restore stages against verified rescue sources."""
     workspace = Path(workspace).resolve()
     lock = SessionLock(workspace / ".jinlin" / "write.lock")
@@ -719,7 +850,7 @@ def _quarantine_and_unlink_verified(
         return False, f"quarantined object could not be safely verified/removed ({exc}); retained at {quarantine.name}"
 
 
-def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
+def _clean_rescue_impl(workspace: Path, apply: bool = False) -> dict[str, Any]:
     """Dry-run or explicitly clean redundant restore evidence.
 
     A Rescue and its stage are eligible only when the restored target is a
@@ -823,6 +954,106 @@ def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
         return report
     finally:
         lock.release()
+
+def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
+    result = _restore_rescue_impl(workspace, rescue_rel)
+    return _audit_result(workspace, "restore", result, rescue=rescue_rel)
+
+
+def recover_rescue(workspace: Path) -> dict[str, Any]:
+    result = _recover_rescue_impl(workspace)
+    for item in result.get("items", []):
+        _audit_result(workspace, "recover", item, rescue=item.get("rescue"), target=item.get("target"))
+    for item in result.get("orphaned", []):
+        _audit_result(workspace, "recover", item, target=item.get("path"))
+    return result
+
+
+def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
+    result = _clean_rescue_impl(workspace, apply=apply)
+    action = "clean" if apply else "clean-preview"
+    for item in result.get("eligible", []):
+        if not apply:
+            _audit_result(workspace, action, {"status": "dry-run"}, rescue=item.get("rescue"),
+                          target=item.get("target"), stage=item.get("stage"), sha256=item.get("sha256"))
+    for path in result.get("removed", []):
+        _audit_result(workspace, "clean", {"status": "removed"}, rescue=path)
+    for item in result.get("failed", []):
+        _audit_result(workspace, "clean", {"status": "cleanup-blocked", "detail": item.get("reason")},
+                      rescue=item.get("rescue"))
+    return result
+
+
+def inspect_rescue(workspace: Path) -> dict[str, Any]:
+    """Read-only consistency report across Rescue, stages, quarantine and audit."""
+    workspace = Path(workspace).resolve()
+    lock = SessionLock(workspace / ".jinlin" / "write.lock")
+    try:
+        lock.acquire()
+    except SessionLockedError:
+        return {"status": "locked"}
+    try:
+        listed = list_rescue_unlocked(workspace)
+        manifest = _load_manifest(workspace)
+        expected: dict[str, dict[str, Any]] = {}
+        for rescue in listed["rescued"]:
+            entry = manifest.get(rescue["path"], {})
+            target, error = _safe_rescue_target(workspace, str(entry.get("orig", "")))
+            if error or target is None:
+                continue
+            stage = _restore_stage_path(target, rescue["sha256"])
+            expected[_relative_posix(stage, workspace)] = {
+                "rescue": rescue["path"], "target": str(entry.get("orig", "")), "sha256": rescue["sha256"]
+            }
+        stages: list[dict[str, Any]] = []
+        orphaned: list[dict[str, Any]] = []
+        quarantined: list[dict[str, Any]] = []
+        for root, dirs, files in os.walk(workspace, followlinks=False):
+            dirs[:] = [name for name in dirs if name not in _SKIP_DIRS]
+            for name in list(files) + list(dirs):
+                path = Path(root) / name
+                rel = _relative_posix(path, workspace)
+                if RESTORE_STAGE_RE.match(name):
+                    item = {"path": rel, "kind": "symlink" if path.is_symlink() else ("directory" if path.is_dir() else "file")}
+                    if rel in expected:
+                        item.update(expected[rel])
+                        item["state"] = "STAGED"
+                        try:
+                            if not path.is_symlink() and path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]:
+                                item["integrity"] = "sha256-valid"
+                            else:
+                                item["integrity"] = "invalid-or-unreadable"
+                        except OSError:
+                            item["integrity"] = "unreadable"
+                        stages.append(item)
+                    else:
+                        item["state"] = "ORPHANED"
+                        orphaned.append(item)
+                if CLEAN_QUARANTINE_RE.match(name):
+                    quarantined.append({"path": rel, "kind": "symlink" if path.is_symlink() else ("directory" if path.is_dir() else "file"),
+                                        "state": "CLEANUP_INTERRUPTED"})
+        audit = _read_audit(workspace)
+        states = _transaction_states(audit["events"])
+        issues = list(audit["issues"])
+        if listed["unrecognized"]:
+            issues.append({"kind": "unrecognized-rescue", "count": len(listed["unrecognized"])})
+        if orphaned:
+            issues.append({"kind": "orphaned-stage", "count": len(orphaned)})
+        if quarantined:
+            issues.append({"kind": "interrupted-cleanup", "count": len(quarantined)})
+        return {
+            "status": "ok" if not issues else "attention-required",
+            "counts": {"verified_rescue": len(listed["rescued"]), "unrecognized_rescue": len(listed["unrecognized"]),
+                       "stages": len(stages), "orphaned_stages": len(orphaned), "quarantined": len(quarantined),
+                       "audit_events": len(audit["events"]), "audit_issues": len(audit["issues"])},
+            "rescued": listed["rescued"], "unrecognized": listed["unrecognized"],
+            "stages": stages, "orphaned": orphaned, "quarantined": quarantined,
+            "transactions": states, "audit": {"path": AUDIT_REL.as_posix(), "last_hash": audit["last_hash"],
+                                               "issues": audit["issues"]}, "issues": issues,
+        }
+    finally:
+        lock.release()
+
 
 def list_rescue_unlocked(workspace: Path) -> dict[str, Any]:
     """Internal scan for callers already holding the workspace write lock."""
