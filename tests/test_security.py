@@ -840,6 +840,31 @@ def test_legacy_log_without_session_id_migrates_on_append(tmp_path):
     assert events[1]["session_id"] == "sess_x"  # migrated suffix is attributed
 
 
+def test_event_with_explicit_null_session_id_is_rejected(tmp_path):
+    """Round-8 P2 strictness: an explicit "session_id": null is not the same
+    as the field being absent — only a missing field enters the legacy rules;
+    a present-but-null id fails closed on read and on open."""
+    first = json.dumps({"schema_version": 1, "seq": 1, "type": "x", "payload": {}})
+    second = json.dumps({"schema_version": 1, "seq": 2, "type": "y", "payload": {}, "session_id": None})
+    _write_events(tmp_path / "events.jsonl", [first, second])
+    with pytest.raises(AgentError) as excinfo:
+        list(read_events(tmp_path))
+    assert excinfo.value.code == "SESSION_CORRUPTED"
+    with pytest.raises(AgentError):
+        EventLog(tmp_path, "sess_a").open()
+
+
+def test_event_with_empty_session_id_is_rejected(tmp_path):
+    """Round-8 P2 strictness: an empty string is not a legal session id."""
+    bad = json.dumps({"schema_version": 1, "seq": 1, "type": "x", "payload": {}, "session_id": ""})
+    _write_events(tmp_path / "events.jsonl", [bad])
+    with pytest.raises(AgentError) as excinfo:
+        list(read_events(tmp_path))
+    assert excinfo.value.code == "SESSION_CORRUPTED"
+    with pytest.raises(AgentError):
+        EventLog(tmp_path, "sess_a").open()
+
+
 def test_mixed_log_attributed_then_unattributed_is_rejected(tmp_path):
     """P2 (batch 2): once a log carries attributed events, a later event
     without session_id is a shape our writer can never produce — reading and

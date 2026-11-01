@@ -210,32 +210,38 @@ def _parse_log_data(data: bytes) -> tuple[list[dict[str, Any]], str]:
             raise AgentError(SESSION_CORRUPTED, f"invalid event at line {line_no}: missing type/seq", source="events")
         if not isinstance(evt.get("payload", {}), dict):
             raise AgentError(SESSION_CORRUPTED, f"invalid event at line {line_no}: payload must be an object", source="events")
-        sid = evt.get("session_id")
-        if sid is None:
-            # Legacy logs (every event unattributed) and the explicit migration
-            # shape (unattributed prefix, then events attributed to one session)
-            # are the only tolerated attribution layouts. A missing session_id
-            # AFTER an attributed event is a shape this writer can never
-            # produce — reject instead of silently accepting a mixed log.
-            if session_id is not None:
+        # Attribution rules (round-8 strictness): only the field's ABSENCE
+        # enters the legacy rules. A present session_id must be a non-empty
+        # string and stay consistent; explicit nulls and empty strings are
+        # corruption, not legacy.
+        if "session_id" in evt:
+            sid = evt["session_id"]
+            if not isinstance(sid, str) or not sid:
                 raise AgentError(
                     SESSION_CORRUPTED,
-                    f"session_id missing at line {line_no} after attributed events; "
-                    "a log is either fully unattributed (legacy) or attributed from "
-                    "its first attributed event onward",
+                    f"invalid session_id at line {line_no}: must be a non-empty string when present",
                     source="events",
                 )
-        else:
-            if not isinstance(sid, str):
-                raise AgentError(SESSION_CORRUPTED, f"invalid session_id at line {line_no}", source="events")
-            if session_id is None:
-                session_id = sid
-            elif sid != session_id:
+            if session_id is not None and sid != session_id:
                 raise AgentError(
                     SESSION_CORRUPTED,
                     f"session_id mismatch at line {line_no}: {sid!r} != {session_id!r}",
                     source="events",
                 )
+            session_id = sid
+        elif session_id is not None:
+            # Legacy logs (every event unattributed) and the explicit migration
+            # shape (unattributed prefix, then events attributed to one session)
+            # are the only tolerated attribution layouts. A missing session_id
+            # AFTER an attributed event is a shape this writer can never
+            # produce — reject instead of silently accepting a mixed log.
+            raise AgentError(
+                SESSION_CORRUPTED,
+                f"session_id missing at line {line_no} after attributed events; "
+                "a log is either fully unattributed (legacy) or attributed from "
+                "its first attributed event onward",
+                source="events",
+            )
         if evt["seq"] != expected:
             raise AgentError(
                 SESSION_CORRUPTED,
