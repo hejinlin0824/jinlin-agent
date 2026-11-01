@@ -1,16 +1,16 @@
 ---
 handoff_document: true
 project: jinlin-agent (Python code-engineering agent harness)
-version: 2.4
-generated_at: "2026-11-01T17:00+08:00"
+version: 2.5
+generated_at: "2026-11-01T18:10+08:00"
 repository: https://github.com/hejinlin0824/jinlin-agent
 working_directory: "E:\\codebase\\玩耍项目\\jinlin-agent"
 branches:
-  main: 249bbab   # 第 1 批 P2 加固归档线；第 2 批在分支上等复核，批准后 ff
-  review/followup-fixes: 1359a90+   # 第 2 批代码 HEAD（P0/P2/P1/P3 四笔）；其后为报告文档提交
+  main: 249bbab   # 第 1 批 P2 加固归档线；第 2 批（含第 8 轮整改）在分支上等复核，批准后 ff
+  review/followup-fixes: 346561d+   # 第 2 批最终代码 HEAD（含第 8 轮整改四笔）；其后为报告文档提交
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
-test_status: "python -m pytest -q => 95 passed; jinlin-agent eval --suite all => 18/18"
-review_status: "第 2 批 P2 加固（事务清理生命周期）已完成并提交复核；按复核要求本批不合 main，等批准后 ff"
+test_status: "python -m pytest -q => 103 passed; jinlin-agent eval --suite all => 18/18"
+review_status: "第 8 轮复核整改完成（backup 指纹同对象捕获 / manifest 路径绑定+原子重写+降级诊断 / null 与空串拒绝 / 四字段碰撞验证）；本批不合 main，等复核"
 trash_cleanup: "jinlin-agent clean [--workspace W] [--apply]（默认 dry-run；归属证明 = 严格命名模式 + .jinlin/trash-manifest.jsonl 记录）"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
