@@ -93,7 +93,9 @@ def record_trash(workspace: Path, trash_path: Path, orig_rel: str, kind: str) ->
     rel = _relative_posix(trash_path, workspace)
     try:
         st = os.stat(trash_path)
-        identity = {"dev": st.st_dev, "ino": st.st_ino, "size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": hashlib.sha256(Path(trash_path).read_bytes()).hexdigest()}
+        identity = {"dev": st.st_dev, "ino": st.st_ino, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+        if kind == "rescue":
+            identity["sha256"] = hashlib.sha256(Path(trash_path).read_bytes()).hexdigest()
     except OSError:
         identity = None  # no proof captured — the file degrades to report-only
     try:
@@ -390,7 +392,7 @@ def list_rescue(workspace: Path) -> dict[str, Any]:
                         and st.st_ino == ident.get("ino")
                         and st.st_size == ident.get("size")
                         and st.st_mtime_ns == ident.get("mtime_ns")
-                        and hashlib.sha256(data).hexdigest() == ident.get("sha256")
+                        (ident.get("sha256") is None or hashlib.sha256(data).hexdigest() == ident.get("sha256"))
                     )
                 except OSError:
                     valid = False
@@ -484,7 +486,7 @@ def list_rescue_unlocked(workspace: Path) -> dict[str, Any]:
                          and isinstance(ident, dict) and st.st_dev == ident.get("dev")
                          and st.st_ino == ident.get("ino") and st.st_size == ident.get("size")
                          and st.st_mtime_ns == ident.get("mtime_ns")
-                         and hashlib.sha256(data).hexdigest() == ident.get("sha256"))
+                         (ident.get("sha256") is None or hashlib.sha256(data).hexdigest() == ident.get("sha256")))
             except OSError:
                 valid, data = False, b""
             item = {"path": rel, "orig": str(entry.get("orig")) if entry else match.group("orig"),
