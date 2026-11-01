@@ -6,11 +6,11 @@ generated_at: "2026-11-01T14:30+08:00"
 repository: https://github.com/hejinlin0824/jinlin-agent
 working_directory: "E:\\codebase\\玩耍项目\\jinlin-agent"
 branches:
-  main: 85854f1   # 受保护基线，评审要求不得直接改
-  review/followup-fixes: f1b0cb8+   # 第 4 轮整改代码提交；docs 提交后 HEAD 再 +N
+  main: 414e826+   # 已按第 5 轮复核批准 fast-forward 合并（合并点 414e826；其后仅有记录类纯文档提交）
+  review/followup-fixes: 与 main 同步（合并后所有提交先落分支、再 ff 到 main）
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
 test_status: "python -m pytest -q => 76 passed; jinlin-agent eval --suite all => 18/18"
-review_status: "第 5 轮复核 Approve；合并前文档修正已完成，按批准 fast-forward 合并入 main（最终 SHA 见 git log 与 REVIEW-SUBMISSION-ROUND4.md §9）"
+review_status: "第 5 轮复核 Approve；已于 414e826 完成 ff 合并（main CI run 41286417603 双平台 success）；P2-2/P2-3 及 §4 清单单独排期"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
 ---

@@ -155,7 +155,8 @@ jinlin-agent eval --suite all -> 18/18 probes passed
 | 复核确认 | P1-1 / P1-2 / 五个恢复入口统一 / 三组竞争注入测试 / P2-1 全部通过；CI Run `41280497556` 双平台 success；`f1b0cb8 → 545e5cb` 仅文档差异 |
 | 合并前条件 | §2.3 措辞修订（含测试断言消息对齐，仅提示文本，断言逻辑未变）——已随本系列提交完成 |
 | 合并方式 | `git checkout main && git merge --ff-only review/followup-fixes && git push origin main`（无 squash / rebase） |
-| 代码基线 | `main` 合并起点 `85854f1`；合并后 main 即分支 HEAD（最终 SHA 以 git log 为准，本表提交于合并前后会随纯文档提交小幅推进，代码内容自 `f1b0cb8` 起未再变化） |
+| 合并记录 | **已完成**：`main` 自 `85854f1` fast-forward 至合并点 **`414e826`**；main CI Run <https://github.com/hejinlin0824/jinlin-agent/actions/runs/41286417603> 双平台 **success**（Windows pytest 76/0/0/0、Ubuntu 76 tests / 16 平台守卫 skip、双平台 eval 18/18，与本文件 §6 同口径）；分支同名提交的 CI 亦双平台 success |
+| 代码基线 | 代码内容自 `f1b0cb8` 起未再变化；合并点之后仅存在本节这类记录类纯文档提交（见 `git log --oneline`） |
 | 证据保留 | 本文件 §6（Run `41280497556` 双平台 pytest/eval 数字）、§6a（恢复原语边界）、§2.3（措辞更正）随仓库归档 |
 | 后续排期 | P2-2（日志 session_id 与实例比对）、P2-3（失败清理文件身份校验）、§2.3 建议的注入变体、P2-4…P2-8（同复核 §4 清单） |
 
