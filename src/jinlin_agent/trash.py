@@ -62,6 +62,11 @@ def record_trash(workspace: Path, trash_path: Path, orig_rel: str, kind: str) ->
     """
     rel = _relative_posix(trash_path, workspace)
     try:
+        st = os.stat(trash_path)
+        identity = {"dev": st.st_dev, "ino": st.st_ino, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+    except OSError:
+        identity = None  # no proof captured — the file degrades to report-only
+    try:
         path = _manifest_path(workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
@@ -72,6 +77,7 @@ def record_trash(workspace: Path, trash_path: Path, orig_rel: str, kind: str) ->
                         "name": trash_path.name,
                         "orig": orig_rel,
                         "kind": kind,
+                        "identity": identity,
                         "ts": utcnow_iso(),
                     },
                     ensure_ascii=False,
@@ -170,9 +176,27 @@ def scan_trash(workspace: Path) -> tuple[list[dict[str, Any]], list[dict[str, An
             # manifest's orig may carry its directory (e.g. "sub/a.py"), so
             # correspondence is checked on the basename part
             orig_ok = recorded is not None and Path(str(recorded.get("orig", ""))).name == match.group("orig")
-            if recorded is not None and recorded.get("kind") == match.group("kind") and orig_ok:
+            identity_ok = False
+            if recorded is not None and isinstance(recorded.get("identity"), dict):
+                try:
+                    cur = os.stat(full)
+                    ident = recorded["identity"]
+                    identity_ok = (
+                        cur.st_dev == ident.get("dev")
+                        and cur.st_ino == ident.get("ino")
+                        and cur.st_size == ident.get("size")
+                        and cur.st_mtime_ns == ident.get("mtime_ns")
+                    )
+                except OSError:
+                    identity_ok = False
+            if recorded is not None and recorded.get("kind") == match.group("kind") and orig_ok and identity_ok:
                 provable.append(entry)
             else:
+                entry["reason"] = (
+                    "manifest identity does not match the file on disk"
+                    if (recorded is not None and orig_ok)
+                    else "no manifest proof"
+                )
                 unrecognized.append(entry)
     provable.sort(key=lambda e: e["path"])
     unrecognized.sort(key=lambda e: e["path"])
@@ -215,9 +239,26 @@ def clean_trash(workspace: Path, apply: bool = False) -> dict[str, Any]:
             manifest = _load_manifest(workspace)  # fresh proof, per file
             recorded = manifest.get(entry["path"])
             orig_ok = recorded is not None and Path(str(recorded.get("orig", ""))).name == entry["orig"]
-            if recorded is None or recorded.get("kind") != entry["kind"] or not orig_ok:
+            identity_ok = False
+            if recorded is not None and isinstance(recorded.get("identity"), dict):
+                try:
+                    cur = os.stat(entry["abs"])  # re-verify the file object NOW, not at scan time
+                    ident = recorded["identity"]
+                    identity_ok = (
+                        cur.st_dev == ident.get("dev")
+                        and cur.st_ino == ident.get("ino")
+                        and cur.st_size == ident.get("size")
+                        and cur.st_mtime_ns == ident.get("mtime_ns")
+                    )
+                except OSError:
+                    identity_ok = False
+            if recorded is None or recorded.get("kind") != entry["kind"] or not orig_ok or not identity_ok:
                 report["failed"].append(
-                    {"name": entry["name"], "path": entry["path"], "error": "manifest no longer proves ownership"}
+                    {
+                        "name": entry["name"],
+                        "path": entry["path"],
+                        "error": "ownership no longer provable (manifest or file identity mismatch)",
+                    }
                 )
                 continue
             try:

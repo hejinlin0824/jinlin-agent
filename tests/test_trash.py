@@ -252,10 +252,10 @@ def test_forget_failure_keeps_manifest_intact(tmp_path, monkeypatch):
 
 
 def test_manifest_write_failure_degrades_to_report_only(tmp_path, monkeypatch):
-    """Round-8 P1: when the manifest cannot be written the transaction still
-    succeeds, the deferred backup stays, and `clean --apply` must NOT delete
-    it - without manifest proof the file is report-only. The degradation is
-    observable in the tool result."""
+    """Round-9: when the manifest cannot be written, the transaction still
+    commits; a backup whose cleanup is also deferred stays on disk WITHOUT
+    manifest proof — and `clean --apply` must NOT delete a file it cannot
+    prove. The degradation is observable in the tool result."""
     import jinlin_agent.tools.patch as patch_mod
     from jinlin_agent import trash as trash_mod
 
@@ -265,42 +265,25 @@ def test_manifest_write_failure_degrades_to_report_only(tmp_path, monkeypatch):
 
     ctx = make_ctx(tmp_path)
     target = tmp_path / "doomed.py"
-    target.write_text("old\n", encoding="utf-8")
+    target.write_bytes(b"old\n")
     ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
-    real_stat = os.stat
-    real_replace = os.replace
-    armed = {"done": False}
-    replaced = {"done": False}
+    real_unlink = os.unlink
 
-    def racing_replace(src, dst):
-        out = real_replace(src, dst)
-        if Path(dst).name.startswith(".doomed.py.jinlin-txn-"):
-            armed["done"] = True
-        return out
+    def failing_unlink(path, *args, **kwargs):
+        if Path(path).name.startswith(".doomed.py.jinlin-txn-"):
+            raise OSError("simulated locked file")
+        return real_unlink(path, *args, **kwargs)
 
-    def racing_stat(path, *args, **kwargs):
-        st = real_stat(path, *args, **kwargs)
-        if (
-            armed["done"]
-            and not replaced["done"]
-            and Path(path).name.startswith(".doomed.py.jinlin-txn-")
-        ):
-            replaced["done"] = True
-            os.unlink(path)
-            Path(path).write_bytes(b"external-claim")
-            return real_stat(path, *args, **kwargs)
-        return st
-
-    monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
-    monkeypatch.setattr(patch_mod.os, "stat", racing_stat)
+    monkeypatch.setattr(patch_mod.os, "unlink", failing_unlink)
     patch = _patch_text("*** Delete File: doomed.py")
     result = patch_mod.apply_patch(ctx, {"patch": patch})
-    assert result.ok, "a manifest write failure must not fail the committed transaction"
-    assert result.extra.get("trash_manifest_degraded"), "the degradation must be observable"
-    deferred = result.extra.get("cleanup_deferred") or []
-    assert deferred, "the replaced backup stays on disk as deferred cleanup"
+    # commit success and cleanup success are separate: the delete committed,
+    # the cleanup was deferred, and the manifest degradation is observable
+    assert result.ok
+    assert result.extra.get("cleanup_deferred"), "the deferred backup must be reported"
+    assert result.extra.get("trash_manifest_degraded"), "the manifest failure must be observable"
     backups = list(tmp_path.glob(".doomed.py.jinlin-txn-*"))
-    assert len(backups) == 1 and backups[0].read_bytes() == b"external-claim"
+    assert len(backups) == 1 and backups[0].read_bytes() == b"old\n"
     # without manifest proof the controlled cleanup reports but never deletes
     report = clean_trash(tmp_path, apply=True)
     assert report["removed"] == []
