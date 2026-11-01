@@ -306,10 +306,17 @@ def test_clean_apply_does_not_delete_replaced_file_after_scan(tmp_path, monkeypa
 
     proven = _mk_trash(tmp_path, ".a.py.jinlin-txn-deadbeef")
     assert record_trash(tmp_path, proven, "a.py", "txn") is True
-    provable, _unrecognized = scan_trash(tmp_path)
-    assert [e["path"] for e in provable] == [proven.name], "precondition: scanned as provable"
-    proven.write_bytes(b"external-replaced-after-scan")  # same-path replacement after the scan
+    real_scan = trash_mod.scan_trash
 
+    def racing_scan(workspace):
+        provable, unrecognized = real_scan(workspace)
+        assert [e["path"] for e in provable] == [proven.name], "precondition: scanned as provable"
+        # Replace the candidate after clean_trash has scanned it, but before
+        # clean_trash moves it into quarantine and verifies the moved object.
+        proven.write_bytes(b"external-replaced-after-scan")
+        return provable, unrecognized
+
+    monkeypatch.setattr(trash_mod, "scan_trash", racing_scan)
     report = clean_trash(tmp_path, apply=True)
     assert proven.exists() and proven.read_bytes() == b"external-replaced-after-scan", (
         "the replacement must survive the cleanup"
