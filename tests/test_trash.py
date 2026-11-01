@@ -534,7 +534,7 @@ def test_rescue_restore_zero_progress_is_uncertain_and_preserves_source(tmp_path
     assert rescue.read_bytes() == b"original payload"
 
 
-def test_rescue_restore_fsync_failure_is_uncertain_and_retry_safe(tmp_path, monkeypatch):
+def test_rescue_restore_fsync_failure_leaves_recoverable_stage(tmp_path, monkeypatch):
     import jinlin_agent.trash as trash_mod
 
     rescue = _mk_trash(tmp_path, ".sync.py.jinlin-rescue-01020306", b"original payload")
@@ -545,9 +545,14 @@ def test_rescue_restore_fsync_failure_is_uncertain_and_retry_safe(tmp_path, monk
     assert result["status"] == "incomplete"
     assert not (tmp_path / "sync.py").exists()
     assert rescue.read_bytes() == b"original payload"
+    # Simulate a fresh process: restore the real fsync implementation, then
+    # recover only after re-verifying and re-establishing durability.
+    monkeypatch.undo()
     recovered = trash_mod.recover_rescue(tmp_path)
     assert recovered["items"][0]["status"] == "restored"
     assert (tmp_path / "sync.py").read_bytes() == b"original payload"
+    assert rescue.read_bytes() == b"original payload"
+
 
 
 def test_rescue_restore_repeated_after_success_is_non_destructive(tmp_path):
