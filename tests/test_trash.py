@@ -483,6 +483,7 @@ def test_legacy_rescue_manifest_remains_discoverable_and_restorable(tmp_path):
 
     report = list_rescue(tmp_path)
     assert [x["path"] for x in report["rescued"]] == [rescue.name]
+    assert report["rescued"][0]["integrity"] == "legacy-stat"
     restored = restore_rescue(tmp_path, rescue.name)
     assert restored["status"] == "restored"
     assert (tmp_path / "legacy.py").read_bytes() == b"legacy original"
