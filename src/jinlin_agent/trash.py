@@ -358,7 +358,7 @@ def clean_trash(workspace: Path, apply: bool = False) -> dict[str, Any]:
 
 
 RESCUE_RE = re.compile(r"^\.(?P<orig>.+)\.jinlin-rescue-(?P<tag>[0-9a-f]{8})$")
-RESTORE_STAGE_RE = re.compile(r"^\\.(?P<target>.+)\\.jinlin-restore-(?P<digest>[0-9a-f]{16})$")
+RESTORE_STAGE_RE = re.compile(r"^\.(?P<target>.+)\.jinlin-restore-(?P<digest>[0-9a-f]{16})$")
 
 
 def list_rescue(workspace: Path) -> dict[str, Any]:
