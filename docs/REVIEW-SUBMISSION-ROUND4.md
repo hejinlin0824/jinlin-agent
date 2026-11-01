@@ -21,7 +21,7 @@
 | §3 P1-2 Delete 移动后 Hash 不匹配恢复的同类窗口 | **已修复** | 同一 helper；恢复成功 → `FILE_CHANGED_EXTERNALLY`（original restored）；路径被占用 → `RECOVERY_UNCERTAIN` + `details.kept_aside` 指明备份名；注入测试覆盖 |
 | §6.1 统一 no-clobber restore helper，三个恢复入口全部使用 | **完成** | Add 回滚 mismatch、Update 回滚 mismatch / 恢复写失败、Delete 回滚恢复、Delete move-hash-mismatch、（既有的）Delete 回滚 `os.link` 恢复，全部收敛到 helper |
 | §6.2 "trash 已移动、原路径被外部重建"时序的竞争注入测试 | **完成** | `test_rollback_restore_is_no_clobber_when_path_recreated[add]` / `[update]`、`test_delete_move_hash_mismatch_restore_is_no_clobber` |
-| §6.3 冲突时保留双方数据，返回 `RECOVERY_UNCERTAIN`，不覆盖任何一方 | **完成** | 测试断言：路径内容 = 外部重建内容、trash/backup 内容 = 本事务内容且文件留存、错误码 = `RECOVERY_UNCERTAIN` |
+| §6.3 冲突时保留双方数据，返回 `RECOVERY_UNCERTAIN`，不覆盖任何一方 | **完成** | 测试断言：路径内容 = 外部重建内容；trash/backup 内容 = 移动时刻路径上的实际内容（测试注入的外部改写）且文件留存；错误码 = `RECOVERY_UNCERTAIN` |
 | §4 P2-1 严格 UTF-8 解码（复核建议顺手补上） | **已补** | `raw.decode("utf-8")` 严格解码；JSON 字符串值内非法字节 → `SESSION_CORRUPTED`；读取与 `EventLog.open()` 双路径测试 |
 | §4 P2-2 / P2-3 | **未动**（按复核 §6 "单独排期"） | 见 §5 |
 
