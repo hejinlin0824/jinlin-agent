@@ -438,12 +438,14 @@ def _publish_restore_stage(stage: Path, dest: Path, digest: str) -> dict[str, An
     try:
         if stage.is_symlink():
             return {"status": "unrecognized", "detail": "staging path is a symlink; not followed"}
-        with stage.open("r+b") as fh:
-            data = fh.read()
-            if hashlib.sha256(data).hexdigest() != digest:
-                return {"status": "incomplete", "detail": "staging file does not match the rescue SHA-256; retained for inspection"}
-            # Recovery re-establishes the file-data durability barrier before
-            # publishing a stage left behind by a prior process.
+        data = stage.read_bytes()
+        if hashlib.sha256(data).hexdigest() != digest:
+            return {"status": "incomplete", "detail": "staging file does not match the rescue SHA-256; retained for inspection"}
+        # Open with write access: Windows _commit/fsync rejects a read-only
+        # descriptor even when the intent is only to flush existing data.
+        # Recovery re-establishes the durability barrier before publication.
+        with stage.open("ab") as fh:
+            fh.flush()
             os.fsync(fh.fileno())
     except OSError as exc:
         return {"status": "uncertain", "detail": f"staging file could not be verified/fsynced: {exc}"}
