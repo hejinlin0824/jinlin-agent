@@ -91,7 +91,9 @@
 
 ## 7. CI
 
-- 首推（含 P0/P2 代码）与末推（完整批）的 run：分支 Actions 页；判定标准：Windows + Ubuntu 两 job 均 success（pytest 95 passed / 平台守卫 skip 说明不变，eval 18/18）。报告提交前已确认本批全部提交双平台绿。
+- 本批最终 HEAD `c88a3e4` 的 Run **41293112751**：<https://github.com/hejinlin0824/jinlin-agent/actions/runs/41293112751> — Windows 与 Ubuntu 两 job 均 **success**（提交报告前已确认）；
+- 覆盖范围：`7c246d8..c88a3e4` 一次性推送，包含全部四笔代码提交（`d600c9d` P0 / `6b4ef0e` P2 / `48bdb87` P1 / `1359a90` P3）与文档提交；
+- 判定标准：两 job 均 success；pytest 报告区分 passed/failed/skipped（Ubuntu 的 16 个 skip 为 Windows 专属 L1 沙箱测试的平台守卫），eval 18/18 与 §1 本机口径一致。
 
 ## 8. 关闭与排期
 
