@@ -665,6 +665,125 @@ def recover_rescue(workspace: Path) -> dict[str, Any]:
     finally:
         lock.release()
 
+
+def _quarantine_and_unlink_verified(path: Path, digest: str) -> tuple[bool, str]:
+    """Move a candidate out of its public name, verify the moved object, then unlink.
+
+    If the moved object is not the expected regular file, retain it in
+    quarantine and attempt a no-clobber link back. This avoids deleting a
+    replacement merely because it occupied a previously scanned pathname.
+    """
+    if path.is_symlink():
+        return False, "candidate is a symlink"
+    quarantine = path.with_name(f".{path.name}.jinlin-clean-{uuid.uuid4().hex[:8]}")
+    try:
+        os.replace(path, quarantine)
+    except OSError as exc:
+        return False, f"could not move candidate to quarantine: {exc}"
+    try:
+        st = os.stat(quarantine, follow_symlinks=False)
+        if not stat.S_ISREG(st.st_mode) or quarantine.is_symlink():
+            return False, f"quarantined object is not a regular file; retained at {quarantine.name}"
+        data = quarantine.read_bytes()
+        if hashlib.sha256(data).hexdigest() != digest:
+            link_no_clobber(quarantine, path)
+            return False, f"quarantined object failed SHA-256 verification; evidence retained at {quarantine.name}"
+        os.unlink(quarantine)
+        _fsync_directory(path.parent)
+        return True, "verified object removed"
+    except OSError as exc:
+        return False, f"quarantined object could not be safely verified/removed ({exc}); retained at {quarantine.name}"
+
+
+def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
+    """Dry-run or explicitly clean redundant restore evidence.
+
+    A Rescue and its stage are eligible only when the restored target is a
+    regular, non-symlink file whose bytes match the manifest-bound Rescue
+    SHA-256. Deletion uses quarantine-and-verify, never a bare name-based
+    unlink. Default behavior is report-only.
+    """
+    workspace = Path(workspace).resolve()
+    report: dict[str, Any] = {
+        "status": "dry-run", "eligible": [], "removed": [], "failed": [],
+        "manifest_degraded": [], "unrecognized": [],
+    }
+    lock = SessionLock(workspace / ".jinlin" / "write.lock")
+    try:
+        lock.acquire()
+    except SessionLockedError:
+        report["status"] = "locked"
+        return report
+    try:
+        listed = list_rescue_unlocked(workspace)
+        report["unrecognized"] = [item["path"] for item in listed["unrecognized"]]
+        manifest = _load_manifest(workspace)
+        eligible: list[dict[str, Any]] = []
+        for rescue in listed["rescued"]:
+            entry = manifest.get(rescue["path"], {})
+            target, error = _safe_rescue_target(workspace, str(entry.get("orig", "")))
+            if error or target is None or target.is_symlink():
+                report["failed"].append({"rescue": rescue["path"], "reason": error or "target is a symlink"})
+                continue
+            try:
+                target_st = os.stat(target, follow_symlinks=False)
+                if not stat.S_ISREG(target_st.st_mode):
+                    raise OSError("target is not a regular file")
+                if hashlib.sha256(target.read_bytes()).hexdigest() != rescue["sha256"]:
+                    raise OSError("target content does not match Rescue SHA-256")
+            except OSError as exc:
+                report["failed"].append({"rescue": rescue["path"], "reason": f"restored target is not verified: {exc}"})
+                continue
+            stage = _restore_stage_path(target, rescue["sha256"])
+            stage_exists = stage.exists() or stage.is_symlink()
+            if stage_exists:
+                if stage.is_symlink():
+                    report["failed"].append({"rescue": rescue["path"], "reason": "staging path is a symlink"})
+                    continue
+                try:
+                    stage_st = os.stat(stage, follow_symlinks=False)
+                    if not stat.S_ISREG(stage_st.st_mode) or hashlib.sha256(stage.read_bytes()).hexdigest() != rescue["sha256"]:
+                        raise OSError("staging file does not match Rescue SHA-256")
+                except OSError as exc:
+                    report["failed"].append({"rescue": rescue["path"], "reason": f"staging file is not verified: {exc}"})
+                    continue
+            eligible.append({"rescue": rescue["path"], "target": rescue["orig"],
+                             "stage": _relative_posix(stage, workspace) if stage_exists else None,
+                             "sha256": rescue["sha256"]})
+        report["eligible"] = eligible
+        if not apply:
+            return report
+        report["status"] = "applied"
+        for item in eligible:
+            target, error = _safe_rescue_target(workspace, item["target"])
+            if error or target is None:
+                report["failed"].append({"rescue": item["rescue"], "reason": error or "invalid target"})
+                continue
+            # Recheck the target immediately before removing any evidence.
+            try:
+                if target.is_symlink() or hashlib.sha256(target.read_bytes()).hexdigest() != item["sha256"]:
+                    raise OSError("target changed after eligibility scan")
+            except OSError as exc:
+                report["failed"].append({"rescue": item["rescue"], "reason": f"target changed; evidence retained: {exc}"})
+                continue
+            if item["stage"]:
+                stage = workspace / PurePosixPath(item["stage"])
+                ok, detail = _quarantine_and_unlink_verified(stage, item["sha256"])
+                if not ok:
+                    report["failed"].append({"rescue": item["rescue"], "reason": detail})
+                    continue
+            rescue_path = workspace / PurePosixPath(item["rescue"])
+            ok, detail = _quarantine_and_unlink_verified(rescue_path, item["sha256"])
+            if not ok:
+                report["failed"].append({"rescue": item["rescue"], "reason": detail})
+                continue
+            if not forget_trash(workspace, rescue_path):
+                report["manifest_degraded"].append(item["rescue"])
+            report["removed"].append(item["rescue"])
+        return report
+    finally:
+        lock.release()
+
 def list_rescue_unlocked(workspace: Path) -> dict[str, Any]:
     """Internal scan for callers already holding the workspace write lock."""
     manifest = _load_manifest(workspace)
