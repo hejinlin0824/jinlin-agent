@@ -436,7 +436,7 @@ def _publish_restore_stage(stage: Path, dest: Path, digest: str) -> dict[str, An
     try:
         if stage.is_symlink():
             return {"status": "unrecognized", "detail": "staging path is a symlink; not followed"}
-        with stage.open("rb") as fh:
+        with stage.open("r+b") as fh:
             data = fh.read()
             if hashlib.sha256(data).hexdigest() != digest:
                 return {"status": "incomplete", "detail": "staging file does not match the rescue SHA-256; retained for inspection"}
