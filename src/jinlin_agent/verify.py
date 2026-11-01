@@ -462,26 +462,32 @@ class Verifier:
             run.summary = {"baseline": baseline, "current": now}
             new_failed = set(now["failed_ids"]) - set(baseline.get("failed_ids", []))
             new_errors = set(now["error_ids"]) - set(baseline.get("error_ids", []))
-            passed = not res.timed_out and not new_failed and not new_errors
             findings: list[str] = []
+            # unknown process state must fail closed
+            passed = not res.timed_out and res.exit_code is not None and not new_failed and not new_errors
             if res.timed_out:
                 findings.append("regression test command timed out")
-                passed = False
+            if res.exit_code is None:
+                detail = f" ({res.error})" if getattr(res, "error", None) else ""
+                findings.append(f"regression command returned no exit code{detail}")
             if new_failed:
                 findings.append("new failing tests: " + ", ".join(sorted(new_failed)[:5]))
             if new_errors:
                 findings.append("new collection/test errors: " + ", ".join(sorted(new_errors)[:5]))
             if passed and res.exit_code not in (0, None):
                 # non-zero exit is only acceptable when the failure set is exactly the known one
-                known_failed = set(now["failed_ids"]) and set(now["failed_ids"]) <= set(
+                known_failed = bool(now["failed_ids"]) and set(now["failed_ids"]) <= set(
                     baseline.get("failed_ids", [])
                 )
-                known_errors = set(now["error_ids"]) and set(now["error_ids"]) <= set(
+                known_errors = bool(now["error_ids"]) and set(now["error_ids"]) <= set(
                     baseline.get("error_ids", [])
                 )
                 if not (known_failed or known_errors):
                     findings.append(f"test command exited {res.exit_code} without a matching known failure set")
                     passed = False
+            if passed and res.exit_code == 0 and (now["failed_ids"] or now["error_ids"]):
+                findings.append("test command exited 0 but its output still contains failures/errors")
+                passed = False
             run.status = "passed" if passed else "failed"
             if findings:
                 run.findings = findings

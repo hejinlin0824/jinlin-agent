@@ -160,42 +160,75 @@ class EventLog:
 
 
 def _iter_events_checked(path: Path) -> Iterator[dict[str, Any]]:
-    """Replay an event log; tolerate only a torn tail, never mid-log corruption."""
+    """Replay an event log.
+
+    Tolerance is deliberately narrow: only a final fragment **without a trailing
+    newline** may be a torn write from a crash. A newline-terminated line that
+    fails to parse, a blank line between events, a sequence gap, or a schema /
+    session mismatch all raise SESSION_CORRUPTED.
+    """
     from .errors import SESSION_CORRUPTED, AgentError
 
-    if not Path(path).exists():
+    path = Path(path)
+    if not path.exists():
         return
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-        lines = fh.read().split("\n")
-    while lines and not lines[-1].strip():
-        lines.pop()
+    data = path.read_bytes()
+    if not data:
+        return
+    ends_with_newline = data.endswith(b"\n")
+    lines = data.split(b"\n")
+    if ends_with_newline:
+        lines = lines[:-1]
     expected = 1
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            evt = json.loads(stripped)
-        except json.JSONDecodeError as exc:
-            if index == len(lines) - 1:
-                # a torn write after a crash may leave the final line incomplete
-                break
+    session_id: str | None = None
+    for index, raw in enumerate(lines):
+        line_no = index + 1
+        is_last = index == len(lines) - 1
+        if not raw.strip():
             raise AgentError(
                 SESSION_CORRUPTED,
-                f"corrupt event at line {index + 1} (mid-log corruption is not ignored)",
-                source="events",
-                details={"line": index + 1, "error": str(exc)},
-            ) from exc
-        if not isinstance(evt, dict) or "type" not in evt or not isinstance(evt.get("seq"), int):
-            raise AgentError(
-                SESSION_CORRUPTED,
-                f"invalid event at line {index + 1}: missing type/seq",
+                f"blank line at line {line_no}; event log must be a dense sequence of JSON lines",
                 source="events",
             )
+        try:
+            evt = json.loads(raw.decode("utf-8", "replace"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            if is_last and not ends_with_newline:
+                break  # genuine torn tail: incomplete final write
+            raise AgentError(
+                SESSION_CORRUPTED,
+                f"corrupt event at line {line_no} (a newline-terminated line must parse)",
+                source="events",
+                details={"line": line_no, "error": str(exc), "torn_tail_allowed": False},
+            ) from exc
+        if not isinstance(evt, dict):
+            raise AgentError(SESSION_CORRUPTED, f"invalid event at line {line_no}: not an object", source="events")
+        if evt.get("schema_version") != EventLog.SCHEMA_VERSION:
+            raise AgentError(
+                SESSION_CORRUPTED,
+                f"unsupported schema_version at line {line_no}: {evt.get('schema_version')!r}",
+                source="events",
+            )
+        if not isinstance(evt.get("type"), str) or not isinstance(evt.get("seq"), int):
+            raise AgentError(SESSION_CORRUPTED, f"invalid event at line {line_no}: missing type/seq", source="events")
+        if not isinstance(evt.get("payload", {}), dict):
+            raise AgentError(SESSION_CORRUPTED, f"invalid event at line {line_no}: payload must be an object", source="events")
+        sid = evt.get("session_id")
+        if sid is not None:
+            if not isinstance(sid, str):
+                raise AgentError(SESSION_CORRUPTED, f"invalid session_id at line {line_no}", source="events")
+            if session_id is None:
+                session_id = sid
+            elif sid != session_id:
+                raise AgentError(
+                    SESSION_CORRUPTED,
+                    f"session_id mismatch at line {line_no}: {sid!r} != {session_id!r}",
+                    source="events",
+                )
         if evt["seq"] != expected:
             raise AgentError(
                 SESSION_CORRUPTED,
-                f"event sequence gap at line {index + 1}: expected seq {expected}, found {evt['seq']}",
+                f"event sequence gap at line {line_no}: expected seq {expected}, found {evt['seq']}",
                 source="events",
             )
         expected = evt["seq"] + 1

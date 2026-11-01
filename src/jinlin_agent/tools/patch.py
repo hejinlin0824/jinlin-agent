@@ -17,6 +17,7 @@ import hashlib
 import os
 import stat
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -127,6 +128,51 @@ def atomic_write(
         except OSError:
             pass
         raise
+
+
+def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    """Revert only mutations this transaction actually made *and* still owns.
+
+    A path is reverted only when its current hash equals the hash our write
+    produced. If a concurrent writer changed it after us, we keep their content
+    and report the rollback as incomplete instead of overwriting it.
+    """
+    restored: list[str] = []
+    incomplete: list[str] = []
+    for record in reversed(applied):
+        path: Path = record["path"]
+        rel: str = record["rel"]
+        try:
+            if record["kind"] == "add":
+                if not path.exists():
+                    continue
+                if hashlib.sha256(path.read_bytes()).hexdigest() == record["after_sha"]:
+                    path.unlink()
+                    restored.append(rel)
+                else:
+                    incomplete.append(rel)
+            elif record["kind"] == "update":
+                if not path.exists():
+                    incomplete.append(rel)
+                    continue
+                if hashlib.sha256(path.read_bytes()).hexdigest() != record["after_sha"]:
+                    incomplete.append(rel)
+                    continue
+                atomic_write(path, record["before"], expected_sha256=record["after_sha"])
+                restored.append(rel)
+            else:  # delete: restore from the moved-aside backup
+                if path.exists():
+                    incomplete.append(rel)  # a concurrent writer recreated it
+                    continue
+                backup: Path = record["backup"]
+                if backup.exists():
+                    os.replace(backup, path)
+                    restored.append(rel)
+                else:
+                    incomplete.append(rel)
+        except Exception:
+            incomplete.append(rel)
+    return restored, incomplete
 
 
 def check_clean(ctx: ToolContext, rel: str, current_sha: str) -> AgentError | None:
@@ -385,56 +431,94 @@ def apply_patch(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             ),
         )
 
-    # all validated -> write
+    # all validated -> write (transaction: every mutation is recorded *after* it
+    # succeeded, together with the hash it produced, so rollback can never touch
+    # a file that a concurrent writer changed after us)
     written: list[dict[str, Any]] = []
     deleted: list[str] = []
-    backups: list[tuple[Path, bytes | None]] = []
+    applied: list[dict[str, Any]] = []
     try:
         for item in plan:
             path = item["path"]
             if item["kind"] == "add":
-                backups.append((path, None))
                 atomic_write(path, item["data"], create=True)
                 digest = hashlib.sha256(item["data"]).hexdigest()
+                applied.append({"kind": "add", "path": path, "rel": item["rel"], "after_sha": digest})
                 written.append({"path": item["rel"], "hash_before": None, "hash_after": digest, "lines_added": len(item["data"].splitlines())})
             elif item["kind"] == "delete":
-                backups.append((path, item["old"]))
+                expected = item["old_sha"]
                 current_sha = hashlib.sha256(path.read_bytes()).hexdigest()
-                if current_sha != item["old_sha"]:
+                if current_sha != expected:
+                    raise AgentError(FILE_CHANGED_EXTERNALLY, f"{item['rel']} changed before deletion", source="edit")
+                backup = path.with_name(f".{path.name}.jinlin-txn-{uuid.uuid4().hex[:8]}")
+                # move the directory entry atomically; verify what we moved
+                os.replace(path, backup)
+                moved_sha = hashlib.sha256(backup.read_bytes()).hexdigest()
+                if moved_sha != expected:
+                    if not path.exists():
+                        os.replace(backup, path)
                     raise AgentError(
                         FILE_CHANGED_EXTERNALLY,
-                        f"{item['rel']} changed before deletion",
+                        f"{item['rel']} changed while being deleted; original restored",
                         source="edit",
                     )
-                os.unlink(path)
+                applied.append(
+                    {"kind": "delete", "path": path, "rel": item["rel"], "backup": backup, "before_sha": expected}
+                )
                 deleted.append(item["rel"])
             else:
-                backups.append((path, item["old"]))
+                new_sha = hashlib.sha256(item["data"]).hexdigest()
                 atomic_write(path, item["data"], mode_from=path, expected_sha256=item["old_sha"])
-                digest = hashlib.sha256(item["data"]).hexdigest()
+                applied.append(
+                    {
+                        "kind": "update",
+                        "path": path,
+                        "rel": item["rel"],
+                        "after_sha": new_sha,
+                        "before": item["old"],
+                    }
+                )
                 written.append(
                     {
                         "path": item["rel"],
                         "hash_before": item["old_sha"],
-                        "hash_after": digest,
+                        "hash_after": new_sha,
                         "lines_added": item.get("added", 0),
                         "lines_removed": item.get("removed", 0),
                     }
                 )
-    except Exception as exc:  # rollback best effort
-        for path, old in reversed(backups):
-            try:
-                if old is None:
-                    if path.exists():
-                        path.unlink()
-                else:
-                    atomic_write(path, old)
-            except Exception:
-                pass
+    except Exception as exc:
+        restored, incomplete = _rollback_transaction(applied)
+        details = {"rolled_back": restored, "rollback_incomplete": incomplete}
+        if incomplete:
+            return ToolResult(
+                ok=False,
+                error=AgentError(
+                    "RECOVERY_UNCERTAIN",
+                    f"patch failed ({exc}); rollback was incomplete for: {', '.join(incomplete)}. "
+                    "Those paths keep the concurrent/external content; inspect them before retrying.",
+                    source="edit",
+                    details=details,
+                ),
+                output="patch failed; partial rollback — inspect: " + ", ".join(incomplete),
+            )
         return ToolResult(
             ok=False,
-            error=AgentError("TOOL_EXECUTION_FAILED", f"patch failed while writing: {exc}", source="edit"),
+            error=AgentError(
+                "TOOL_EXECUTION_FAILED",
+                f"patch failed while writing: {exc} (all applied changes rolled back)",
+                source="edit",
+                details=details,
+            ),
         )
+
+    # transaction committed: drop delete backups
+    for record in applied:
+        if record["kind"] == "delete":
+            try:
+                record["backup"].unlink()
+            except OSError:
+                pass
 
     read_hashes = {w["path"]: w["hash_after"] for w in written}
     summary = [f"applied {len(plan)} file operation(s):"]

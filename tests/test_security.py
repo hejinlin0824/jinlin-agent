@@ -135,7 +135,12 @@ def test_atomic_write_hash_guard(tmp_path):
 
 
 def _write_events(path: Path, lines: list[str]) -> None:
+    """Write newline-terminated JSONL (normal case: every line is complete)."""
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_bytes(path: Path, data: bytes) -> None:
+    path.write_bytes(data)
 
 
 def _evt(seq: int) -> str:
@@ -156,10 +161,40 @@ def test_seq_gap_is_reported(tmp_path):
     assert excinfo.value.code == "SESSION_CORRUPTED"
 
 
-def test_torn_tail_still_tolerated(tmp_path):
-    _write_events(tmp_path / "events.jsonl", [_evt(1), '{"se'])
+def test_torn_tail_without_newline_is_tolerated(tmp_path):
+    # genuine crash artifact: incomplete trailing bytes with no newline
+    _write_bytes(tmp_path / "events.jsonl", (_evt(1) + "\n").encode() + b'{"seq":')
     events = list(read_events(tmp_path))
     assert [e["seq"] for e in events] == [1]
+
+
+def test_newline_terminated_corrupt_tail_is_rejected(tmp_path):
+    _write_bytes(tmp_path / "events.jsonl", (_evt(1) + "\n").encode() + b"{broken}\n")
+    with pytest.raises(AgentError) as excinfo:
+        list(read_events(tmp_path))
+    assert excinfo.value.code == "SESSION_CORRUPTED"
+
+
+def test_blank_line_between_events_is_rejected(tmp_path):
+    _write_bytes(tmp_path / "events.jsonl", (_evt(1) + "\n\n" + _evt(2) + "\n").encode())
+    with pytest.raises(AgentError) as excinfo:
+        list(read_events(tmp_path))
+    assert excinfo.value.code == "SESSION_CORRUPTED"
+
+
+def test_schema_and_session_mismatch_is_rejected(tmp_path):
+    bad_schema = json.dumps({"schema_version": 99, "seq": 2, "type": "x", "payload": {}})
+    _write_events(tmp_path / "events.jsonl", [_evt(1), bad_schema])
+    with pytest.raises(AgentError):
+        list(read_events(tmp_path))
+    other = tmp_path / "other"
+    other.mkdir()
+    first = json.dumps({"schema_version": 1, "seq": 1, "type": "x", "payload": {}, "session_id": "a"})
+    second = json.dumps({"schema_version": 1, "seq": 2, "type": "x", "payload": {}, "session_id": "b"})
+    _write_events(other / "events.jsonl", [first, second])
+    with pytest.raises(AgentError) as excinfo:
+        list(read_events(other))
+    assert excinfo.value.code == "SESSION_CORRUPTED"
 
 
 # --------------------------------------------------------------------------- P1 gate
@@ -272,3 +307,130 @@ def test_l5_detects_changed_failure_identity(tmp_path):
     run = verifier._level5()
     assert run.status == "failed"
     assert any("test_b" in f for f in run.findings)
+
+
+def test_l5_none_exit_code_fails_closed(tmp_path):
+    """Unknown process state (no exit code) must not be treated as a passing regression check."""
+    cfg = load_config(tmp_path, home=tmp_path / "home")
+    state = _gate_state(tmp_path)
+    state.baseline = {
+        "command": ["pytest", "-q"],
+        "status": "passed",
+        "exit_code": 0,
+        "failed_ids": [],
+        "error_ids": [],
+    }
+    sandbox = FakeSandbox([RunResult(exit_code=None, timed_out=False, stdout="", stderr="", engine="fake")])
+    verifier = Verifier(tmp_path, cfg, sandbox, FakeArtifacts(), emit=lambda t, p: {}, state=state)
+    run = verifier._level5()
+    assert run.status == "failed"
+    assert any("no exit code" in f for f in run.findings)
+
+
+# --------------------------------------------------------------------------- P1 patch rollback
+
+
+def _patch_text(*ops: str) -> str:
+    return "*** Begin Patch\n" + "\n".join(ops) + "\n*** End Patch"
+
+
+def test_apply_patch_add_conflict_does_not_delete_external_file(tmp_path, monkeypatch):
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    external = tmp_path / "new.py"
+    real_atomic = patch_mod.atomic_write
+
+    def racing(path, data, mode_from=None, expected_sha256=None, create=False):
+        if create and not path.exists():
+            path.write_bytes(b"external-writer")  # another process wins the race
+        return real_atomic(path, data, mode_from=mode_from, expected_sha256=expected_sha256, create=create)
+
+    monkeypatch.setattr(patch_mod, "atomic_write", racing)
+    patch = _patch_text("*** Add File: new.py", "+created by agent")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert external.read_bytes() == b"external-writer", "rollback must never delete a concurrent writer's file"
+
+
+def test_apply_patch_update_conflict_does_not_restore_over_external_edit(tmp_path, monkeypatch):
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "a.py"
+    target.write_text("old\n", encoding="utf-8")
+    ctx.state.read_hashes["a.py"] = sha(target.read_bytes())
+    real_atomic = patch_mod.atomic_write
+
+    def racing(path, data, mode_from=None, expected_sha256=None, create=False):
+        if expected_sha256 is not None:
+            path.write_bytes(b"external-edit")  # concurrent modification after validation
+        return real_atomic(path, data, mode_from=mode_from, expected_sha256=expected_sha256, create=create)
+
+    monkeypatch.setattr(patch_mod, "atomic_write", racing)
+    patch = _patch_text("*** Update File: a.py", "@@", "-old", "+new")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert target.read_bytes() == b"external-edit", "rollback must not overwrite concurrent content"
+
+
+def test_apply_patch_rollback_only_reverts_own_mutations(tmp_path, monkeypatch):
+    import jinlin_agent.tools.patch as patch_mod
+
+    ctx = make_ctx(tmp_path)
+    first = tmp_path / "a.py"
+    second = tmp_path / "b.py"
+    first.write_text("old-a\n", encoding="utf-8")
+    second.write_text("old-b\n", encoding="utf-8")
+    ctx.state.read_hashes["a.py"] = sha(first.read_bytes())
+    ctx.state.read_hashes["b.py"] = sha(second.read_bytes())
+    real_atomic = patch_mod.atomic_write
+    calls = {"n": 0}
+
+    def failing_second(path, data, mode_from=None, expected_sha256=None, create=False):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            result = real_atomic(path, data, mode_from=mode_from, expected_sha256=expected_sha256, create=create)
+            return result
+        # before failing the second write, a concurrent writer changes the first file
+        first.write_bytes(b"external-after-our-write")
+        raise patch_mod.AgentError("PATCH_CONFLICT", "simulated concurrent conflict", source="edit")
+
+    monkeypatch.setattr(patch_mod, "atomic_write", failing_second)
+    patch = _patch_text(
+        "*** Update File: a.py", "@@", "-old-a", "+new-a",
+        "*** Update File: b.py", "@@", "-old-b", "+new-b",
+    )
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert result.error is not None and result.error.code == "RECOVERY_UNCERTAIN"
+    assert "a.py" in result.error.details.get("rollback_incomplete", [])
+    assert first.read_bytes() == b"external-after-our-write", "incomplete rollback must keep external content"
+
+
+def test_apply_patch_delete_conflict_preserves_external_file(tmp_path, monkeypatch):
+    import jinlin_agent.tools.patch as patch_mod
+    import os as os_mod
+    from pathlib import Path as PathMod
+
+    ctx = make_ctx(tmp_path)
+    target = tmp_path / "doomed.py"
+    target.write_text("old\n", encoding="utf-8")
+    ctx.state.read_hashes["doomed.py"] = sha(target.read_bytes())
+    real_replace = os_mod.replace
+    raced = {"done": False}
+
+    def racing_replace(src, dst):
+        if not raced["done"] and PathMod(src) == target:
+            # external writer changes the file between validation and the directory operation
+            target.write_bytes(b"external-doomed")
+            raced["done"] = True
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(patch_mod.os, "replace", racing_replace)
+    patch = _patch_text("*** Delete File: doomed.py")
+    result = patch_mod.apply_patch(ctx, {"patch": patch})
+    assert not result.ok
+    assert target.exists(), "the file must be restored, not lost"
+    assert target.read_bytes() == b"external-doomed"
+

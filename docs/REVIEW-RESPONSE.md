@@ -1,14 +1,26 @@
-# 独立评审响应与整改记录（v1.1）
+# 独立评审响应与整改记录（v1.2）
 
 | 项 | 值 |
 |---|---|
-| 评审来源 | `JINLIN_AGENT_REVIEW.md`（2026-11-01，静态代码审查） |
-| 评审基线 | `f89384c`（评审时 `main` HEAD `9c0c965` 的父提交） |
+| 评审来源 | `JINLIN_AGENT_REVIEW.md`（2026-11-01，静态代码审查）+ `JINLIN_AGENT_REVIEW_FOLLOWUP.md`（整改复核） |
+| 评审基线 | `f89384c`（首轮）、`85854f1`（复核轮） |
 | 评审评分 | 实验型工程 Harness **7.0/10**；生产级通用 Agent **4.5/10** |
-| 本响应版本 | 整改后代码（见 `git log -1`） |
-| 结论 | **接受评审结论**。P0 两项、P1 六项已修复并附回归测试；P2 修了 2 项、其余明确延后 |
+| 本响应版本 | v1.2：首轮 P0/P1 整改 + follow-up 三项残留修复 |
+| 结论 | **接受两轮评审**。首轮 P0×2、P1×6 已修；follow-up 的 P1×2、P2×1 已修；其余明确延后 |
 
-## 1. 已修复（含回归测试）
+## 0. Follow-up 复核整改（v1.2，基于 `85854f1` 复核）
+
+| 复核项 | 处理 | 回归测试 |
+|---|---|---|
+| **P1 多文件回滚误删/覆盖并发写入** | 重写事务写入：只登记**本事务成功产生**的变更，并保存写后哈希；回滚前核验当前哈希仍等于本事务写后状态，不一致则保留外部内容并返回 `RECOVERY_UNCERTAIN` + `rollback_incomplete`；Add 冲突绝不删除并发创建者文件；Delete 改为"原子重命名到备份 → 校验 → 事务成功才删除备份"，校验失败时恢复原文件 | `test_apply_patch_add_conflict_does_not_delete_external_file`、`test_apply_patch_update_conflict_does_not_restore_over_external_edit`、`test_apply_patch_rollback_only_reverts_own_mutations`、`test_apply_patch_delete_conflict_preserves_external_file` |
+| **P1 L5 `exit_code=None` 可能放行** | 未知进程状态 fail-closed：`timed_out` / `exit_code is None` / 未知非零退出 / exit 0 但输出含失败 ID，均判 failed | `test_l5_none_exit_code_fails_closed` |
+| **P2 事件尾部判定过宽** | 改为 bytes 读取并保留"是否以换行结束"：只有**无换行结尾**的最后片段允许作为 torn tail；换行终止的坏 JSON、中间空行、schema/session 不一致、seq 缺口一律 `SESSION_CORRUPTED` | `test_torn_tail_without_newline_is_tolerated`、`test_newline_terminated_corrupt_tail_is_rejected`、`test_blank_line_between_events_is_rejected`、`test_schema_and_session_mismatch_is_rejected` |
+| **P2 Claim-Evidence 范围表述** | 明确限定：**测试类 Claim 已建立 L3 证据约束；通用 Claim-Evidence 语义匹配仍未实现**（后续用 `claim_type`/`evidence_type` 设计） | 文档修正 |
+| 复核建议：CI 记录 | 新增 `.github/workflows/ci.yml`：Windows + Ubuntu、Python 3.13，跑 pytest（junitxml）+ 离线 eval，上传报告 artifact | CI |
+
+说明：本轮按要求先推送到评审分支 `review/followup-fixes`，不直接改 `main`；由评审确认 diff 与 CI 结果后再合并。
+
+## 1. 首轮已修复（含回归测试）
 
 | 评审项 | 修复 | 位置 | 回归测试 |
 |---|---|---|---|
@@ -52,16 +64,17 @@ Shell：cwd 同一边界校验 → 命令分级 → 审批(fail-closed) → 沙�
 ## 4. 验证方式
 
 ```bash
-python -m pytest -q                    # 55 passed（42 + 13 条评审回归）
+python -m pytest -q                    # 63 passed（42 基础 + 21 安全/完成门/事务回归）
 jinlin-agent eval --suite all          # 18/18 probes passed
 ```
 
 评审建议的回归用例（SEC-001..008、EDIT-001..004、VERIFY-001..007、EVENT-001..004）
-已覆盖大部分；未覆盖项：Junction 在 L1 沙箱内的行为、多文件崩溃注入（EDIT-004）、
-嵌套/自由文本脱敏（SECRET-001/002）。
+已覆盖大部分；**仍未覆盖**：Junction 在 L1 沙箱内的行为、多文件崩溃注入（EDIT-004，
+需要 transaction manifest + 启动恢复）、嵌套/自由文本脱敏（SECRET-001/002）。
 
 ## 5. 对评审评分的说明
 
 - 同意"实验型工程 Harness 7.0 / 生产级 4.5"的判断：产品能力面、跨平台隔离、独立真实任务评测仍是短板。
-- 本次整改的目标不是提高自评分，而是把"设计上强调可靠"落成"实现上强制可靠"：路径、cwd、编辑一致性、L0/L5/证据、事件完整性现在都有机器判定与回归测试。
+- 本次整改的目标不是提高自评分，而是把"设计上强调可靠"落成"实现上强制可靠"：路径、cwd、编辑一致性、L0/L5/证据、事件完整性、并发回滚现在都有机器判定与回归测试。
+- 通用 Claim-Evidence 语义匹配、多文件崩溃事务、最终 Token 预算闭环、递归脱敏仍待办，报告里不宣称已完成。
 - 下一阶段优先级（与评审一致）：**独立真实任务评测 > 剩余 P2 > 扩展能力（MCP/Skills/UI/多 Agent）**。

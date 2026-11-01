@@ -624,7 +624,7 @@ $ jinlin-agent eval --suite all
 ```bash
 cd jinlin-agent
 python -m pip install -e .
-python -m pytest -q                    # 55 passed（42 基础 + 13 评审回归）
+python -m pytest -q                    # 63 passed（42 基础 + 21 安全/事务回归）
 jinlin-agent eval --suite all          # 18/18
 jinlin-agent doctor
 # 真实模型（需 key）：
