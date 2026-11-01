@@ -521,13 +521,16 @@ def test_rescue_restore_zero_progress_is_uncertain_and_preserves_source(tmp_path
     monkeypatch.setattr(trash_mod.os, "write", lambda fd, data: 0)
 
     result = trash_mod.restore_rescue(tmp_path, rescue.name)
-    assert result["status"] == "uncertain"
-    assert (tmp_path / "stalled.py").exists()
-    assert (tmp_path / "stalled.py").read_bytes() == b""
+    assert result["status"] == "incomplete"
+    assert not (tmp_path / "stalled.py").exists()
+    stage = Path(result["stage"])
+    assert (tmp_path / stage).exists()
+    assert (tmp_path / stage).read_bytes() == b""
     assert rescue.read_bytes() == b"original payload"
-    # Retry must refuse to overwrite the partial evidence.
-    retry = trash_mod.restore_rescue(tmp_path, rescue.name)
-    assert retry["status"] == "conflict"
+    # Recovery recognizes but never publishes an incomplete stage.
+    recovered = trash_mod.recover_rescue(tmp_path)
+    assert recovered["items"][0]["status"] == "incomplete"
+    assert not (tmp_path / "stalled.py").exists()
     assert rescue.read_bytes() == b"original payload"
 
 
@@ -539,11 +542,12 @@ def test_rescue_restore_fsync_failure_is_uncertain_and_retry_safe(tmp_path, monk
     monkeypatch.setattr(trash_mod.os, "fsync", lambda fd: (_ for _ in ()).throw(OSError("simulated fsync failure")))
 
     result = trash_mod.restore_rescue(tmp_path, rescue.name)
-    assert result["status"] == "uncertain"
-    assert (tmp_path / "sync.py").read_bytes() == b"original payload"
+    assert result["status"] == "incomplete"
+    assert not (tmp_path / "sync.py").exists()
     assert rescue.read_bytes() == b"original payload"
-    retry = trash_mod.restore_rescue(tmp_path, rescue.name)
-    assert retry["status"] == "conflict"
+    recovered = trash_mod.recover_rescue(tmp_path)
+    assert recovered["items"][0]["status"] == "restored"
+    assert (tmp_path / "sync.py").read_bytes() == b"original payload"
 
 
 def test_rescue_restore_repeated_after_success_is_non_destructive(tmp_path):
@@ -554,7 +558,7 @@ def test_rescue_restore_repeated_after_success_is_non_destructive(tmp_path):
     first = restore_rescue(tmp_path, rescue.name)
     second = restore_rescue(tmp_path, rescue.name)
     assert first["status"] == "restored"
-    assert second["status"] == "conflict"
+    assert second["status"] == "already-published"
     assert (tmp_path / "repeat.py").read_bytes() == b"original"
     assert rescue.read_bytes() == b"original"
 
@@ -574,3 +578,57 @@ def test_rescue_restore_rejects_symlink_parent_escape(tmp_path):
     assert result["status"] == "rejected"
     assert not (outside / "payload.py").exists()
     assert rescue.read_bytes() == b"original"
+
+
+def test_rescue_restore_crash_after_stage_is_recovered_atomically(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".recover.py.jinlin-rescue-01020309", b"crash-safe payload")
+    record_trash(tmp_path, rescue, "recover.py", "rescue")
+    digest = sha(b"crash-safe payload")
+    stage = trash_mod._restore_stage_path(tmp_path / "recover.py", digest)
+    stage.write_bytes(b"crash-safe payload")
+
+    report = trash_mod.recover_rescue(tmp_path)
+    assert report["status"] == "ok"
+    assert report["items"][0]["status"] == "restored"
+    assert (tmp_path / "recover.py").read_bytes() == b"crash-safe payload"
+    assert stage.read_bytes() == b"crash-safe payload"
+    assert rescue.read_bytes() == b"crash-safe payload"
+
+
+def test_rescue_restore_does_not_publish_corrupt_stage(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".corrupt.py.jinlin-rescue-01020310", b"expected")
+    record_trash(tmp_path, rescue, "corrupt.py", "rescue")
+    stage = trash_mod._restore_stage_path(tmp_path / "corrupt.py", sha(b"expected"))
+    stage.write_bytes(b"partial")
+    report = trash_mod.recover_rescue(tmp_path)
+    assert report["items"][0]["status"] == "incomplete"
+    assert not (tmp_path / "corrupt.py").exists()
+    assert stage.read_bytes() == b"partial"
+    assert rescue.read_bytes() == b"expected"
+
+
+def test_rescue_restore_rejects_windows_drive_and_backslash_manifest_paths(tmp_path):
+    from jinlin_agent.trash import restore_rescue
+
+    for idx, target in enumerate((r"..\\outside.py", r"C:\\temp\\evil.py", r"folder\\..\\evil.py", "file:stream")):
+        rescue = _mk_trash(tmp_path, f".path{idx}.py.jinlin-rescue-010203{idx:02x}", b"payload")
+        record_trash(tmp_path, rescue, target, "rescue")
+        result = restore_rescue(tmp_path, rescue.name)
+        assert result["status"] == "rejected"
+        assert rescue.exists()
+
+
+def test_rescue_cli_recover_lists_staged_restore(tmp_path, capsys):
+    import jinlin_agent.trash as trash_mod
+    from jinlin_agent.cli import main
+
+    rescue = _mk_trash(tmp_path, ".cli-recover.py.jinlin-rescue-01020311", b"cli payload")
+    record_trash(tmp_path, rescue, "cli-recover.py", "rescue")
+    stage = trash_mod._restore_stage_path(tmp_path / "cli-recover.py", sha(b"cli payload"))
+    stage.write_bytes(b"cli payload")
+    assert main(["rescue", "recover", "--workspace", str(tmp_path)]) == 0
+    assert (tmp_path / "cli-recover.py").read_bytes() == b"cli payload"
