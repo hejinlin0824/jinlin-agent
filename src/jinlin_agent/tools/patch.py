@@ -122,12 +122,30 @@ def atomic_write(
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
         if actual != hashlib.sha256(data).hexdigest():
             raise AgentError(TOOL_EXECUTION_FAILED, f"{path.name}: written content failed verification", source="edit")
+        # A .pyc records its source mtime in whole seconds. An edit that lands in
+        # the same second as the previous import (common on fast CI/mock runs) would
+        # otherwise keep re-using stale bytecode, so drop bytecode for this file.
+        _invalidate_bytecode(path)
     except Exception:
         try:
             os.unlink(tmp_name)
         except OSError:
             pass
         raise
+
+
+def _invalidate_bytecode(path: Path) -> None:
+    """Remove cached bytecode for an edited Python source file (best effort)."""
+    if path.suffix.lower() != ".py":
+        return
+    cache_dir = path.parent / "__pycache__"
+    if not cache_dir.is_dir():
+        return
+    try:
+        for cached in cache_dir.glob(f"{path.stem}.*.pyc"):
+            cached.unlink()
+    except OSError:
+        pass
 
 
 def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], list[str]]:

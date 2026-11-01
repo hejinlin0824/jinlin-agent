@@ -327,6 +327,24 @@ def test_l5_none_exit_code_fails_closed(tmp_path):
     assert any("no exit code" in f for f in run.findings)
 
 
+def test_edit_invalidates_stale_bytecode(tmp_path):
+    """A same-second edit must not leave Python re-using the previous .pyc."""
+    target = tmp_path / "calc.py"
+    target.write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    subprocess.run([sys.executable, "-c", "import calc"], cwd=str(tmp_path), check=True)
+    before = list((tmp_path / "__pycache__").glob("calc.*.pyc"))
+    assert before, "expected an import to produce bytecode"
+    old_sha = sha(target.read_bytes())
+    atomic_write(
+        target,
+        b"def add(a, b):\n    return a + b\n",
+        mode_from=target,
+        expected_sha256=old_sha,
+    )
+    remaining = list((tmp_path / "__pycache__").glob("calc.*.pyc"))
+    assert not remaining, "editing a .py file must invalidate its cached bytecode"
+
+
 # --------------------------------------------------------------------------- P1 patch rollback
 
 
