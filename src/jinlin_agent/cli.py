@@ -340,7 +340,7 @@ def cmd_clean(args: Any) -> int:
 
 
 def cmd_rescue(args: Any) -> int:
-    from .trash import list_rescue, recover_rescue, restore_rescue
+    from .trash import clean_rescue, list_rescue, recover_rescue, restore_rescue
 
     workspace = Path(args.workspace or ".").expanduser().resolve()
     if args.rescue_action == "recover":
@@ -349,8 +349,24 @@ def cmd_rescue(args: Any) -> int:
         _print(f"status: {report['status']}")
         for item in report.get("items", []):
             _print(f"  {item['status']}: {item.get('stage')} -> {item.get('target')} ({item.get('detail', '')})")
+        for item in report.get("orphaned", []):
+            _print(f"  orphaned: {item['path']} [{item['kind']}] ({item['detail']})")
         safe = all(x["status"] in ("restored", "already-published") for x in report.get("items", []))
-        return 0 if report["status"] == "ok" and safe else 2
+        return 0 if report["status"] == "ok" and safe and not report.get("orphaned") else 2
+    if args.rescue_action == "clean":
+        report = clean_rescue(workspace, apply=bool(args.apply))
+        _print(f"workspace: {workspace}")
+        _print(f"status: {report['status']}")
+        _print(f"eligible: {len(report['eligible'])}")
+        for item in report["eligible"]:
+            _print(f"  {item['rescue']} -> {item['target']} (stage={item['stage']}, sha256={item['sha256']})")
+        for item in report["failed"]:
+            _print(f"  failed: {item}")
+        for path in report["removed"]:
+            _print(f"  removed: {path}")
+        for path in report["manifest_degraded"]:
+            _print(f"  manifest update failed after removal: {path}")
+        return 0 if report["status"] in ("dry-run", "applied") and not report["failed"] else 2
     if args.rescue_action == "list":
         report = list_rescue(workspace)
         _print(f"workspace: {workspace}")
@@ -458,6 +474,10 @@ def build_parser() -> argparse.ArgumentParser:
     rescue_recover = rescue_sub.add_parser("recover", help="reconcile interrupted rescue restore staging files")
     rescue_recover.add_argument("--workspace", default=".")
     rescue_recover.set_defaults(func=cmd_rescue)
+    rescue_clean = rescue_sub.add_parser("clean", help="preview or remove verified redundant rescue evidence")
+    rescue_clean.add_argument("--workspace", default=".")
+    rescue_clean.add_argument("--apply", action="store_true", help="perform verified cleanup (default: dry run)")
+    rescue_clean.set_defaults(func=cmd_rescue)
 
     ev = sub.add_parser("eval", help="run the harness conformance / evaluation suite")
     ev.add_argument("--suite", default="all", choices=["all", "hcs", "e1e8"])
