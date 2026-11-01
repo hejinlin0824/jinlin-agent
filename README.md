@@ -1,5 +1,7 @@
 # Jinlin Code Engineer Agent
 
+[![ci](https://github.com/hejinlin0824/jinlin-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/hejinlin0824/jinlin-agent/actions/workflows/ci.yml)
+
 > 一个**事件溯源、可验证、可恢复、带沙箱**的代码工程 Agent Harness。
 > CLI 直接可用，不是演示脚本：每条"完成"都有可复查的证据。
 

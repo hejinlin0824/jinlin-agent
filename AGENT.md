@@ -144,7 +144,7 @@ references:
 ## 10. 我如何被验证
 
 ```bash
-python -m pytest -q                    # 63 passed（含 21 条安全/完成门回归）
+python -m pytest -q                    # 64 passed（含 22 条安全/完成门回归）
 jinlin-agent eval --suite all          # 18/18（T1–T4 探针 + E1–E8）
 jinlin-agent doctor                    # 模型/沙箱/项目命令自检
 ```

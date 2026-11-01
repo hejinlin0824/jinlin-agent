@@ -64,13 +64,18 @@ Shell：cwd 同一边界校验 → 命令分级 → 审批(fail-closed) → 沙�
 ## 4. 验证方式
 
 ```bash
-python -m pytest -q                    # 63 passed（42 基础 + 21 安全/完成门/事务回归）
+python -m pytest -q                    # 64 passed（42 基础 + 22 安全/完成门/事务回归）
 jinlin-agent eval --suite all          # 18/18 probes passed
 ```
 
 评审建议的回归用例（SEC-001..008、EDIT-001..004、VERIFY-001..007、EVENT-001..004）
 已覆盖大部分；**仍未覆盖**：Junction 在 L1 沙箱内的行为、多文件崩溃注入（EDIT-004，
 需要 transaction manifest + 启动恢复）、嵌套/自由文本脱敏（SECRET-001/002）。
+
+CI（`.github/workflows/ci.yml`，Windows + Ubuntu、Python 3.13）在本轮整改提交上已双平台通过。
+CI 还暴露了一个真实缺陷并已修复：**同一秒内编辑 `.py` 文件时，CPython 的 mtime(秒级)+size
+校验会让旧 `.pyc` 继续生效**，导致 L3 仍跑旧代码。修复：`atomic_write` 成功后按源文件粒度
+清理 `__pycache__/<stem>.*.pyc`，并加测试 `test_edit_invalidates_stale_bytecode`。
 
 ## 5. 对评审评分的说明
 
