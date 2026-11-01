@@ -1213,34 +1213,51 @@ def test_atomic_create_failure_replaced_same_size_is_not_unlinked(tmp_path, monk
 
 
 def test_atomic_create_failure_fingerprint_collision_documents_residual(tmp_path, monkeypatch):
-    """P3 boundary (documented residual): an adversary who replicates the full
-    stat fingerprint (size AND mtime_ns) is outside the threat model — the
-    helper then treats the path as ours and deletes it, and the original
-    failure surfaces. This pins the honest limit of a stat-based identity
-    instead of claiming atomic identity deletion."""
+    """P3 boundary (documented residual, verified honestly): an adversary who
+    replicates the FULL stat fingerprint — all four components (st_dev,
+    st_ino, st_size, st_mtime_ns) — is outside the threat model; the helper
+    then treats the path as ours and deletes it. The test explicitly checks
+    all four fields after the swap: when the platform reproduces the inode
+    reuse the collision is complete and the deletion is asserted; when it
+    does not, the replacement survives and that outcome is asserted instead.
+    Either way the test records what was actually verified."""
     import jinlin_agent.tools.patch as patch_mod
 
     target = tmp_path / "new.py"
     our_data = b"created by agent\n"
     state = _armed_create_failure_hooks(monkeypatch)
     state["target"] = target
+    observed: dict[str, Any] = {"collision": None}
 
     real_stat = state["real_stat"]
 
     def claim_identical_fingerprint(path):
-        # capture the fingerprint of the file as it stands (ours), then swap
-        # in a replacement carrying that exact fingerprint
+        # capture the four-field fingerprint of the file as it stands (ours),
+        # then swap in a replacement and measure how much of it collides
         st = real_stat(path)
+        original = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+        os.unlink(path)
         target.write_bytes(our_data)  # same bytes → same size
-        os.utime(target, ns=(st.st_mtime_ns, st.st_mtime_ns))
-        return real_stat(path)
+        os.utime(target, ns=(st.st_mtime_ns, st.st_mtime_ns))  # same mtime
+        new = real_stat(path)
+        replacement = (new.st_dev, new.st_ino, new.st_size, new.st_mtime_ns)
+        observed["collision"] = replacement == original  # all four, explicitly
+        return new
 
     state["on_cleanup_stat"] = claim_identical_fingerprint
-    with pytest.raises(OSError):
+    with pytest.raises(AgentError) as excinfo:
         patch_mod.atomic_write(target, our_data, create=True)
-    assert not target.exists(), (
-        "documented residual: an identical stat fingerprint is indistinguishable from our file"
-    )
+    assert observed["collision"] is not None, "the test must measure the four-field collision"
+    if observed["collision"]:
+        # documented residual: full fingerprint collision (dev/ino/size/mtime all equal)
+        assert excinfo.value.code != "RECOVERY_UNCERTAIN"
+        assert not target.exists(), (
+            "documented residual: a full stat fingerprint collision is indistinguishable from our file"
+        )
+    else:
+        # the platform did not reproduce the identity reuse: the replacement is preserved
+        assert excinfo.value.code == "RECOVERY_UNCERTAIN"
+        assert target.exists() and target.read_bytes() == our_data
 
 
 def test_atomic_create_failure_vanished_path_is_reported_uncertain(tmp_path, monkeypatch):
