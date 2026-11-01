@@ -323,7 +323,7 @@ session 开始时快照记录"任务前既有的脏文件"；完成门区分 **�
 - **恢复中断的处理**：恢复先在目标同目录创建确定性命名的暂存文件，完成写入、文件 `fsync` 与 SHA-256 校验后，才用硬链接原子 no-clobber 发布到目标路径。POSIX 平台会在暂存目录项创建后、目标发布后尝试 `fsync` 父目录；便携式 Windows Python API 不提供等价的目录句柄同步能力，因此 Windows 目录项断电持久性明确标为 best-effort。进程在暂存写入期间崩溃，不会把半成品暴露为目标文件；`jinlin-agent rescue recover` 会重新校验暂存文件、重新执行文件 `fsync`，仅发布与 Rescue 原件 SHA-256 完全一致的暂存文件。内容不完整的暂存文件只报告、不自动删除；目标已被占用则保留暂存和 Rescue 原件并报告冲突。
 - **暂存身份检查**：发布前通过文件描述符检查暂存对象是普通文件，并比较打开描述符与路径的 `(dev, ino, size, mtime_ns)` 身份，拒绝符号链接及意外多重硬链接；发布后再次核对目标身份。该机制缩小并检测部分路径替换窗口，但跨平台路径式 `os.link` 仍有同权限外部进程竞态，不能视为抵御恶意同用户进程的完整安全边界。
 - **孤立暂存文件**：`rescue recover` 会扫描符合命名规则、但没有当前有效 Rescue + manifest 记录对应的暂存文件，并将其列为 `orphaned`。孤立文件仅报告，绝不自动发布或删除；CLI 对存在孤立文件返回非零状态，要求人工检查。
-- **受控清理**：`rescue clean` 默认只预览。只有当目标文件仍为普通非符号链接文件且 SHA-256 与有效 Rescue 一致时，才将 Rescue 与 stage 列入可清理项；`rescue clean --apply` 才执行清理。每个候选先移动到唯一 quarantine 名称，再验证被移动对象的类型与 SHA-256，匹配后才删除；身份不匹配的对象保留在 quarantine 并报告。清理成功后目标文件保留，manifest 记录随 Rescue 删除而移除。
+- **受控清理**：`rescue clean` 默认只预览。只有当目标文件仍为普通非符号链接文件且 SHA-256 与有效 Rescue 一致时，才将 Rescue 与 stage 列入可清理项；`rescue clean --apply` 才执行清理。每个候选先移动到唯一 quarantine 名称，再验证被移动对象的类型与 SHA-256，匹配后才删除；身份不匹配的对象保留在 quarantine 并报告。进程若在 quarantine 后、删除前中断，后续 `rescue clean` 会把遗留 quarantine 作为人工检查项报告，不自动恢复或删除。清理成功后目标文件保留，manifest 记录随 Rescue 删除而移除。
 - **恢复安全边界**：目标父目录必须已存在且解析后仍位于 workspace 内；目标通过硬链接 create-if-absent 发布，不覆盖既有目标。workspace 写锁只协调 Jinlin 自身会话，不约束同权限外部进程；跨平台路径解析、路径式硬链接及 quarantine 操作仍有有限 TOCTOU 窗口，不宣称抵御拥有同等文件系统权限的恶意进程。
 - 失败信息包含 hunk 号与匹配诊断，便于模型自纠。
 
