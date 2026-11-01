@@ -340,9 +340,17 @@ def cmd_clean(args: Any) -> int:
 
 
 def cmd_rescue(args: Any) -> int:
-    from .trash import list_rescue, restore_rescue
+    from .trash import list_rescue, recover_rescue, restore_rescue
 
     workspace = Path(args.workspace or ".").expanduser().resolve()
+    if args.rescue_action == "recover":
+        report = recover_rescue(workspace)
+        _print(f"workspace: {workspace}")
+        _print(f"status: {report['status']}")
+        for item in report.get("items", []):
+            _print(f"  {item['status']}: {item.get('stage')} -> {item.get('target')} ({item.get('detail', '')})")
+        safe = all(x["status"] in ("restored", "already-published") for x in report.get("items", []))
+        return 0 if report["status"] == "ok" and safe else 2
     if args.rescue_action == "list":
         report = list_rescue(workspace)
         _print(f"workspace: {workspace}")
@@ -358,10 +366,14 @@ def cmd_rescue(args: Any) -> int:
     _print(f"status: {result['status']}")
     _print(result.get("detail", ""))
     if result.get("target"):
-        _print(f"restored: {result['target']}")
-        _print(f"rescue copy retained: {result['rescue']}")
-        _print(f"sha256: {result['sha256']}")
-    return 0 if result["status"] == "restored" else 2
+        _print(f"target: {result['target']}")
+        if result.get("rescue"):
+            _print(f"rescue copy retained: {result['rescue']}")
+        if result.get("stage"):
+            _print(f"staging file retained: {result['stage']}")
+        if result.get("sha256"):
+            _print(f"sha256: {result['sha256']}")
+    return 0 if result["status"] in ("restored", "already-published") else 2
 
 
 def cmd_eval(args: Any) -> int:
@@ -443,6 +455,9 @@ def build_parser() -> argparse.ArgumentParser:
     rescue_restore.add_argument("path", help="workspace-relative rescue path shown by rescue list")
     rescue_restore.add_argument("--workspace", default=".")
     rescue_restore.set_defaults(func=cmd_rescue)
+    rescue_recover = rescue_sub.add_parser("recover", help="reconcile interrupted rescue restore staging files")
+    rescue_recover.add_argument("--workspace", default=".")
+    rescue_recover.set_defaults(func=cmd_rescue)
 
     ev = sub.add_parser("eval", help="run the harness conformance / evaluation suite")
     ev.add_argument("--suite", default="all", choices=["all", "hcs", "e1e8"])
