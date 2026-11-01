@@ -636,7 +636,32 @@ def recover_rescue(workspace: Path) -> dict[str, Any]:
             result.update({"rescue": rescue["path"], "target": str(entry.get("orig", "")),
                            "stage": _relative_posix(stage, workspace), "sha256": digest})
             items.append(result)
-        return {"status": "ok", "items": items}
+        # A stage without a currently verified Rescue+manifest record is
+        # evidence only. Never infer its target or publish/delete it.
+        expected: set[str] = set()
+        for rescue in listed["rescued"]:
+            entry = manifest.get(rescue["path"], {})
+            target, target_error = _safe_rescue_target(workspace, str(entry.get("orig", "")))
+            if target_error or target is None:
+                continue
+            expected.add(_relative_posix(_restore_stage_path(target, rescue["sha256"]), workspace))
+        orphaned: list[dict[str, Any]] = []
+        for root, dirs, files in os.walk(workspace, followlinks=False):
+            candidates = list(files) + [name for name in dirs if (Path(root) / name).is_symlink()]
+            for name in candidates:
+                if not RESTORE_STAGE_RE.match(name):
+                    continue
+                candidate = Path(root) / name
+                rel = _relative_posix(candidate, workspace)
+                if rel not in expected:
+                    orphaned.append({
+                        "path": rel,
+                        "kind": "symlink" if candidate.is_symlink() else ("directory" if candidate.is_dir() else "file"),
+                        "status": "orphaned",
+                        "detail": "no currently verified Rescue+manifest record authorizes this stage; report-only",
+                    })
+        orphaned.sort(key=lambda item: item["path"])
+        return {"status": "ok", "items": items, "orphaned": orphaned}
     finally:
         lock.release()
 
