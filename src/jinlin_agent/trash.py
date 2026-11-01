@@ -717,7 +717,7 @@ def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
     workspace = Path(workspace).resolve()
     report: dict[str, Any] = {
         "status": "dry-run", "eligible": [], "removed": [], "failed": [],
-        "manifest_degraded": [], "unrecognized": [],
+        "manifest_degraded": [], "unrecognized": [], "quarantined": [],
     }
     lock = SessionLock(workspace / ".jinlin" / "write.lock")
     try:
