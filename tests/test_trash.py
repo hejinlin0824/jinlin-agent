@@ -314,6 +314,10 @@ def test_clean_apply_does_not_delete_replaced_file_after_scan(tmp_path, monkeypa
     assert proven.exists() and proven.read_bytes() == b"external-replaced-after-scan", (
         "the replacement must survive the cleanup"
     )
+    quarantines = list(tmp_path.glob(proven.name + ".q-*"))
+    assert len(quarantines) == 1 and quarantines[0].read_bytes() == b"external-replaced-after-scan", (
+        "the quarantine source must remain as evidence; restoring by hard link must not unlink by name"
+    )
     assert report["removed"] == []
     reported = json.dumps(
         report.get("failed", []) + report.get("uncertain", []) + report.get("unrecognized", []),
