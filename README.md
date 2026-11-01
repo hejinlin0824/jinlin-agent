@@ -78,6 +78,8 @@ jinlin-agent clean --workspace .              # 只预览可证明归属的普�
 jinlin-agent rescue list --workspace .        # 列出通过 manifest + SHA-256 校验的救援副本
 jinlin-agent rescue restore <rescue-path> --workspace .  # 暂存后原子无覆盖发布
 jinlin-agent rescue recover --workspace .                # 检查并恢复中断的暂存事务
+jinlin-agent rescue clean --workspace .                  # 预览可安全清理的冗余证据
+jinlin-agent rescue clean --apply --workspace .          # 显式清理已验证的 stage / Rescue 副本
 ```
 
 安装为命令行（可选）：
