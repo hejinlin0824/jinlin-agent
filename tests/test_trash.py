@@ -468,3 +468,22 @@ def test_rescue_cli_lists_and_restores(tmp_path, capsys):
     assert main(["rescue", "restore", rescue.name, "--workspace", str(tmp_path)]) == 0
     assert (tmp_path / "lost.py").read_bytes() == b"cli original"
     assert rescue.exists()
+
+
+
+def test_legacy_rescue_manifest_remains_discoverable_and_restorable(tmp_path):
+    from jinlin_agent.trash import list_rescue, restore_rescue
+
+    rescue = _mk_trash(tmp_path, ".legacy.py.jinlin-rescue-cafebabe", b"legacy original")
+    record_trash(tmp_path, rescue, "legacy.py", "rescue")
+    manifest_path = tmp_path / MANIFEST_REL
+    entry = json.loads(manifest_path.read_text(encoding="utf-8").splitlines()[0])
+    entry["identity"].pop("sha256", None)  # format written by pre-upgrade versions
+    manifest_path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+    report = list_rescue(tmp_path)
+    assert [x["path"] for x in report["rescued"]] == [rescue.name]
+    restored = restore_rescue(tmp_path, rescue.name)
+    assert restored["status"] == "restored"
+    assert (tmp_path / "legacy.py").read_bytes() == b"legacy original"
+    assert rescue.exists()
