@@ -243,6 +243,22 @@ class ApplicationService:
             )
             status = harness.run()
             return session, status
+        except AgentError as exc:
+            # A failure escaping the Harness must still leave a terminal event.
+            # Otherwise the task registry says "failed" while recovered session
+            # state remains "running" forever.
+            if not session.state.is_terminal():
+                session.emit("session.failed", {"error": exc.to_dict()})
+            raise
+        except Exception as exc:
+            failure = AgentError(
+                "INTERNAL_ERROR",
+                f"unexpected {type(exc).__name__} during agent execution",
+                source="application",
+            )
+            if not session.state.is_terminal():
+                session.emit("session.failed", {"error": failure.to_dict()})
+            raise failure from exc
         finally:
             session.close()
 
