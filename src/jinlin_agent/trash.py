@@ -1115,6 +1115,33 @@ def _read_verified_regular(path: Path, digest: str, expected_identity: tuple[int
             os.close(fd)
 
 
+def _read_stable_regular(path: Path) -> tuple[bytes | None, tuple[int, int, int, int] | None, str | None]:
+    """Read a stable regular file without requiring its final digest to match."""
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = None
+    try:
+        fd = os.open(path, flags)
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            return None, None, "stage is not a regular file"
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(fd)
+        path_after = os.stat(path, follow_symlinks=False)
+        if not _same_file_identity(before, after) or not _same_file_identity(before, path_after):
+            return None, None, "stage changed while being read"
+        return b"".join(chunks), (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns), None
+    except OSError as exc:
+        return None, None, f"stage could not be safely read: {exc}"
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
 def _quarantine_recover_one_locked(workspace: Path, item: dict[str, Any], manifest: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Restore one verified quarantine as an independent copy, without clobbering."""
     quarantine_rel = str(item.get("path", ""))
@@ -1193,8 +1220,34 @@ def _quarantine_recover_one_locked(workspace: Path, item: dict[str, Any], manife
     if stage.exists():
         staged, stage_identity, stage_error = _read_verified_regular(stage, digest)
         if stage_error or staged is None or stage_identity is None:
-            return {"path": quarantine_rel, "candidate": candidate_rel, "status": "rejected", "stage": _relative_posix(stage, workspace),
-                    "detail": f"existing recovery stage is not valid: {stage_error}"}
+            partial, partial_identity, partial_error = _read_stable_regular(stage)
+            if partial_error or partial is None or partial_identity is None or len(partial) > len(data) or data[:len(partial)] != partial:
+                return {"path": quarantine_rel, "candidate": candidate_rel, "status": "rejected", "stage": _relative_posix(stage, workspace),
+                        "detail": f"existing recovery stage is not a verified prefix of the quarantine: {partial_error or stage_error}"}
+            flags_append = os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                append_fd = os.open(stage, flags_append)
+                try:
+                    opened = os.fstat(append_fd)
+                    opened_identity = (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+                    if opened_identity != partial_identity:
+                        raise OSError("recovery stage identity changed before continuation")
+                    view = memoryview(data[len(partial):])
+                    while view:
+                        count = os.write(append_fd, view)
+                        if count <= 0:
+                            raise OSError("stage continuation made no forward progress")
+                        view = view[count:]
+                    os.fsync(append_fd)
+                finally:
+                    os.close(append_fd)
+            except OSError as exc:
+                return {"path": quarantine_rel, "candidate": candidate_rel, "status": "incomplete",
+                        "stage": _relative_posix(stage, workspace), "detail": f"partial stage could not be safely continued: {exc}"}
+            staged, stage_identity, stage_error = _read_verified_regular(stage, digest)
+            if stage_error or staged is None or stage_identity is None:
+                return {"path": quarantine_rel, "candidate": candidate_rel, "status": "incomplete",
+                        "stage": _relative_posix(stage, workspace), "detail": stage_error or "continued stage verification failed"}
     else:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
         try:
@@ -1279,7 +1332,6 @@ def recover_clean_quarantines(workspace: Path, apply: bool = False) -> dict[str,
                               "classification": classification, "detail": item.get("reason", "not eligible for automatic recovery")}
                 else:
                     result = _quarantine_recover_one_locked(workspace, item, manifest)
-            report["items"][-1 if False else 0:0] = []
             (report["recovered"] if result["status"] in ("already-restored",) else report["blocked"]).append(result)
             _audit_result(workspace, "quarantine-recover", result, rescue=item.get("path"),
                           target=candidate, sha256=item.get("sha256"))
