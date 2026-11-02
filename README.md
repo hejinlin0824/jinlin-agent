@@ -297,3 +297,26 @@ Windows 一键验收：
 
 
 Machine-readable inspection is available with `jinlin-agent rescue inspect --workspace ./my-repo --json`; it emits the full report (including quarantine classifications and counts) and preserves the same exit-code semantics as text mode.
+
+
+## Recovering interrupted Rescue cleanup quarantines
+
+A quarantine left by an interrupted `rescue clean --apply` is evidence, not disposable trash. Inspect it first:
+
+```powershell
+jinlin-agent rescue quarantine inspect --workspace .
+jinlin-agent rescue quarantine inspect --workspace . --json
+```
+
+Recovery is an explicit two-step operation. The default is a read-only preview; only `--apply` changes files:
+
+```powershell
+jinlin-agent rescue quarantine recover --workspace . --dry-run
+jinlin-agent rescue quarantine recover --workspace . --apply
+```
+
+Only manifest-backed quarantine files whose SHA-256 and, for Rescue files, recorded file identity can be verified are eligible. Occupied targets, symlinks, modified data, duplicate claims, unrecognized files, and legacy entries without SHA-256 are blocked. Publication uses a deterministic sibling stage, file fsync, and atomic no-clobber hard-link creation. If a process stops after creating a partial stage, a later apply may continue it only when its bytes are an exact prefix of the verified quarantine payload; arbitrary stage contents are never overwritten.
+
+The original quarantine remains as an independent evidence file. When a Rescue file is copied back, its manifest records the restored file identity separately from the retained quarantine identity. A stage quarantine is restored to its deterministic restore-stage pathname; run `jinlin-agent rescue recover --workspace .` afterward to complete the normal Rescue publication to the original target. Recovery is idempotent when the candidate already contains the verified bytes.
+
+This protects against accidental clobbering and detects many path substitutions, but it is not a defense against a hostile same-privilege process racing path operations. Directory-entry power-loss durability remains platform-dependent (Windows portable Python does not expose the same directory-fsync guarantee). A quarantine is never automatically deleted by this command.
