@@ -29,7 +29,10 @@ class ApplicationService:
     """
 
     def __init__(self, workspace: str | Path, config: Config | None = None) -> None:
-        root = Path(workspace).expanduser().resolve(strict=True)
+        try:
+            root = Path(workspace).expanduser().resolve(strict=True)
+        except OSError as exc:
+            raise AgentError("CONFIG_INVALID", f"workspace cannot be resolved: {workspace}", source="application") from exc
         if not root.is_dir():
             raise AgentError("CONFIG_INVALID", f"workspace is not a directory: {root}", source="application")
         self.workspace = root
@@ -60,16 +63,52 @@ class ApplicationService:
         }
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        rows = SessionManager.list_sessions(self.config)
-        root = str(self.workspace)
-        return [row for row in rows if str(Path(row.get("workspace") or "").resolve()) == root]
+        root = self.config.sessions_dir.resolve()
+        if not root.is_dir():
+            return []
+        rows: list[dict[str, Any]] = []
+        for entry in sorted(root.iterdir(), reverse=True):
+            if not _SESSION_ID.fullmatch(entry.name) or entry.is_symlink():
+                continue
+            try:
+                directory = entry.resolve(strict=True)
+                event_file = (directory / "events.jsonl").resolve(strict=True)
+                if directory.parent != root or event_file.parent != directory or not event_file.is_file():
+                    continue
+                state = recover(read_events(directory))
+                if str(Path(state.workspace or "").resolve()) != str(self.workspace):
+                    continue
+                meta_path = directory / "session.json"
+                updated_at = ""
+                if meta_path.is_file() and not meta_path.is_symlink():
+                    try:
+                        import json
+                        updated_at = json.loads(meta_path.read_text(encoding="utf-8")).get("updated_at", "")
+                    except (OSError, ValueError, TypeError):
+                        pass
+                rows.append({
+                    "session_id": state.session_id,
+                    "workspace": str(self.workspace),
+                    "request": (state.request or "")[:120],
+                    "status": state.status,
+                    "phase": state.phase,
+                    "updated_at": updated_at or state.updated_at,
+                })
+            except (OSError, AgentError, ValueError):
+                # A malformed or concurrently changing session is not exposed as a partial row.
+                continue
+        return rows
 
     def _session_dir(self, session_id: str) -> Path:
         if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):
             raise AgentError("SESSION_NOT_FOUND", "invalid session id", source="application")
         root = self.config.sessions_dir.resolve()
-        path = (root / session_id).resolve()
-        if path.parent != root or not (path / "events.jsonl").is_file():
+        try:
+            path = (root / session_id).resolve(strict=True)
+            event_file = (path / "events.jsonl").resolve(strict=True)
+        except OSError as exc:
+            raise AgentError("SESSION_NOT_FOUND", "session not found", source="application") from exc
+        if path.parent != root or event_file.parent != path or not event_file.is_file():
             raise AgentError("SESSION_NOT_FOUND", "session not found", source="application")
         return path
 
