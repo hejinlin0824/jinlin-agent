@@ -16,6 +16,23 @@
 
 ---
 
+## 当前交付状态（2026-11-02；优先于本文历史快照）
+
+本文主体技术分析保留其撰写时的评审数据与实验记录；其中旧测试数量、旧提交号和旧 CI 编号均为历史快照，不应被当作当前分支状态。当前可复核交付状态如下：
+
+- 仓库：`hejinlin0824/jinlin-agent`；工作分支：`review/followup-fixes`。
+- `main` 固定基线：`249bbab7d86f76f71acbf8c88000fc7971297ce6`；本次工作未修改 `main`。
+- PR #1：Draft、open、unmerged；合并决定保留给仓库所有者。
+- 主体任务包 01–06 已完成并由所有者本地验收。
+- 最终收尾包 01–03 已完成。收尾包 03 的提交 `b326972a4e041e3230e43cbf794fee339ad1ccde` 已通过所有者 Windows `test-all.bat` 验收，以及该 SHA 对应的 Push CI 和 PR CI；两个 workflow 均包含 Ubuntu 与 Windows 成功 job。
+- 最终收尾包 04 正在核对 README、AGENT、测试 runner、机器可读测试元数据、报告和 PR 描述的一致性；收尾包 05 是最后的发布候选审查，不再扩展功能范围。
+
+当前一键验收入口为根目录 `test-all.bat`，实际执行由 `scripts/test-all.ps1` 负责；测试套件身份来自 `test-suite.json`。成功结果必须与 runner 打印的分支/提交 SHA 一起核对。CI 结果和历史文档不能替代所有者在目标 Windows 环境上的最终验收。
+
+**可靠性边界仍然有效：** 子进程崩溃测试不等于内核崩溃或物理断电测试；Windows portable Python 对目录项持久性的保证弱于 POSIX 显式目录 fsync；workspace advisory lock 只协调使用同一 lock object 的 Jinlin 操作，不约束任意外部程序或恶意同权限进程。
+
+---
+
 ## 0. 给评审 AI 的说明（先读这一节）
 
 ### 0.1 评审对象与边界
