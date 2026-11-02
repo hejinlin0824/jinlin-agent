@@ -122,6 +122,17 @@ def _read_audit(workspace: Path) -> dict[str, Any]:
             issues.append({"line": number, "reason": str(exc)})
             # A broken chain is never silently repaired or extended.
             break
+    # A valid JSON object without its terminating newline is still an
+    # incomplete JSONL record. Appending after it would concatenate the next
+    # event onto the same physical line and corrupt the hash chain on reread.
+    # Preserve the evidence and fail closed rather than silently repairing it.
+    if raw and not raw.endswith(b"\n"):
+        final_line = len(raw.splitlines()) or 1
+        if not any(issue.get("line") == final_line for issue in issues):
+            issues.append({
+                "line": final_line,
+                "reason": "audit log has an unterminated final record; refusing to extend",
+            })
     return {"events": events, "issues": issues, "last_hash": previous}
 
 

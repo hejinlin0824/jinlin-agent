@@ -868,6 +868,35 @@ def test_rescue_audit_hash_chain_and_transaction_state_lifecycle(tmp_path):
     assert report["stages"][0]["integrity"] == "sha256-valid"
 
 
+def test_rescue_audit_refuses_to_append_after_valid_unterminated_record(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    ok, warning = trash_mod._append_audit_event(
+        tmp_path, "restore", "restored", txid="f" * 32
+    )
+    assert ok, warning
+    audit_path = tmp_path / trash_mod.AUDIT_REL
+    original = audit_path.read_bytes()
+    assert original.endswith(b"\n")
+
+    # Simulate a crash after the JSON payload was written but before its
+    # JSONL record terminator reached durable storage.
+    audit_path.write_bytes(original[:-1])
+    damaged = audit_path.read_bytes()
+
+    audit = trash_mod._read_audit(tmp_path)
+    assert audit["events"], "the complete payload remains useful evidence"
+    assert audit["issues"]
+    assert "unterminated final record" in audit["issues"][0]["reason"]
+
+    ok, warning = trash_mod._append_audit_event(
+        tmp_path, "recover", "already-published", txid="f" * 32
+    )
+    assert not ok
+    assert warning and "integrity issues" in warning
+    assert audit_path.read_bytes() == damaged
+
+
 def test_rescue_audit_detects_tampering_and_refuses_to_extend_chain(tmp_path):
     import jinlin_agent.trash as trash_mod
 
@@ -1675,7 +1704,7 @@ def test_record_trash_refuses_to_append_after_torn_manifest_tail(tmp_path):
     candidate = _mk_trash(tmp_path, ".torn.py.jinlin-rescue-01010102", b"payload")
     manifest = tmp_path / MANIFEST_REL
     manifest.parent.mkdir(parents=True)
-    manifest.write_bytes(b'{"path":"previous"}\\n{"path":"torn')
+    manifest.write_bytes(b'{"path":"previous"}\n{"path":"torn')
     before = manifest.read_bytes()
 
     assert record_trash(tmp_path, candidate, "torn.py", "rescue") is False
@@ -1705,7 +1734,7 @@ def test_manifest_atomic_rewrite_refuses_to_discard_torn_history(tmp_path):
 
     manifest = tmp_path / MANIFEST_REL
     manifest.parent.mkdir(parents=True)
-    manifest.write_bytes(b'{"path":"valid"}\\n{"path":"partial')
+    manifest.write_bytes(b'{"path":"valid"}\n{"path":"partial')
     before = manifest.read_bytes()
 
     assert trash_mod._write_manifest_atomic(tmp_path, {}) is False
