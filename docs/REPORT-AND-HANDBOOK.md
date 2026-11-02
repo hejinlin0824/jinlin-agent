@@ -746,3 +746,15 @@ The lock coordinates Jinlin processes that resolve to the same workspace lock ob
 - Added syscall-level tests for manifest file fsync, directory fsync after first creation and atomic replacement, torn-tail refusal, manifest rewrite refusal on damaged history, and audit first-create directory sync outcomes.
 
 The fault-injection and child-process crash tests simulate process termination and syscall failures. They do not simulate a kernel panic, storage-controller cache loss, virtual-machine power cut, or physical power failure. Those require a dedicated disposable VM/device test environment and filesystem-specific validation.
+
+
+## Task package 05 — Seeded chaos testing and end-to-end recovery convergence
+
+- Added a deterministic seeded lifecycle sequence suite (`tests/test_rescue_chaos.py`). Each seed creates several independent manifest-backed Rescue transactions, varies their operation order and the number of inspection/recovery retries, restores the original targets, and repeats recovery/cleanup.
+- Every randomized sequence checks the central safety invariant: verified original payload bytes remain available at the restored target; a Rescue source is never silently lost before publication; repeated recovery and cleanup converge without overwriting the target.
+- Each sequence ends by checking the audit hash-chain reader and transaction-state projector for invalid transactions. The seed is included in assertion diagnostics so a failure can be replayed exactly.
+- Added valid-JSON audit payload tampering and truncated-tail tests. Both cases must be detected, future audit appends must fail closed, and the damaged evidence bytes must remain unchanged.
+- Extended `scripts/test-rescue-fault-matrix.py` so the focused matrix includes syscall fault injection, hard child-process crash/restart tests, and the seeded lifecycle chaos suite.
+- Existing focused fault cases remain intact: partial stage writes, file/directory fsync failures, no-clobber publish failure, post-publish durability uncertainty, cleanup unlink failure, target-creation race, and child-process exits around restore/quarantine/audit boundaries.
+
+The seeded sequence suite is deterministic, not an unbounded fuzz test. It exercises multiple reproducible operation interleavings against isolated temporary workspaces. The child-process tests still model abrupt process termination only; they do not establish kernel-crash, controller-cache-loss, or physical power-cut durability.
