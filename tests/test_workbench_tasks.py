@@ -193,7 +193,9 @@ def test_workbench_root_serves_local_ui_without_exposing_api_data(tmp_path):
             assert response.headers.get_content_type() == "text/html"
             assert response.headers.get("X-Frame-Options") == "DENY"
             assert "Jinlin Agent" in page
-            assert "Bearer Token" in page
+            assert "开发者详情" in page
+            assert "Bearer Token" not in page
+            assert "sessionStorage.getItem" not in page
             assert "/api/v1/tasks" in page
     finally:
         server.shutdown()
