@@ -1,6 +1,6 @@
 # Local Workbench API — WP-1 / WP-2
 
-Status: **WP-1 read models plus WP-2 task/approval API foundation**. This is a local internal API, not a public network API. The current WP-2 increment has no browser UI yet.
+Status: **WP-1 read models plus WP-2 task/approval API and first local browser dashboard**. This is a local internal API, not a public network API.
 
 ## Runtime and dependency policy
 
@@ -9,7 +9,12 @@ Status: **WP-1 read models plus WP-2 task/approval API foundation**. This is a l
 - The server is pinned to one existing workspace for its lifetime.
 - Default bind is IPv4 loopback. Explicit IPv6 loopback is supported. Non-loopback addresses are rejected.
 - A fresh random Bearer Token is generated on every start and printed once to the terminal. It is not written to disk.
+- Open `http://127.0.0.1:8765/` for the browser dashboard; enter the one-time token printed by the server.
 - Press Ctrl+C to stop the server.
+
+## Browser dashboard
+
+The root route serves a packaged, dependency-free HTML dashboard. It shows the pinned workspace, recent sessions, task input, read-only toggle, task status, sanitized event timeline, and pending-approval card. The Bearer Token is entered by the user and kept in the current tab's `sessionStorage`; it is not embedded in the page or written to disk. The page polls the task/session APIs and does not expose a workspace path picker, model-secret editor, arbitrary shell console, or direct file-write control.
 
 ## Common response envelope
 
