@@ -156,3 +156,59 @@ def test_service_rejects_session_folder_identity_mismatch(tmp_path):
         service.get_session(forged_id)
     assert exc.value.code == "SESSION_NOT_FOUND"
     assert service.list_sessions() == []
+
+
+
+@pytest.mark.parametrize("disconnect_error", [
+    BrokenPipeError("peer closed"),
+    ConnectionResetError("peer reset"),
+    ConnectionAbortedError("peer aborted"),
+])
+def test_json_response_tolerates_client_disconnect(tmp_path, disconnect_error):
+    import io
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    server, _service, _token = create_server(root, port=0, token="test-token")
+    handler = object.__new__(server.RequestHandlerClass)
+    calls = []
+    handler.send_response = lambda status: calls.append(("status", status))
+    handler.send_header = lambda name, value: calls.append(("header", name, value))
+    handler.end_headers = lambda: calls.append(("end_headers",))
+    
+    class DisconnectedWriter:
+        def write(self, _body):
+            raise disconnect_error
+
+    handler.wfile = DisconnectedWriter()
+    try:
+        # A disconnected client is a normal transport lifecycle event. The
+        # response helper must not raise or attempt a second response.
+        assert handler._json(200, {"data": {"ok": True}}) is None
+        assert ("status", 200) in calls
+        assert calls.count(("end_headers",)) == 1
+    finally:
+        server.server_close()
+
+
+def test_html_response_tolerates_client_disconnect(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    server, _service, _token = create_server(root, port=0, token="test-token")
+    handler = object.__new__(server.RequestHandlerClass)
+    calls = []
+    handler.send_response = lambda status: calls.append(("status", status))
+    handler.send_header = lambda name, value: calls.append(("header", name, value))
+    handler.end_headers = lambda: calls.append(("end_headers",))
+
+    class DisconnectedWriter:
+        def write(self, _body):
+            raise ConnectionAbortedError("browser navigated away")
+
+    handler.wfile = DisconnectedWriter()
+    try:
+        handler._html()
+        assert ("status", 200) in calls
+        assert calls.count(("end_headers",)) == 1
+    finally:
+        server.server_close()
