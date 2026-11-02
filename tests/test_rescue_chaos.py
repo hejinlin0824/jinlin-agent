@@ -109,7 +109,7 @@ def test_audit_truncated_tail_is_preserved_and_blocks_future_append(tmp_path):
     assert ok and warning is None
     original = audit_path.read_bytes()
     assert original.endswith(b"\n")
-    audit_path.write_bytes(original[:-1])
+    audit_path.write_bytes(original[:-5])
     truncated = audit_path.read_bytes()
 
     inspected = trash._read_audit(tmp_path)
