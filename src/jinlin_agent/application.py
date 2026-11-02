@@ -8,7 +8,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote
 
 from .config import Config, load_config
 from .errors import AgentError
@@ -62,7 +61,7 @@ class ApplicationService:
             "config_violations": list(self.config.violations),
         }
 
-    def list_sessions(self) -> list[dict[str, Any]]:
+    def list_sessions(self, include_other_workspaces: bool = False) -> list[dict[str, Any]]:
         root = self.config.sessions_dir.resolve()
         if not root.is_dir():
             return []
@@ -76,7 +75,7 @@ class ApplicationService:
                 if directory.parent != root or event_file.parent != directory or not event_file.is_file():
                     continue
                 state = recover(read_events(directory))
-                if str(Path(state.workspace or "").resolve()) != str(self.workspace):
+                if not include_other_workspaces and str(Path(state.workspace or "").resolve()) != str(self.workspace):
                     continue
                 meta_path = directory / "session.json"
                 updated_at = ""
@@ -112,11 +111,11 @@ class ApplicationService:
             raise AgentError("SESSION_NOT_FOUND", "session not found", source="application")
         return path
 
-    def _events(self, session_id: str) -> tuple[Path, list[dict[str, Any]], Any]:
+    def _events(self, session_id: str, include_other_workspaces: bool = False) -> tuple[Path, list[dict[str, Any]], Any]:
         directory = self._session_dir(session_id)
         events = list(read_events(directory))
         state = recover(events)
-        if str(Path(state.workspace or "").resolve()) != str(self.workspace):
+        if not include_other_workspaces and str(Path(state.workspace or "").resolve()) != str(self.workspace):
             raise AgentError("SESSION_NOT_FOUND", "session does not belong to this workspace", source="application")
         return directory, events, state
 
@@ -179,8 +178,14 @@ class ApplicationService:
             result["error_code"] = (payload.get("error") or {}).get("code")
         return result
 
-    def stats(self, session_id: str) -> dict[str, Any]:
-        _directory, _events, state = self._events(session_id)
+    def trace(self, session_id: str, tail: int = 0, include_other_workspaces: bool = False) -> list[dict[str, Any]]:
+        if not isinstance(tail, int) or tail < 0:
+            raise AgentError("REQUEST_INVALID", "tail must be a non-negative integer", source="application")
+        _directory, events, _state = self._events(session_id, include_other_workspaces=include_other_workspaces)
+        return events[-tail:] if tail else events
+
+    def stats(self, session_id: str, include_other_workspaces: bool = False) -> dict[str, Any]:
+        _directory, _events, state = self._events(session_id, include_other_workspaces=include_other_workspaces)
         return {
             "session_id": state.session_id,
             "status": state.status,
