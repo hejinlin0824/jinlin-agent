@@ -19,8 +19,10 @@ class _FakeService:
         self.entered = threading.Event()
         self.release = threading.Event()
 
-    def run(self, task, *, read_only, auto_approve, approval_handler, on_session, stream_callback=None):
+    def run(self, task, *, read_only, auto_approve, approval_handler, on_session, stream_callback=None, progress_callback=None):
         on_session(SimpleNamespace(id="sess_20261102_120000_abcdef"), None)
+        if progress_callback:
+            progress_callback("正在分析项目结构…")
         if stream_callback:
             stream_callback("")
             stream_callback("正在分析项目结构……")
@@ -58,6 +60,7 @@ def test_task_manager_requires_matching_explicit_approval_and_hides_arguments():
     waiting = _wait_for(manager, created["task_id"], "waiting_approval")
     assert waiting["session_id"] == "sess_20261102_120000_abcdef"
     assert waiting["stream_text"] == "正在分析项目结构……"
+    assert waiting["progress"] == "正在分析项目结构…"
     assert waiting["pending_approval"]["approval_id"] == "approval-1"
     assert "[REDACTED]" in waiting["pending_approval"]["summary"]
     assert "superSecret123" not in json.dumps(waiting)
@@ -149,7 +152,7 @@ def test_task_http_submit_is_accepted_but_never_auto_approves(tmp_path):
     root.mkdir()
     server, _service, token = create_server(root, port=0, token="test-token")
 
-    def fake_run(task, *, read_only, auto_approve, approval_handler, on_session, stream_callback=None):
+    def fake_run(task, *, read_only, auto_approve, approval_handler, on_session, stream_callback=None, progress_callback=None):
         assert read_only is True
         assert auto_approve is False
         on_session(SimpleNamespace(id="sess_20261102_120000_abcdef"), None)
