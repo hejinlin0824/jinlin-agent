@@ -6,6 +6,7 @@ single-task-at-a-time and keeps no second agent loop or durable task database.
 """
 from __future__ import annotations
 
+import re
 import secrets
 import threading
 from dataclasses import dataclass, field
@@ -14,6 +15,19 @@ from typing import Any
 from .errors import AgentError
 
 _ACTIVE = {"queued", "running", "waiting_approval"}
+_SECRET_FLAG = re.compile(r"(?i)(--?(?:api[-_]?key|access[-_]?token|token|password|secret|authorization))(?:=|\\s+)([^\\s]+)")
+_SECRET_ASSIGNMENT = re.compile(r"(?i)\\b(api[-_]?key|access[-_]?token|password|secret|authorization)\\s*[:=]\\s*([^\\s,;]+)")
+_BEARER_VALUE = re.compile(r"(?i)\\bBearer\\s+[A-Za-z0-9._~+/=-]{8,}")
+_URL_SECRET = re.compile(r"(?i)([?&](?:api_key|access_token|token|password|secret)=)[^&\\s]+")
+
+
+def _safe_approval_summary(value: Any) -> str:
+    summary = str(value or "")[:1000]
+    summary = _SECRET_FLAG.sub(lambda match: match.group(1) + "=[REDACTED]", summary)
+    summary = _SECRET_ASSIGNMENT.sub(lambda match: match.group(1) + "=[REDACTED]", summary)
+    summary = _BEARER_VALUE.sub("Bearer [REDACTED]", summary)
+    return _URL_SECRET.sub(lambda match: match.group(1) + "[REDACTED]", summary)
+
 
 
 @dataclass
@@ -77,7 +91,7 @@ class WorkbenchTaskManager:
                 "approval_id": str(getattr(request, "approval_id", "")),
                 "tool": str(getattr(request, "tool", ""))[:80],
                 "risk": str(getattr(request, "risk", "unknown"))[:32],
-                "summary": str(getattr(request, "summary", ""))[:1000],
+                "summary": _safe_approval_summary(getattr(request, "summary", "")),
                 "reason": str(getattr(request, "reason", ""))[:1000],
                 "impact": [str(x)[:300] for x in (getattr(request, "impact", []) or [])[:10]],
             }
