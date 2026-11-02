@@ -36,6 +36,9 @@ jobs:
       - name: Rescue lifecycle smoke test (isolated temporary workspace)
         run: |
           python scripts/rescue_smoke.py
+      - name: Rescue deterministic fault-injection matrix
+        run: |
+          python scripts/test-rescue-fault-matrix.py
       - name: Verify one-click PowerShell runner
         if: runner.os == 'Windows'
         shell: pwsh
