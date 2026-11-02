@@ -1456,6 +1456,7 @@ def inspect_rescue(workspace: Path) -> dict[str, Any]:
                        "stages": len(stages), "incomplete_stages": len(incomplete_stages),
                        "orphaned_stages": len(orphaned), "quarantined": len(quarantined),
                         "quarantine_safe_to_restore": sum(x.get("classification") == "safe-to-restore" for x in quarantined),
+                        "quarantine_already_restored": sum(x.get("classification") == "already-restored" for x in quarantined),
                         "quarantine_conflicts": sum(x.get("classification") == "target-conflict" for x in quarantined),
                         "quarantine_unverified": sum(x.get("classification") in ("identity-mismatch", "ambiguous", "unrecognized", "legacy-unverified") for x in quarantined),
                        "audit_events": len(audit["events"]), "audit_issues": len(audit["issues"])},
