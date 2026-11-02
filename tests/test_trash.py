@@ -1159,6 +1159,18 @@ def test_rescue_cleaned_audit_retains_manifest_transaction_id_after_manifest_ent
     assert trash_mod._transaction_states(audit["events"])[0]["state"] == "CLEANED"
 
 
+
+def test_rescue_state_machine_accepts_post_publication_conflict_and_uncertainty():
+    from jinlin_agent.trash import _transaction_states
+    for status in ("conflict", "uncertain"):
+        states = _transaction_states([
+            {"txid": "8" * 32, "action": "restore", "status": "restored", "ts": "2026-01-01T00:00:00Z"},
+            {"txid": "8" * 32, "action": "recover", "status": status, "ts": "2026-01-01T00:01:00Z"},
+        ])
+        assert states[0]["state"] == ("CONFLICT" if status == "conflict" else "UNCERTAIN")
+        assert states[0]["transition_issues"] == []
+
+
 def test_rescue_state_machine_flags_published_to_staged_regression():
     from jinlin_agent.trash import _transaction_states
 
