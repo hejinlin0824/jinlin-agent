@@ -170,3 +170,25 @@ def test_task_http_submit_is_accepted_but_never_auto_approves(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_workbench_root_serves_local_ui_without_exposing_api_data(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    server, _service, _token = create_server(root, port=0, token="test-token")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = "http://127.0.0.1:%d" % server.server_address[1]
+    try:
+        with urllib.request.urlopen(base + "/", timeout=3) as response:
+            page = response.read().decode("utf-8")
+            assert response.status == 200
+            assert response.headers.get_content_type() == "text/html"
+            assert response.headers.get("X-Frame-Options") == "DENY"
+            assert "Jinlin Agent" in page
+            assert "Bearer Token" in page
+            assert "/api/v1/tasks" in page
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
