@@ -202,7 +202,7 @@ class OpenAICompatibleProvider:
                     continue
                 choice = choices[0]
                 delta = choice.get("delta") or {}
-                content = delta.get("content")
+                content = _content_text(delta.get("content"))
                 if content:
                     text_parts.append(content)
                     if on_text_delta:
@@ -255,7 +255,7 @@ class OpenAICompatibleProvider:
             }
         return ModelResponse(
             response_id=data.get("id") or new_id("resp"),
-            text=msg.get("content") or "",
+            text=_content_text(msg.get("content")),
             tool_calls=_finalize_calls(calls),
             finish_reason=choice.get("finish_reason") or "stop",
             usage=_parse_usage(data.get("usage") or {}),
@@ -264,6 +264,21 @@ class OpenAICompatibleProvider:
 
 
 # --------------------------------------------------------------------------- helpers
+
+
+def _content_text(content: Any) -> str:
+    """Normalize text-only and multipart OpenAI-compatible message content."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") in ("text", "input_text", "output_text"):
+                value = item.get("text")
+                if isinstance(value, str):
+                    parts.append(value)
+        return "".join(parts)
+    return ""
 
 
 def _decode_provider_bytes(raw: bytes) -> str:
