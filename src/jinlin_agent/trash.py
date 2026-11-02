@@ -533,7 +533,7 @@ def _inspect_clean_quarantines(workspace: Path, manifest: dict[str, dict[str, An
 
     items: list[dict[str, Any]] = []
     by_candidate: dict[str, list[dict[str, Any]]] = {}
-    suffix_re = re.compile(r"^(?P<base>.+)\\.jinlin-clean-[0-9a-f]{8}$")
+    suffix_re = re.compile(r"^(?P<base>.+)\.jinlin-clean-[0-9a-f]{8}$")
     for root, dirs, files in os.walk(workspace, followlinks=False):
         dirs[:] = [name for name in dirs if name not in _SKIP_DIRS]
         for name in list(files) + list(dirs):
