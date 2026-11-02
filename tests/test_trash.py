@@ -933,6 +933,118 @@ def test_rescue_inspect_cli_is_read_only_and_reports_audit(tmp_path, capsys):
 
 
 
+
+def test_rescue_manifest_persists_distinct_transaction_ids(tmp_path):
+    import jinlin_agent.trash as trash_mod
+    first = _mk_trash(tmp_path, ".tx-one.py.jinlin-rescue-11223344", b"same transaction payload")
+    second = _mk_trash(tmp_path, ".tx-two.py.jinlin-rescue-11223344", b"same transaction payload")
+    assert record_trash(tmp_path, first, "tx-one.py", "rescue")
+    assert record_trash(tmp_path, second, "tx-two.py", "rescue")
+    manifest = trash_mod._load_manifest(tmp_path)
+    tx_one = manifest[first.name]["transaction_id"]
+    tx_two = manifest[second.name]["transaction_id"]
+    assert len(tx_one) == 32 and len(tx_two) == 32
+    assert tx_one != tx_two
+
+
+def test_rescue_audit_v2_has_monotonic_sequence_unique_event_ids_and_persistent_txid(tmp_path):
+    import jinlin_agent.trash as trash_mod
+    rescue = _mk_trash(tmp_path, ".audit-v2.py.jinlin-rescue-11223345", b"audit v2")
+    assert record_trash(tmp_path, rescue, "audit-v2.py", "rescue")
+    txid = trash_mod._load_manifest(tmp_path)[rescue.name]["transaction_id"]
+
+    first = trash_mod.restore_rescue(tmp_path, rescue.name)
+    second = trash_mod.restore_rescue(tmp_path, rescue.name)
+    assert first["status"] == "restored"
+    assert second["status"] == "already-published"
+    audit = trash_mod._read_audit(tmp_path)
+    assert audit["issues"] == []
+    assert [event["version"] for event in audit["events"]] == [2, 2]
+    assert [event["seq"] for event in audit["events"]] == [1, 2]
+    assert len({event["event_id"] for event in audit["events"]}) == 2
+    assert {event["txid"] for event in audit["events"]} == {txid}
+    projected = trash_mod._transaction_states(audit["events"])
+    assert len(projected) == 1
+    assert projected[0]["state"] == "PUBLISHED"
+    assert projected[0]["event_count"] == 2
+    assert projected[0]["first_seq"] == 1 and projected[0]["last_seq"] == 2
+
+
+def test_rescue_audit_v2_rejects_sequence_gap_and_refuses_append(tmp_path):
+    import json
+    import jinlin_agent.trash as trash_mod
+    rescue = _mk_trash(tmp_path, ".audit-seq.py.jinlin-rescue-11223346", b"sequence gap")
+    assert record_trash(tmp_path, rescue, "audit-seq.py", "rescue")
+    assert trash_mod.restore_rescue(tmp_path, rescue.name)["status"] == "restored"
+    path = tmp_path / trash_mod.AUDIT_REL
+    event = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    event["seq"] = 7
+    body = {key: value for key, value in event.items() if key != "event_hash"}
+    event["event_hash"] = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    path.write_text(json.dumps(event, sort_keys=True) + "\\n", encoding="utf-8")
+
+    audit = trash_mod._read_audit(tmp_path)
+    assert audit["issues"]
+    assert "sequence is not contiguous" in audit["issues"][0]["reason"]
+    ok, warning = trash_mod._append_audit_event(tmp_path, "restore", "conflict", txid="a" * 32)
+    assert not ok and "integrity issues" in warning
+
+
+def test_rescue_audit_accepts_legacy_v1_prefix_then_appends_v2(tmp_path):
+    import json
+    import jinlin_agent.trash as trash_mod
+    legacy_body = {
+        "version": 1, "ts": "2026-01-01T00:00:00Z", "txid": "a" * 24,
+        "action": "restore", "status": "restored", "prev_hash": "0" * 64,
+        "rescue": ".legacy.py.jinlin-rescue-11223347", "target": "legacy.py",
+        "sha256": sha(b"legacy"),
+    }
+    legacy_body["event_hash"] = hashlib.sha256(
+        json.dumps({k: v for k, v in legacy_body.items()}, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    path = tmp_path / trash_mod.AUDIT_REL
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(legacy_body, sort_keys=True) + "\\n", encoding="utf-8")
+
+    ok, warning = trash_mod._append_audit_event(tmp_path, "clean", "cleanup-blocked", txid="b" * 32)
+    assert ok and warning is None
+    audit = trash_mod._read_audit(tmp_path)
+    assert audit["issues"] == []
+    assert [event["version"] for event in audit["events"]] == [1, 2]
+    assert audit["events"][1]["seq"] == 2
+    assert audit["events"][1]["txid"] == "b" * 32
+
+
+def test_rescue_transaction_projector_detects_resource_identity_reuse_and_ignores_preview():
+    from jinlin_agent.trash import _transaction_states
+    events = [
+        {"txid": "c" * 32, "action": "clean-preview", "status": "dry-run", "rescue": "r", "target": "t", "sha256": "a"},
+        {"txid": "c" * 32, "action": "restore", "status": "restored", "rescue": "r", "target": "t", "sha256": "a"},
+        {"txid": "c" * 32, "action": "recover", "status": "already-published", "rescue": "r", "target": "different-target", "sha256": "a"},
+    ]
+    states = _transaction_states(events)
+    assert len(states) == 1
+    assert states[0]["state"] == "TRANSITION_INVALID"
+    assert states[0]["event_count"] == 2
+    assert states[0]["identity_issues"][0]["field"] == "target"
+
+
+def test_rescue_cleaned_audit_retains_manifest_transaction_id_after_manifest_entry_removed(tmp_path):
+    import jinlin_agent.trash as trash_mod
+    rescue = _mk_trash(tmp_path, ".tx-clean.py.jinlin-rescue-11223348", b"clean tx")
+    assert record_trash(tmp_path, rescue, "tx-clean.py", "rescue")
+    txid = trash_mod._load_manifest(tmp_path)[rescue.name]["transaction_id"]
+    assert trash_mod.restore_rescue(tmp_path, rescue.name)["status"] == "restored"
+    cleaned = trash_mod.clean_rescue(tmp_path, apply=True)
+    assert cleaned["removed"] == [rescue.name]
+    audit = trash_mod._read_audit(tmp_path)
+    clean_event = [event for event in audit["events"] if event["action"] == "clean"][-1]
+    assert clean_event["txid"] == txid
+    assert trash_mod._transaction_states(audit["events"])[0]["state"] == "CLEANED"
+
+
 def test_rescue_state_machine_flags_published_to_staged_regression():
     from jinlin_agent.trash import _transaction_states
 
