@@ -99,8 +99,8 @@ class WorkbenchTaskManager:
                 "tool": str(getattr(request, "tool", ""))[:80],
                 "risk": str(getattr(request, "risk", "unknown"))[:32],
                 "summary": _safe_approval_summary(getattr(request, "summary", "")),
-                "reason": str(getattr(request, "reason", ""))[:1000],
-                "impact": [str(x)[:300] for x in (getattr(request, "impact", []) or [])[:10]],
+                "reason": _safe_approval_summary(getattr(request, "reason", "")),
+                "impact": [_safe_approval_summary(x)[:300] for x in (getattr(request, "impact", []) or [])[:10]],
             }
             with self._condition:
                 task.pending_approval = safe_request
@@ -128,7 +128,7 @@ class WorkbenchTaskManager:
         except AgentError as exc:
             with self._condition:
                 task.status = "failed"
-                task.error = {"code": exc.code, "message": exc.message[:1000]}
+                task.error = {"code": exc.code, "message": _safe_approval_summary(exc.message)[:1000]}
         except Exception:
             with self._condition:
                 task.status = "failed"
