@@ -1,17 +1,27 @@
 {
   "schema_version": 1,
-  "runner_contract_version": 2,
-  "suite_version": "2026.11.02",
+  "runner_contract_version": 3,
+  "suite_version": "2026.11.03",
   "task_package": {
-    "id": "06",
-    "name": "工程化、可观测性与正式交付",
-    "version": "1.0.0"
+    "id": "WP-2",
+    "name": "本地工作台与可靠任务执行",
+    "version": "2.1.0"
   },
   "checks": [
-    "Full pytest suite",
-    "Harness evaluation (all)",
+    "Python 3.11+ runtime preflight",
+    "Editable install with development dependencies",
+    "Compile source and tests",
+    "Full pytest suite with JUnit XML report",
+    "Harness conformance evaluation (all offline probes)",
     "Rescue lifecycle end-to-end smoke test",
-    "Rescue fault-injection + crash + seeded-chaos matrix",
-    "Rescue CLI command registration"
+    "Rescue fault-injection, crash and seeded-chaos matrix",
+    "CLI command registration",
+    "Git whitespace and conflict-marker check"
+  ],
+  "manual_acceptance": [
+    "Windows browser read-only task completes without verification.started events",
+    "Workbench approval can be granted once, granted for session, or denied",
+    "Write task still passes through the completion and verification gate",
+    "Restart behavior remains explicitly process-local until durable task recovery is implemented"
   ]
 }
