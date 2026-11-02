@@ -758,3 +758,25 @@ The fault-injection and child-process crash tests simulate process termination a
 - Existing focused fault cases remain intact: partial stage writes, file/directory fsync failures, no-clobber publish failure, post-publish durability uncertainty, cleanup unlink failure, target-creation race, and child-process exits around restore/quarantine/audit boundaries.
 
 The seeded sequence suite is deterministic, not an unbounded fuzz test. It exercises multiple reproducible operation interleavings against isolated temporary workspaces. The child-process tests still model abrupt process termination only; they do not establish kernel-crash, controller-cache-loss, or physical power-cut durability.
+
+
+## Task package 06 — Engineering delivery and test-runner observability
+
+### Single source of truth
+
+- Added repository-root `test-suite.json` as the authoritative source for task-package ID/name/version, suite version, runner metadata contract, and the required validation checklist.
+- Updated `scripts/test-all.ps1` to load and validate that file before running any test command. Missing/invalid metadata or an unsupported schema fails before tests start.
+- The runner compares its embedded `RunnerContractVersion` with `runner_contract_version` in the metadata. A stale runner exits with an explicit `STALE TEST RUNNER` message instead of silently executing an obsolete checklist.
+- The start banner and final success/failure summary print task package ID/name, package version, suite version, runner contract, repository path, branch/commit identity, timestamps, and log path.
+- `test-all.bat` remains a thin entry point delegating to the PowerShell runner, so there is only one implementation of the test sequence and banner.
+
+### Regression protection and handoff
+
+- Added `tests/test_test_runner_metadata.py` to verify the metadata schema, package identity, required checks, and agreement between the PowerShell runner contract and metadata.
+- The existing Windows CI step invokes `scripts/test-all.ps1 -SkipInstall`, so the real PowerShell metadata validation and reporting path is exercised in CI.
+- Updated README instructions with the stale-runner contract: whenever the runner/metadata contract changes, increment the contract version in both locations. Old script copies then fail closed.
+- This task package changes reporting and test orchestration only; it does not weaken or replace the existing pytest, harness, Rescue smoke, fault-injection, crash, or seeded-chaos checks.
+
+### Operator interpretation
+
+A green test result is meaningful only together with the printed task-package identity and commit. Before reporting acceptance, compare the displayed branch/short SHA with the intended branch HEAD. If the banner says `STALE TEST RUNNER`, update the local branch and rerun; do not treat that as a test failure in product code or bypass the guard.
