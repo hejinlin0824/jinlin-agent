@@ -294,3 +294,6 @@ Windows 一键验收：
 ### Rescue cleanup recovery diagnostics
 
 `jinlin-agent rescue inspect` classifies interrupted cleanup quarantine evidence using manifest identity, SHA-256, deterministic restore-stage association, former-path occupancy, and duplicate claims. Possible classifications are `safe-to-restore`, `target-conflict`, `identity-mismatch`, `ambiguous`, `unrecognized`, and `legacy-unverified`. This is strictly read-only: it does not restore, overwrite, or delete quarantine evidence.
+
+
+Machine-readable inspection is available with `jinlin-agent rescue inspect --workspace ./my-repo --json`; it emits the full report (including quarantine classifications and counts) and preserves the same exit-code semantics as text mode.
