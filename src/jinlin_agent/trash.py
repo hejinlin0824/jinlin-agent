@@ -83,7 +83,7 @@ def _read_audit(workspace: Path) -> dict[str, Any]:
             if not isinstance(event, dict):
                 raise ValueError("event is not an object")
             version = event.get("version")
-            if version not in (1, 2):
+            if type(version) is not int or version not in (1, 2):
                 raise ValueError(f"unsupported audit event version: {version!r}")
             txid = event.get("txid")
             if not isinstance(txid, str) or not re.fullmatch(r"[0-9a-f]{24,32}", txid):
