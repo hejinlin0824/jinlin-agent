@@ -1070,6 +1070,47 @@ def test_rescue_transaction_projector_detects_resource_identity_reuse_and_ignore
     assert states[0]["identity_issues"][0]["field"] == "target"
 
 
+
+def test_rescue_inspect_reports_transaction_identity_drift_in_counts(tmp_path):
+    import jinlin_agent.trash as trash_mod
+    txid = "9" * 32
+    assert trash_mod._append_audit_event(
+        tmp_path, "restore", "restored", txid=txid, rescue=".r.py.jinlin-rescue-12345678",
+        target="first.py", sha256="a" * 64,
+    )[0]
+    assert trash_mod._append_audit_event(
+        tmp_path, "recover", "already-published", txid=txid, rescue=".r.py.jinlin-rescue-12345678",
+        target="different.py", sha256="a" * 64,
+    )[0]
+    report = trash_mod.inspect_rescue(tmp_path)
+    assert report["status"] == "attention-required"
+    assert report["counts"]["transactions"] == 1
+    assert report["counts"]["invalid_transactions"] == 1
+    assert report["transactions"][0]["state"] == "TRANSITION_INVALID"
+    assert any(issue["kind"] == "invalid-state-transition" for issue in report["issues"])
+
+
+def test_quarantine_recovery_audit_keeps_original_transaction_identity(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"canonical transaction audit identity"
+    rescue = _mk_trash(tmp_path, ".canonical.py.jinlin-rescue-11223349", payload)
+    assert record_trash(tmp_path, rescue, "canonical.py", "rescue")
+    txid = trash_mod._load_manifest(tmp_path)[rescue.name]["transaction_id"]
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-11223349")
+    os.replace(rescue, quarantine)
+
+    report = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+
+    assert report["status"] == "applied"
+    event = trash_mod._read_audit(tmp_path)["events"][-1]
+    assert event["txid"] == txid
+    assert event["rescue"] == rescue.name
+    assert event["target"] == "canonical.py"
+    assert event["quarantine"] == quarantine.name
+    assert event["candidate"] == rescue.name
+
+
 def test_rescue_cleaned_audit_retains_manifest_transaction_id_after_manifest_entry_removed(tmp_path):
     import jinlin_agent.trash as trash_mod
     rescue = _mk_trash(tmp_path, ".tx-clean.py.jinlin-rescue-11223348", b"clean tx")
