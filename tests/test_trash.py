@@ -834,7 +834,10 @@ def test_rescue_clean_reports_interrupted_quarantine_without_touching_it(tmp_pat
     quarantine = tmp_path / ".lost.py.jinlin-clean-a1b2c3d4"
     quarantine.write_bytes(b"interrupted cleanup evidence")
     report = trash_mod.clean_rescue(tmp_path, apply=True)
-    assert report["quarantined"] == [{"path": quarantine.name, "kind": "file"}]
+    assert len(report["quarantined"]) == 1
+    assert report["quarantined"][0]["path"] == quarantine.name
+    assert report["quarantined"][0]["kind"] == "file"
+    assert report["quarantined"][0]["classification"] == "unrecognized"
     assert quarantine.read_bytes() == b"interrupted cleanup evidence"
     assert report["removed"] == []
 
