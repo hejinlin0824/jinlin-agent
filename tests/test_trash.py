@@ -1644,3 +1644,87 @@ def test_rescue_inspect_cli_json_emits_machine_readable_classification(tmp_path,
     assert report['counts']['quarantine_safe_to_restore'] == 1
     assert report['quarantined'][0]['classification'] == 'safe-to-restore'
     assert quarantine.read_bytes() == payload and not rescue.exists()
+
+
+def test_record_trash_fsyncs_manifest_file_and_new_directory_entry(tmp_path, monkeypatch):
+    import jinlin_agent.trash as trash_mod
+
+    candidate = _mk_trash(tmp_path, ".durable.py.jinlin-rescue-01010101", b"durable")
+    real_fsync = os.fsync
+    fsynced = []
+
+    def track_fsync(fd):
+        fsynced.append(fd)
+        return real_fsync(fd)
+
+    directory_syncs = []
+    real_directory_sync = trash_mod._fsync_directory
+
+    def track_directory_sync(directory):
+        directory_syncs.append(Path(directory))
+        return real_directory_sync(directory)
+
+    monkeypatch.setattr(trash_mod.os, "fsync", track_fsync)
+    monkeypatch.setattr(trash_mod, "_fsync_directory", track_directory_sync)
+    assert record_trash(tmp_path, candidate, "durable.py", "rescue")
+    assert fsynced, "manifest bytes must be fsynced before success is reported"
+    assert directory_syncs == [tmp_path / ".jinlin"], "new manifest directory entry must be synced"
+
+
+def test_record_trash_refuses_to_append_after_torn_manifest_tail(tmp_path):
+    candidate = _mk_trash(tmp_path, ".torn.py.jinlin-rescue-01010102", b"payload")
+    manifest = tmp_path / MANIFEST_REL
+    manifest.parent.mkdir(parents=True)
+    manifest.write_bytes(b'{"path":"previous"}\\n{"path":"torn')
+    before = manifest.read_bytes()
+
+    assert record_trash(tmp_path, candidate, "torn.py", "rescue") is False
+    assert manifest.read_bytes() == before
+
+
+def test_manifest_atomic_rewrite_fsyncs_directory_after_replace(tmp_path, monkeypatch):
+    import jinlin_agent.trash as trash_mod
+
+    candidate = _mk_trash(tmp_path, ".atomic.py.jinlin-rescue-01010103", b"payload")
+    assert record_trash(tmp_path, candidate, "atomic.py", "rescue")
+    entries = trash_mod._load_manifest(tmp_path)
+    entries.pop(candidate.name)
+    calls = []
+    monkeypatch.setattr(
+        trash_mod, "_fsync_directory",
+        lambda directory: calls.append(Path(directory)) or {"supported": True, "synced": True, "detail": "ok"},
+    )
+
+    assert trash_mod._write_manifest_atomic(tmp_path, entries)
+    assert calls == [tmp_path / ".jinlin"]
+    assert trash_mod._load_manifest(tmp_path) == {}
+
+
+def test_manifest_atomic_rewrite_refuses_to_discard_torn_history(tmp_path):
+    import jinlin_agent.trash as trash_mod
+
+    manifest = tmp_path / MANIFEST_REL
+    manifest.parent.mkdir(parents=True)
+    manifest.write_bytes(b'{"path":"valid"}\\n{"path":"partial')
+    before = manifest.read_bytes()
+
+    assert trash_mod._write_manifest_atomic(tmp_path, {}) is False
+    assert manifest.read_bytes() == before
+
+
+def test_manifest_directory_fsync_failure_is_reported_after_replace(tmp_path, monkeypatch):
+    import jinlin_agent.trash as trash_mod
+
+    candidate = _mk_trash(tmp_path, ".uncertain.py.jinlin-rescue-01010104", b"payload")
+    assert record_trash(tmp_path, candidate, "uncertain.py", "rescue")
+    entries = trash_mod._load_manifest(tmp_path)
+    entries.pop(candidate.name)
+    monkeypatch.setattr(
+        trash_mod, "_fsync_directory",
+        lambda _directory: {"supported": True, "synced": False, "detail": "injected directory sync failure"},
+    )
+
+    assert trash_mod._write_manifest_atomic(tmp_path, entries) is False
+    # Replace occurred, but durability is explicitly uncertain; caller must not
+    # treat the operation as durably committed.
+    assert trash_mod._load_manifest(tmp_path) == {}
