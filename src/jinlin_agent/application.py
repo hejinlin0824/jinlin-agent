@@ -72,9 +72,11 @@ class ApplicationService:
             try:
                 directory = entry.resolve(strict=True)
                 event_file = (directory / "events.jsonl").resolve(strict=True)
-                if directory.parent != root or event_file.parent != directory or event_file.name != "events.jsonl" or not event_file.is_file():
+                if directory.parent != root or directory.name != entry.name or event_file.parent != directory or event_file.name != "events.jsonl" or not event_file.is_file():
                     continue
                 state = recover(read_events(directory))
+                if state.session_id != entry.name:
+                    continue
                 if not include_other_workspaces and str(Path(state.workspace or "").resolve()) != str(self.workspace):
                     continue
                 meta_path = directory / "session.json"
@@ -107,7 +109,7 @@ class ApplicationService:
             event_file = (path / "events.jsonl").resolve(strict=True)
         except OSError as exc:
             raise AgentError("SESSION_NOT_FOUND", "session not found", source="application") from exc
-        if path.parent != root or event_file.parent != path or event_file.name != "events.jsonl" or not event_file.is_file():
+        if path.parent != root or path.name != session_id or event_file.parent != path or event_file.name != "events.jsonl" or not event_file.is_file():
             raise AgentError("SESSION_NOT_FOUND", "session not found", source="application")
         return path
 
@@ -115,6 +117,8 @@ class ApplicationService:
         directory = self._session_dir(session_id)
         events = list(read_events(directory))
         state = recover(events)
+        if state.session_id != session_id:
+            raise AgentError("SESSION_NOT_FOUND", "session identity does not match its storage path", source="application")
         if not include_other_workspaces and str(Path(state.workspace or "").resolve()) != str(self.workspace):
             raise AgentError("SESSION_NOT_FOUND", "session does not belong to this workspace", source="application")
         return directory, events, state
