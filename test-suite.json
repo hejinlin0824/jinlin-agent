@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "runner_contract_version": 2,
+  "suite_version": "2026.11.02",
+  "task_package": {
+    "id": "06",
+    "name": "工程化、可观测性与正式交付",
+    "version": "1.0.0"
+  },
+  "checks": [
+    "Full pytest suite",
+    "Harness evaluation (all)",
+    "Rescue lifecycle end-to-end smoke test",
+    "Rescue fault-injection + crash + seeded-chaos matrix",
+    "Rescue CLI command registration"
+  ]
+}

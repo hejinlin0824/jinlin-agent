@@ -1,11 +1,38 @@
-# 独立评审响应与整改记录（v1.5）
+# 独立评审响应与整改记录（v1.8）
 
 | 项 | 值 |
 |---|---|
-| 评审来源 | `JINLIN_AGENT_REVIEW.md`（首轮）+ `JINLIN_AGENT_REVIEW_FOLLOWUP.md` + `JINLIN_AGENT_SUBMISSION_REVIEW.md`（第 3 轮）+《第 3 轮整改复核意见》（第 4 轮）+ 第 5 轮有条件批准 +《第 6 轮独立复核意见》 |
-| 评审基线 | `f89384c`（首轮）→ `85854f1`（第 1–4 轮合并基线）→ 第 4 轮 P1 验收后 `main` 推进至 `f7c008b` |
-| 本响应版本 | v1.5：第 4 轮 P1 已验收合并（§0b）+ 第二阶段 P2 安全加固第 1 批（§0c：source 清理竞态 / P2-2 / P2-3） |
-| 结论 | 第 4 轮两个 P1 **验收通过并已合并**；第 6 轮新发现的 source 清理竞态与排期 P2-2/P2-3 **已修复**；P3 项按清单排期 |
+| 评审来源 | 首轮～第 8 轮独立评审与复核（详见 §0a–§0e 各表） |
+| 评审基线 | `f89384c`（首轮）→ `85854f1`（第 1–4 轮合并基线）→ `f7c008b`（第 4 轮 P1 验收线）→ `249bbab`（第 1 批 P2 加固归档线） |
+| 本响应版本 | v1.7：第 2 批 P2 加固的第 8 轮复核整改（P0 同对象哈希+指纹 / P1 manifest 路径绑定+原子重写+降级诊断 / P2 null 与空串拒绝 / P3 四字段验证） |
+| 结论 | 第 4 轮 P1 已验收合并；第 1 批 P2 加固已归档；第 2 批暂不合并，按第 8 轮复核意见追加修复完毕（§0e），等待再次复核 |
+
+## 0f. 第 10 轮复核整改（v1.8，第二阶段第 2 批续）
+
+第 10 轮复核确认 move→open 窗口修复有效，指出：rescue 未实现（P0 阻断）、clean 的 stat→unlink 竞态（P1 阻断）、clean 忽略 forget 失败（部分完成）。本轮全部完成（代码 `17b2262`）：rescue 文件机制（唯一命名排他创建 + 短写安全循环 + fsync + 逐字节验证 + 清单归属 + `rescued_files` 上报）；clean 改为隔离区移动后验证（被扫描路径永不被 unlink，不匹配对象无覆盖放回并报告）；forget 失败计入 `manifest_degraded`。详见 `docs/REVIEW-SUBMISSION-P2-BATCH2-R2.md` §9。
+
+## 0e. 第 8 轮复核整改（v1.7，追加于第 2 批之上）
+
+第 8 轮复核：P0 事务状态分离、EventLog 迁移规则、边界测试获认可；两个阻断项（P0 backup 指纹捕获时序、P1 manifest basename 绑定）与配套项需先修复。全部完成，代码提交 `1c3e594` / `a98741a` / `5c69e34` / `346561d`，`main` 保持 `249bbab` 不变。逐项表见 `docs/REVIEW-SUBMISSION-P2-BATCH2.md` §8a；摘要：
+
+| 复核项 | 处理 | 测试 |
+|---|---|---|
+| P0 backup 哈希读取与身份捕获为两次独立路径访问 | 打开一次 backup：sha256 经同一 fd 读取、指纹经 fstat(同一 fd) 获取，两者绑定同一文件对象；提交清理区分 `FileNotFoundError`（无需清理）与其他 `OSError`（保留 + `cleanup_deferred` 附原因） | `test_delete_backup_identity_captured_from_same_object_as_hash`（红→绿）、`test_delete_backup_cleanup_stat_error_is_reported_as_deferred`（红→绿） |
+| P1 manifest 按 basename 认定归属（跨目录同名可被误删） | 清单记录并校验完整 workspace 相对路径 + kind + orig 对应（按原文件 basename 比对）；删除前对新鲜清单重核验；`forget` 按路径寻址，同名不同目录记录完全独立 | `test_clean_same_basename_in_subdirectory_is_not_deleted`、`test_clean_same_basename_manifest_records_are_independent`（红→绿） |
+| P1 清单重写非原子 / record 失败无诊断 | 临时文件 + fsync + `os.replace` 原子重写（失败原记录完整）；`record_trash` 返回成功与否，失败时事务照常但 `trash_manifest_degraded` 随结果上报 + 输出 note，该类遗留文件只能报告、`clean --apply` 不删 | `test_forget_failure_keeps_manifest_intact`、`test_manifest_write_failure_degrades_to_report_only`（红→绿） |
+| P2 显式 null / 空 session_id 混入 legacy 规则 | 仅字段缺失进入 legacy 规则；存在但非非空字符串 → `SESSION_CORRUPTED`（读取与 open 双路径） | `test_event_with_explicit_null_session_id_is_rejected`、`test_event_with_empty_session_id_is_rejected`（红→绿） |
+| P3 指纹碰撞测试未验证四字段全等 | 重写为显式测量 (dev, ino, size, mtime_ns) 四分量碰撞：全等平台（Linux）钉死 documented residual；不复用平台（Windows）断言替换存活 + `RECOVERY_UNCERTAIN`——结论不超出实际验证 | `test_atomic_create_failure_fingerprint_collision_documents_residual`（重写） |
+
+## 0d. 第二阶段 P2 安全加固第 2 批（v1.6，事务清理生命周期）
+
+第 1 批复核批准归档，并给出本批顺序：P0（Delete backup 提交清理竞态）→ P1（受控清理机制）→ P2（legacy session_id 策略）→ P3（边界测试补强）。全部完成，代码提交 `d600c9d` / `6b4ef0e` / `48bdb87` / `1359a90`；**按复核要求未合并 main**，详见 `docs/REVIEW-SUBMISSION-P2-BATCH2.md`。
+
+| 项 | 处理 | 回归测试 |
+|---|---|---|
+| **P0** 提交后 Delete backup 按名 unlink 可误删外部重建文件 | 移动验证后捕获 backup 四元组指纹；提交清理仅指纹匹配才删除；不匹配/消失/unlink 失败 → 留存 + `extra["cleanup_deferred"]` + 输出 note；**清理失败不改变已提交事务状态** | `test_delete_backup_cleanup_skips_replaced_backup`（清理期 stat 注入替换）、`..._failure_is_reported_not_fatal`（unlink 失败诊断）、`..._vanished_before_cleanup_is_not_an_error`（消失） |
+| **P1** 冗余 trash/backup 受控清理 | 新模块 `trash.py`：创建时写事务清单（归属证明 = 严格命名模式 + 清单记录一致）；`jinlin-agent clean` 子命令默认 **dry-run**，`--apply` 持 workspace 写锁只删可证明文件；失败保留清单条目可重复执行；不认识的只报告不删除；与 P0 延迟清理联动 | `tests/test_trash.py` 7 条（清单证明、dry-run 默认、apply 语义、失败可重复、锁拒绝、torn 清单、patch→清单→clean 集成） |
+| **P2** legacy session_id 兼容策略 | 解析器强制三类：全无归属（legacy 容忍）/ 全归属一致（严格）/ 显式迁移形状（无归属前缀 + 单会话归属后缀）；归属后再无归属 → `SESSION_CORRUPTED`；外会话维持拒绝；历史内容不改写 | `test_mixed_log_attributed_then_unattributed_is_rejected`（旧实现静默接受→红）、`test_legacy_log_without_session_id_migrates_on_append`（迁移路径钉死） |
+| **P3** `_atomic_create_new` 边界矩阵 | 三条注入：同 size+inode 复用替换（mtime 区分，存活）、完整指纹碰撞（威胁模型外，钉死 documented residual）、检查时路径消失（`RECOVERY_UNCERTAIN`） | `test_atomic_create_failure_replaced_same_size_is_not_unlinked`、`..._fingerprint_collision_documents_residual`、`..._vanished_path_is_reported_uncertain` |
 
 ## 0c. 第二阶段 P2 安全加固第 1 批（v1.5，基于《第 6 轮独立复核意见》+ 既有排期）
 

@@ -33,6 +33,17 @@ jobs:
           set -o pipefail
           jinlin-agent eval --suite all | tee reports/eval.txt
         shell: bash
+      - name: Rescue lifecycle smoke test (isolated temporary workspace)
+        run: |
+          python scripts/rescue_smoke.py
+      - name: Rescue deterministic fault-injection matrix
+        run: |
+          python scripts/test-rescue-fault-matrix.py
+      - name: Verify one-click PowerShell runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/test-all.ps1 -SkipInstall
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4

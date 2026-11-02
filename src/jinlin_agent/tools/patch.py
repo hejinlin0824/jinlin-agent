@@ -40,6 +40,7 @@ from ..errors import (
     AgentError,
 )
 from ..locks import SessionLock, SessionLockedError
+from ..trash import forget_trash, record_trash
 from .base import ToolContext, ToolResult, ToolSpec
 from .registry import ToolRegistry
 
@@ -244,6 +245,61 @@ def _atomic_create_new(path: Path, data: bytes) -> None:
     _invalidate_bytecode(path)
 
 
+def _write_exclusive(path: Path, data: bytes) -> None:
+    """Exclusive-create ``path`` and write ``data`` completely — short-write
+    safe (loops until every byte is written) and fsync'ed before close.
+    Raises FileExistsError when the path is claimed, other OSError on I/O
+    failure."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o666)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("write made no forward progress")
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _park_rescue_file(
+    workspace: Path,
+    orig_rel: str,
+    original_bytes: bytes,
+    manifest_degraded: list[str],
+) -> Path:
+    """Persist original bytes in a unique, exclusive, fsync'ed rescue file.
+
+    If a write or verification fails, preserve the candidate for inspection:
+    never unlink a path by name after an identity/content check, because an
+    external writer could have replaced it in the meantime. The raised error
+    includes the candidate path so the caller can report the remaining
+    evidence accurately.
+    """
+    for _ in range(5):
+        candidate = Path(workspace) / f".{Path(orig_rel).name}.jinlin-rescue-{uuid.uuid4().hex[:8]}"
+        try:
+            _write_exclusive(candidate, original_bytes)
+        except FileExistsError:
+            continue  # exclusive-create collision; choose a fresh unpredictable name
+        except OSError as exc:
+            raise OSError(f"rescue write failed at {candidate}; partial evidence preserved: {exc}") from exc
+
+        try:
+            actual = candidate.read_bytes()
+        except OSError as exc:
+            raise OSError(f"rescue verification could not read {candidate}; evidence preserved: {exc}") from exc
+        if actual != original_bytes:
+            raise OSError(f"rescue verification failed at {candidate}; evidence preserved")
+
+        if not record_trash(workspace, candidate, orig_rel, "rescue"):
+            manifest_degraded.append(f"{candidate.name} (rescue persisted; manifest record failed)")
+        return candidate
+
+    raise OSError("could not create a unique rescue file after 5 exclusive-create attempts")
+
+
 def _invalidate_bytecode(path: Path) -> None:
     """Remove cached bytecode for an edited Python source file (best effort)."""
     if path.suffix.lower() != ".py":
@@ -284,7 +340,9 @@ def _restore_no_clobber(source: Path, dest: Path) -> bool:
     return True
 
 
-def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], list[str], list[str]]:
+def _rollback_transaction(
+    applied: list[dict[str, Any]], workspace: Path, manifest_degraded: list[str]
+) -> tuple[list[str], list[str], list[str], list[str]]:
     """Revert only mutations this transaction actually made *and* still owns.
 
     Ownership is verified by content hash, and the live path is never deleted
@@ -292,13 +350,21 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
     transaction-scoped trash name (atomic, content-preserving), the trash is
     hashed, and only when it matches what our write produced is it removed or
     replaced. Every put-back — trash or backup onto the original path — goes
-    through `_restore_no_clobber`: if a concurrent writer recreated the path
+    through ``_restore_no_clobber``: if a concurrent writer recreated the path
     while our content sat aside, both sides are kept and the path is reported
-    as incomplete (the caller raises RECOVERY_UNCERTAIN). An overwriting
-    rename is never used as a restore fallback, and **no cleanup unlinks by
-    name**: trash/backup entries whose content is safely back at the path (or
-    deliberately reverted) are left in place and returned as ``redundant`` —
-    inspect-then-remove litter, not a deletion target (round-6 finding).
+    as incomplete. An overwriting rename is never used as a restore fallback,
+    and **no cleanup unlinks by name**: trash/backup entries whose content is
+    safely back at the path (or deliberately reverted) are left in place and
+    returned as ``redundant`` — inspect-then-remove litter, not a deletion
+    target (round-6 finding).
+
+    The delete lifecycle (round-9) registers the backup immediately after the
+    move and verifies it through one freshly opened file object; a backup that
+    no longer provably holds the moved object is never restored as the
+    original. When the original cannot be re-created at its path (claimed
+    concurrently), its bytes are parked in a uniquely named rescue file
+    (exclusive create, short-write-safe, fsync'ed, manifest-recorded) — the
+    original data is never silently dropped (round-10 finding).
 
     The residual window between the trash-rename and the final step is
     best-effort against uncoordinated external processes; jinlin sessions are
@@ -308,15 +374,19 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
     restored: list[str] = []
     incomplete: list[str] = []
     redundant: list[str] = []
+    rescued: list[str] = []
     for record in reversed(applied):
         path: Path = record["path"]
         rel: str = record["rel"]
+        original_bytes = record.get("original_bytes")
         try:
             if record["kind"] == "add":
                 if not path.exists():
                     continue
                 trash = path.with_name(f".{path.name}.jinlin-rollback-{uuid.uuid4().hex[:8]}")
                 os.replace(path, trash)  # content-preserving: never unlink in place
+                if not record_trash(workspace, trash, rel, "rollback"):
+                    manifest_degraded.append(trash.name)
                 if hashlib.sha256(trash.read_bytes()).hexdigest() == record["after_sha"]:
                     redundant.append(trash.name)  # reverted content, verified ours
                     restored.append(rel)
@@ -332,6 +402,8 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
                     continue
                 trash = path.with_name(f".{path.name}.jinlin-rollback-{uuid.uuid4().hex[:8]}")
                 os.replace(path, trash)
+                if not record_trash(workspace, trash, rel, "rollback"):
+                    manifest_degraded.append(trash.name)
                 if hashlib.sha256(trash.read_bytes()).hexdigest() != record["after_sha"]:
                     if _restore_no_clobber(trash, path):
                         redundant.append(trash.name)  # content back at the path
@@ -348,22 +420,32 @@ def _rollback_transaction(applied: list[dict[str, Any]]) -> tuple[list[str], lis
                     continue
                 redundant.append(trash.name)  # reverted content, verified ours
                 restored.append(rel)
-            else:  # delete: restore from the moved-aside backup
-                if path.exists():
-                    incomplete.append(rel)  # a concurrent writer recreated it
-                    continue
-                backup: Path = record["backup"]
-                if not backup.exists():
-                    incomplete.append(rel)
-                    continue
-                if not _restore_no_clobber(backup, path):
-                    incomplete.append(rel)  # claimed concurrently, or fs cannot hard-link:
-                    continue  # keep the backup, never fall back to an overwriting rename
-                redundant.append(backup.name)  # content back at the path
-                restored.append(rel)
+            else:  # delete: restore only from captured original bytes
+                original_bytes = record.get("original_bytes")
+                # Never restore from the backup pathname. Even if its hash and
+                # stat matched a moment ago, that name can be replaced before
+                # a link/rename. The pre-move bytes are the only trusted source.
+                if original_bytes is not None:
+                    try:
+                        _write_exclusive(path, original_bytes)
+                        restored.append(rel)
+                        continue
+                    except FileExistsError:
+                        # An external writer claimed the destination.
+                        pass
+                    except OSError:
+                        # A failed/partial destination write must not discard
+                        # the only in-memory copy.
+                        pass
+                    try:
+                        rescue = _park_rescue_file(workspace, rel, original_bytes, manifest_degraded)
+                        rescued.append(str(rescue))
+                    except OSError as exc:
+                        rescued.append(f"FAILED to persist original bytes of {rel}: {exc}")
+                incomplete.append(rel)
         except Exception:
             incomplete.append(rel)
-    return restored, incomplete, redundant
+    return restored, incomplete, redundant, rescued
 
 
 def check_clean(ctx: ToolContext, rel: str, current_sha: str) -> AgentError | None:
@@ -636,6 +718,7 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
     written: list[dict[str, Any]] = []
     deleted: list[str] = []
     applied: list[dict[str, Any]] = []
+    manifest_degraded: list[str] = []
     try:
         for item in plan:
             path = item["path"]
@@ -646,32 +729,115 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                 written.append({"path": item["rel"], "hash_before": None, "hash_after": digest, "lines_added": len(item["data"].splitlines())})
             elif item["kind"] == "delete":
                 expected = item["old_sha"]
-                current_sha = hashlib.sha256(path.read_bytes()).hexdigest()
-                if current_sha != expected:
+                data_at_plan = path.read_bytes()
+                if hashlib.sha256(data_at_plan).hexdigest() != expected:
                     raise AgentError(FILE_CHANGED_EXTERNALLY, f"{item['rel']} changed before deletion", source="edit")
+                item["original_bytes"] = data_at_plan
                 backup = path.with_name(f".{path.name}.jinlin-txn-{uuid.uuid4().hex[:8]}")
-                # move the directory entry atomically; verify what we moved
-                os.replace(path, backup)
-                moved_sha = hashlib.sha256(backup.read_bytes()).hexdigest()
-                if moved_sha != expected:
-                    if _restore_no_clobber(backup, path):
-                        raise AgentError(
-                            FILE_CHANGED_EXTERNALLY,
-                            f"{item['rel']} changed while being deleted; original restored",
-                            source="edit",
-                        )
+                # Lifecycle (round-9): open the ORIGINAL *before* moving it, so
+                # the content hash and the identity fingerprint describe the
+                # object we are about to move, taken from one file object.
+                # Anything that replaces the path afterwards can never be
+                # mistaken for that object: post-move we only compare the
+                # backup path against the fd fingerprint.
+                fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+                try:
+                    digest = hashlib.sha256()
+                    original_bytes = bytearray()
+                    while True:
+                        chunk = os.read(fd, 1 << 20)
+                        if not chunk:
+                            break
+                        original_bytes += chunk
+                        digest.update(chunk)
+                    moved_sha = digest.hexdigest()
+                    st = os.fstat(fd)
+                    original_identity = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+                except OSError as exc:
+                    os.close(fd)
+                    # nothing has been moved yet — the path is untouched
                     raise AgentError(
-                        RECOVERY_UNCERTAIN,
-                        f"{item['rel']} changed while being deleted and the path was claimed "
-                        f"concurrently; the original content was kept aside at {backup.name} "
-                        "instead of replacing the concurrent file",
+                        TOOL_EXECUTION_FAILED,
+                        f"{item['rel']} could not be read for deletion ({exc}); nothing was moved",
                         source="edit",
-                        details={"kept_aside": backup.name},
-                    )
+                    ) from exc
+                os.close(fd)
+                # the handle must be closed before the rename: an open handle
+                # without FILE_SHARE_DELETE blocks os.replace on Windows
+                if moved_sha != expected:
+                    # content changed between validation and the write phase —
+                    # nothing has been moved, so there is nothing to recover
+                    raise AgentError(FILE_CHANGED_EXTERNALLY, f"{item['rel']} changed before deletion", source="edit")
+                os.replace(path, backup)
+                # The move is now a fact: register the pending delete BEFORE
+                # anything else can fail, carrying the original bytes — recovery
+                # never depends on the backup path still holding the original
+                # (round-9 finding). The record stays unverified until the
+                # backup's content and fingerprint are re-checked through one
+                # freshly opened file object.
                 applied.append(
-                    {"kind": "delete", "path": path, "rel": item["rel"], "backup": backup, "before_sha": expected}
+                    {
+                        "kind": "delete",
+                        "path": path,
+                        "rel": item["rel"],
+                        "backup": backup,
+                        "before_sha": expected,
+                        "backup_identity": None,
+                        "original_bytes": item["original_bytes"],
+                        "backup_verified": False,
+                    }
                 )
                 deleted.append(item["rel"])
+                # does the backup path still hold the object we moved? a
+                # replacement that slipped in between the move and this check
+                # makes the backup unprovable — the record stays unverified and
+                # rollback re-creates the original from the recorded bytes
+                try:
+                    st = os.stat(backup)
+                    backup_verified = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) == original_identity
+                except OSError:
+                    backup_verified = False
+                if not backup_verified:
+                    raise AgentError(
+                        RECOVERY_UNCERTAIN,
+                        f"{item['rel']}: the moved backup no longer provably holds the original "
+                        "content (it was replaced between the move and verification); the original "
+                        "bytes are preserved in the transaction record",
+                        source="edit",
+                        details={"backup": backup.name},
+                    )
+                fd = os.open(backup, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+                try:
+                    digest = hashlib.sha256()
+                    while True:
+                        chunk = os.read(fd, 1 << 20)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                    verified_sha = digest.hexdigest()
+                    st = os.fstat(fd)
+                    backup_identity = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+                finally:
+                    os.close(fd)
+                if verified_sha != expected or backup_identity != original_identity:
+                    # The moved backup was replaced or altered before it could be
+                    # verified: it is NOT the original, so it is never restored.
+                    # The pending record stays unverified — rollback re-creates
+                    # the original from the recorded bytes and leaves this backup
+                    # untouched.
+                    raise AgentError(
+                        RECOVERY_UNCERTAIN,
+                        f"{item['rel']}: the moved backup no longer provably holds the original "
+                        "content (it was replaced between the move and verification); the original "
+                        "bytes are preserved in the transaction record",
+                        source="edit",
+                        details={"backup": backup.name},
+                    )
+                record = applied[-1]
+                record["backup_identity"] = backup_identity
+                record["backup_verified"] = True
+                if not record_trash(ctx.workspace, backup, item["rel"], "txn"):
+                    manifest_degraded.append(backup.name)
             else:
                 new_sha = hashlib.sha256(item["data"]).hexdigest()
                 atomic_write(path, item["data"], mode_from=path, expected_sha256=item["old_sha"])
@@ -694,11 +860,13 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                     }
                 )
     except Exception as exc:
-        restored, incomplete, redundant = _rollback_transaction(applied)
+        restored, incomplete, redundant, rescued = _rollback_transaction(applied, ctx.workspace, manifest_degraded)
         details = {
             "rolled_back": restored,
             "rollback_incomplete": incomplete,
             "redundant_trash": redundant,
+            "rescued_files": rescued,
+            "trash_manifest_degraded": manifest_degraded,
         }
         if not applied and isinstance(exc, AgentError):
             # nothing was written, so there is nothing to roll back — surface
@@ -717,6 +885,22 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
                 ),
                 output="patch failed; partial rollback — inspect: " + ", ".join(incomplete),
             )
+        if isinstance(exc, AgentError):
+            # AgentError diagnoses (PATCH_CONFLICT on a lost race,
+            # RECOVERY_UNCERTAIN on an unverifiable backup, ...) surface with
+            # their own code — the handler MUST return in every branch: falling
+            # through here would treat a rolled-back transaction as committed
+            if exc.code == RECOVERY_UNCERTAIN:
+                exc.details.update(
+                    {
+                        "rolled_back": restored,
+                        "rollback_incomplete": incomplete,
+                        "redundant_trash": redundant,
+                        "trash_manifest_degraded": manifest_degraded,
+                    }
+                )
+            return ToolResult(ok=False, error=exc)
+        # non-AgentError (raw I/O failure etc.) with a clean rollback
         return ToolResult(
             ok=False,
             error=AgentError(
@@ -727,13 +911,45 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
             ),
         )
 
-    # transaction committed: drop delete backups
+    # transaction committed: drop delete backups. A committed transaction and
+    # a successful cleanup are different outcomes — the delete is final and
+    # never reopened here. Cleanup deletes a backup only while it still
+    # provably holds the fingerprint captured at move time; anything else
+    # (replaced, vanished-with-different-identity, unlink failure) is left in
+    # place and reported as deferred, never turned into a tool failure.
+    cleanup_deferred: list[str] = []
     for record in applied:
-        if record["kind"] == "delete":
-            try:
-                record["backup"].unlink()
-            except OSError:
-                pass
+        if record["kind"] != "delete":
+            continue
+        backup: Path = record["backup"]
+        identity = record.get("backup_identity")
+        try:
+            st = os.stat(backup)
+        except FileNotFoundError:
+            continue  # gone — nothing of ours left to clean
+        except OSError as exc:
+            # a stat failure is not "nothing to clean": keep the backup and
+            # report the reason instead of silently swallowing the error
+            cleanup_deferred.append({"name": backup.name, "reason": f"stat failed: {exc}"})
+            continue
+        provable = identity is not None and (
+            st.st_dev,
+            st.st_ino,
+            st.st_size,
+            st.st_mtime_ns,
+        ) == identity
+        if not provable:
+            cleanup_deferred.append(
+                {"name": backup.name, "reason": "current stat fingerprint does not match the moved backup"}
+            )
+            continue
+        try:
+            backup.unlink()
+        except OSError as exc:
+            cleanup_deferred.append({"name": backup.name, "reason": f"unlink failed: {exc}"})
+            continue
+        if not forget_trash(ctx.workspace, backup):
+            manifest_degraded.append(f"{backup.name} (cleanup succeeded; manifest update failed)")
 
     read_hashes = {w["path"]: w["hash_after"] for w in written}
     summary = [f"applied {len(plan)} file operation(s):"]
@@ -741,12 +957,28 @@ def _apply_patch_locked(ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         summary.append(f"  M {w['path']} (+{w.get('lines_added', 0)}/-{w.get('lines_removed', 0)})")
     for d in deleted:
         summary.append(f"  D {d}")
+    if manifest_degraded:
+        summary.append(
+            "note: trash manifest could not record: "
+            + ", ".join(manifest_degraded)
+            + " - these leftovers are report-only and must be removed manually"
+        )
+    if cleanup_deferred:
+        summary.append(
+            "note: backup file(s) kept after commit (ownership not provable or cleanup failed): "
+            + ", ".join(d["name"] for d in cleanup_deferred)
+            + " — the transaction is committed; inspect before removing"
+        )
     return ToolResult(
         output="\n".join(summary),
         written_files=written,
         deleted_files=deleted,
         read_hashes=read_hashes,
-        extra={"files": [w["path"] for w in written]},
+        extra={
+            "files": [w["path"] for w in written],
+            "cleanup_deferred": cleanup_deferred,
+            "trash_manifest_degraded": manifest_degraded,
+        },
     )
 
 

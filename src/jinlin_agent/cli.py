@@ -316,6 +316,155 @@ def cmd_doctor(args: Any) -> int:
     return 0
 
 
+def cmd_clean(args: Any) -> int:
+    from .trash import clean_trash
+
+    workspace = Path(args.workspace or ".").expanduser().resolve()
+    report = clean_trash(workspace, apply=bool(args.apply))
+    _print(f"workspace: {workspace}")
+    _print(f"status: {report['status']}")
+    if report.get("detail"):
+        _print(f"detail: {report['detail']}")
+    for key in ("removable", "unrecognized", "removed"):
+        items = report.get(key) or []
+        _print(f"{key}: {len(items)}")
+        for name in items:
+            _print(f"  {name}")
+    failed = report.get("failed") or []
+    _print(f"failed: {len(failed)}")
+    for item in failed:
+        _print(f"  {item['name']} ({item['error']})")
+    if report["status"] == "dry-run":
+        _print("dry run only — pass --apply to remove the provable leftovers")
+    return 0
+
+
+def cmd_rescue(args: Any) -> int:
+    from .trash import clean_rescue, inspect_rescue, list_rescue, recover_rescue, restore_rescue
+
+    workspace = Path(args.workspace or ".").expanduser().resolve()
+    if args.rescue_action == "quarantine":
+        from .trash import recover_clean_quarantines
+        if args.quarantine_action == "inspect":
+            report = inspect_rescue(workspace)
+            items = report.get("quarantined", [])
+            payload = {"status": report.get("status"), "counts": {
+                "quarantined": len(items),
+                "safe_to_restore": sum(x.get("classification") == "safe-to-restore" for x in items),
+                "already_restored": sum(x.get("classification") == "already-restored" for x in items),
+                "blocked": sum(x.get("classification") not in ("safe-to-restore", "already-restored") for x in items),
+            }, "items": items}
+            if args.json:
+                _print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                _print(f"workspace: {workspace}")
+                _print(f"status: {payload['status']}")
+                for key, value in payload["counts"].items():
+                    _print(f"  {key}: {value}")
+                for item in items:
+                    _print(f"  {item['classification']}: {item['path']} -> {item['candidate']} "
+                           f"[{item.get('candidate_kind', 'unknown')}] ({item.get('reason', '')})")
+            return 0 if payload["status"] == "ok" and not payload["counts"]["blocked"] else 2
+        report = recover_clean_quarantines(workspace, apply=bool(args.apply))
+        if args.json:
+            _print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            _print(f"workspace: {workspace}")
+            _print(f"status: {report['status']}")
+            for item in report.get("items", []):
+                _print(f"  {item.get('classification', 'classified')}: {item.get('path')} -> {item.get('candidate')}")
+            for item in report.get("recovered", []):
+                _print(f"  {item['status']}: {item['path']} -> {item['candidate']} ({item.get('detail', '')})")
+            for item in report.get("blocked", []):
+                _print(f"  blocked: {item.get('path')} -> {item.get('candidate')} ({item.get('detail', '')})")
+            if report["status"] == "dry-run":
+                _print("dry run only — pass --apply to restore verified quarantine evidence")
+        return 0 if report["status"] in ("dry-run", "applied") and not report.get("blocked") else 2
+    if args.rescue_action == "recover":
+        report = recover_rescue(workspace)
+        _print(f"workspace: {workspace}")
+        _print(f"status: {report['status']}")
+        for item in report.get("items", []):
+            _print(f"  {item['status']}: {item.get('stage')} -> {item.get('target')} ({item.get('detail', '')})")
+        for item in report.get("orphaned", []):
+            _print(f"  orphaned: {item['path']} [{item['kind']}] ({item['detail']})")
+        safe = all(x["status"] in ("restored", "already-published") for x in report.get("items", []))
+        return 0 if report["status"] == "ok" and safe and not report.get("orphaned") else 2
+    if args.rescue_action == "clean":
+        report = clean_rescue(workspace, apply=bool(args.apply))
+        _print(f"workspace: {workspace}")
+        _print(f"status: {report['status']}")
+        _print(f"eligible: {len(report['eligible'])}")
+        for item in report["eligible"]:
+            _print(f"  {item['rescue']} -> {item['target']} (stage={item['stage']}, sha256={item['sha256']})")
+        for item in report["failed"]:
+            _print(f"  failed: {item}")
+        for path in report["removed"]:
+            _print(f"  removed: {path}")
+        for path in report["manifest_degraded"]:
+            _print(f"  manifest update failed after removal: {path}")
+        for item in report.get("quarantined", []):
+            _print(f"  quarantined evidence (manual inspection required): {item['path']} [{item['kind']}]")
+        return 0 if report["status"] in ("dry-run", "applied") and not report["failed"] and not report.get("quarantined") else 2
+    if args.rescue_action == "inspect":
+        report = inspect_rescue(workspace)
+        if args.json:
+            _print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 0 if report["status"] == "ok" else 2
+        _print(f"workspace: {workspace}")
+        _print(f"status: {report['status']}")
+        for key, value in report.get("counts", {}).items():
+            _print(f"  {key}: {value}")
+        for item in report.get("transactions", []):
+            sequence = f" seq={item.get('first_seq')}..{item.get('last_seq')}" if item.get("last_seq") is not None else ""
+            _print(f"  transaction {item['txid']}: {item['state']} "
+                   f"(events={item.get('event_count', 0)}{sequence}; "
+                   f"last={item.get('last_action')}/{item.get('last_status')})")
+            for issue in item.get("identity_issues", []):
+                _print(f"    transaction-identity-error: {issue}")
+            for issue in item.get("transition_issues", []):
+                _print(f"    transaction-transition-error: {issue}")
+        for item in report.get("stages", []):
+            _print(f"  stage {item['path']}: {item['state']} [{item['integrity']}]")
+        for item in report.get("orphaned", []):
+            _print(f"  orphaned {item['path']} [{item['kind']}]")
+        for item in report.get("quarantined", []):
+            _print(f"  interrupted-cleanup {item['path']} [{item['kind']}] "
+                   f"classification={item.get('classification', 'unknown')} "
+                   f"candidate={item.get('candidate', '?')}")
+            if item.get("reason"):
+                _print(f"    reason: {item['reason']}")
+        for item in report.get("issues", []):
+            _print(f"  issue: {item}")
+        if report.get("audit", {}).get("issues"):
+            for item in report["audit"]["issues"]:
+                _print(f"  audit-integrity-error: line {item['line']}: {item['reason']}")
+        return 0 if report["status"] == "ok" else 2
+    if args.rescue_action == "list":
+        report = list_rescue(workspace)
+        _print(f"workspace: {workspace}")
+        _print(f"status: {report['status']}")
+        _print(f"verified rescue files: {len(report['rescued'])}")
+        for item in report["rescued"]:
+            _print(f"  {item['path']} -> {item['orig']} ({item['size']} bytes, {item['integrity']}, sha256={item['sha256']})")
+        _print(f"unrecognized rescue files: {len(report['unrecognized'])}")
+        for item in report["unrecognized"]:
+            _print(f"  {item['path']} (not verified; do not restore automatically)")
+        return 0 if report["status"] == "ok" else 2
+    result = restore_rescue(workspace, args.path)
+    _print(f"status: {result['status']}")
+    _print(result.get("detail", ""))
+    if result.get("target"):
+        _print(f"target: {result['target']}")
+        if result.get("rescue"):
+            _print(f"rescue copy retained: {result['rescue']}")
+        if result.get("stage"):
+            _print(f"staging file retained: {result['stage']}")
+        if result.get("sha256"):
+            _print(f"sha256: {result['sha256']}")
+    return 0 if result["status"] in ("restored", "already-published") else 2
+
+
 def cmd_eval(args: Any) -> int:
     from .evalkit import run_suite
 
@@ -376,6 +525,49 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="environment and config check")
     doctor.add_argument("--workspace", default=".")
     doctor.set_defaults(func=cmd_doctor)
+
+    clean = sub.add_parser("clean", help="list (default) or remove jinlin trash/backup leftovers")
+    clean.add_argument("--workspace", default=".", help="workspace to sweep (default: current directory)")
+    clean.add_argument(
+        "--apply",
+        action="store_true",
+        help="remove the provable leftovers (default: dry run; unrecognized files are never removed)",
+    )
+    clean.set_defaults(func=cmd_clean)
+
+    rescue = sub.add_parser("rescue", help="inspect and safely restore preserved original files")
+    rescue_sub = rescue.add_subparsers(dest="rescue_action", required=True)
+    rescue_list = rescue_sub.add_parser("list", help="list manifest- and SHA-256-verified rescue files")
+    rescue_list.add_argument("--workspace", default=".")
+    rescue_list.set_defaults(func=cmd_rescue)
+    rescue_restore = rescue_sub.add_parser("restore", help="restore a rescue file without overwriting its target")
+    rescue_restore.add_argument("path", help="workspace-relative rescue path shown by rescue list")
+    rescue_restore.add_argument("--workspace", default=".")
+    rescue_restore.set_defaults(func=cmd_rescue)
+    rescue_recover = rescue_sub.add_parser("recover", help="reconcile interrupted rescue restore staging files")
+    rescue_recover.add_argument("--workspace", default=".")
+    rescue_recover.set_defaults(func=cmd_rescue)
+    rescue_clean = rescue_sub.add_parser("clean", help="preview or remove verified redundant rescue evidence")
+    rescue_clean.add_argument("--workspace", default=".")
+    rescue_clean.add_argument("--apply", action="store_true", help="perform verified cleanup (default: dry run)")
+    rescue_clean.set_defaults(func=cmd_rescue)
+    rescue_inspect = rescue_sub.add_parser("inspect", help="read-only consistency and transaction audit report")
+    rescue_inspect.add_argument("--workspace", default=".")
+    rescue_inspect.add_argument("--json", action="store_true", help="emit the complete read-only report as JSON")
+    rescue_inspect.set_defaults(func=cmd_rescue)
+    rescue_quarantine = rescue_sub.add_parser("quarantine", help="inspect or recover interrupted cleanup quarantine evidence")
+    quarantine_sub = rescue_quarantine.add_subparsers(dest="quarantine_action", required=True)
+    quarantine_inspect = quarantine_sub.add_parser("inspect", help="read-only classification of interrupted cleanup evidence")
+    quarantine_inspect.add_argument("--workspace", default=".")
+    quarantine_inspect.add_argument("--json", action="store_true", help="emit machine-readable quarantine inspection")
+    quarantine_inspect.set_defaults(func=cmd_rescue)
+    quarantine_recover = quarantine_sub.add_parser("recover", help="restore verified quarantine evidence without overwriting")
+    quarantine_recover.add_argument("--workspace", default=".")
+    quarantine_mode = quarantine_recover.add_mutually_exclusive_group()
+    quarantine_mode.add_argument("--dry-run", action="store_true", help="preview recovery (default)")
+    quarantine_mode.add_argument("--apply", action="store_true", help="perform verified no-clobber recovery")
+    quarantine_recover.add_argument("--json", action="store_true", help="emit machine-readable recovery report")
+    quarantine_recover.set_defaults(func=cmd_rescue)
 
     ev = sub.add_parser("eval", help="run the harness conformance / evaluation suite")
     ev.add_argument("--suite", default="all", choices=["all", "hcs", "e1e8"])

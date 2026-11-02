@@ -16,6 +16,24 @@
 
 ---
 
+## 当前交付状态（2026-11-02；优先于本文历史快照）
+
+本文主体技术分析保留其撰写时的评审数据与实验记录；其中旧测试数量、旧提交号和旧 CI 编号均为历史快照，不应被当作当前分支状态。当前可复核交付状态如下：
+
+- 仓库：`hejinlin0824/jinlin-agent`；工作分支：`review/followup-fixes`。
+- `main` 固定基线：`249bbab7d86f76f71acbf8c88000fc7971297ce6`；本次工作未修改 `main`。
+- PR #1：Draft、open、unmerged；合并决定保留给仓库所有者。
+- 主体任务包 01–06 已完成并由所有者本地验收。
+- 最终收尾包 01–04 已完成。收尾包 04 包含 README、AGENT、测试 runner、机器可读测试元数据、报告与 PR 描述的一致性收口；Windows 所有者在最新 HEAD `40c196f3564b0820a9249cbaf888052ea2436578` 上执行 `test-all.bat` 并确认 ALL CHECKS PASSED。
+- 最新 HEAD `40c196f3564b0820a9249cbaf888052ea2436578` 的 Push CI `41402450170` 与 PR CI `41402456224` 均已完成，Ubuntu 与 Windows jobs 全部 success。
+- 最终收尾包 05 为最后的发布候选审查：检查完整 diff、提交历史、测试证据、可靠性边界、分支与 PR 状态；不再扩展功能范围。
+
+当前一键验收入口为根目录 `test-all.bat`，实际执行由 `scripts/test-all.ps1` 负责；测试套件身份来自 `test-suite.json`。成功结果必须与 runner 打印的分支/提交 SHA 一起核对。CI 结果和历史文档不能替代所有者在目标 Windows 环境上的最终验收。
+
+**可靠性边界仍然有效：** 子进程崩溃测试不等于内核崩溃或物理断电测试；Windows portable Python 对目录项持久性的保证弱于 POSIX 显式目录 fsync；workspace advisory lock 只协调使用同一 lock object 的 Jinlin 操作，不约束任意外部程序或恶意同权限进程。
+
+---
+
 ## 0. 给评审 AI 的说明（先读这一节）
 
 ### 0.1 评审对象与边界
@@ -319,6 +337,16 @@ session 开始时快照记录"任务前既有的脏文件"；完成门区分 **�
 - **原子写**：更新走临时文件 + `os.replace`，写前复核哈希**缩小**（不消除）TOCTOU 窗口；新建文件走 `O_CREAT|O_EXCL` 独占创建（不用 `os.replace`），对并发创建者具有文件系统级的原子 no-clobber 保证——竞争失败返回 `PATCH_CONFLICT`，绝不覆盖对方内容；
 - **workspace 写锁**：写阶段持 `<workspace>/.jinlin/write.lock` 顾问锁，多个 Jinlin 会话在同一工作区上串行（第二个会话得到可重试的 `WORKSPACE_LOCKED`）；
 - **回滚先移动后校验，放回一律 no-clobber，清理一律不按名删**：回滚不动原路径——先把当前内容原子改名到事务级 trash、校验哈希归属，只有确认仍是本事务产物才替换；所有"把 trash/backup 放回原路径"的动作都走统一 helper（`os.link` 原子 create-if-absent）：路径已被并发重建时**双方保留**（外部内容在路径、本事务内容在 trash/backup）并报告 `RECOVERY_UNCERTAIN`，绝不用覆盖式 rename 回退（包括硬链接不可用的文件系统）；放回成功后 source 目录项**有意保留**、不按名 unlink（防误删后来者），作为 `redundant_trash` 上报供检查后受控清理；
+- **Rescue 恢复不是覆盖式回滚**：当原路径被外部占用时，原始字节写入独立的 `.jinlin-rescue-<tag>` 文件并记录 manifest；`jinlin-agent rescue list` 只列出身份匹配的记录，新版记录同时核对 SHA-256，旧版记录明确标为 `legacy-stat`；`rescue restore` 使用独占创建，目标已存在则拒绝覆盖，成功后仍保留 Rescue 源文件。
+- **恢复中断的处理**：恢复先在目标同目录创建确定性命名的暂存文件，完成写入、文件 `fsync` 与 SHA-256 校验后，才用硬链接原子 no-clobber 发布到目标路径。POSIX 平台会在暂存目录项创建后、目标发布后尝试 `fsync` 父目录；便携式 Windows Python API 不提供等价的目录句柄同步能力，因此 Windows 目录项断电持久性明确标为 best-effort。进程在暂存写入期间崩溃，不会把半成品暴露为目标文件；`jinlin-agent rescue recover` 会重新校验暂存文件、重新执行文件 `fsync`，仅发布与 Rescue 原件 SHA-256 完全一致的暂存文件。内容不完整的暂存文件只报告、不自动删除；目标已被占用则保留暂存和 Rescue 原件并报告冲突。
+- **暂存身份检查**：发布前通过文件描述符检查暂存对象是普通文件，并比较打开描述符与路径的 `(dev, ino, size, mtime_ns)` 身份，拒绝符号链接及意外多重硬链接；发布后再次核对目标身份。该机制缩小并检测部分路径替换窗口，但跨平台路径式 `os.link` 仍有同权限外部进程竞态，不能视为抵御恶意同用户进程的完整安全边界。
+- **孤立暂存文件**：`rescue recover` 会扫描符合命名规则、但没有当前有效 Rescue + manifest 记录对应的暂存文件，并将其列为 `orphaned`。孤立文件仅报告，绝不自动发布或删除；CLI 对存在孤立文件返回非零状态，要求人工检查。
+- **受控清理**：`rescue clean` 默认只预览。只有当目标文件仍为普通非符号链接文件且 SHA-256 与有效 Rescue 一致时，才将 Rescue 与 stage 列入可清理项；`rescue clean --apply` 才执行清理。每个候选先移动到唯一 quarantine 名称，再验证被移动对象的类型与 SHA-256，匹配后才删除；身份不匹配的对象保留在 quarantine 并报告。进程若在 quarantine 后、删除前中断，后续 `rescue clean` 会把遗留 quarantine 作为人工检查项报告，不自动恢复或删除。清理成功后目标文件保留，manifest 记录随 Rescue 删除而移除。
+- **事务审计日志**：restore / recover / clean / quarantine-recover 操作会尝试追加到 `.jinlin/rescue-audit.jsonl`。新事件采用 v2 格式，包含持久化事务 ID、全局连续序号、唯一事件 ID、UTC 时间、动作、状态、前一事件哈希及本事件哈希；写入使用独立审计锁、追加模式和文件 `fsync`。事务 ID 在创建 Rescue manifest 记录时生成并随 manifest 更新保留；旧 manifest 没有事务 ID 时仍兼容读取，并使用旧式身份派生 ID 作为过渡。审计读取器兼容 v1 前缀后追加 v2，但拒绝序号断档、重复事件 ID、v2 后混入 v1、字段格式错误或 hash chain 损坏。遇到损坏记录会报告问题并拒绝继续追加，既不截断也不自动修复。
+- **事务状态投影**：状态机以持久化事务 ID 聚合事件，检查 CREATED / STAGED / PUBLISHED / CONFLICT / UNCERTAIN / ORPHANED / CLEANUP_BLOCKED / CLEANED 的合法迁移；同时核对同一事务的 Rescue 路径、目标路径和 SHA-256 是否保持一致。dry-run 事件保留在审计链中，但不创建或推进事务。非法迁移或事务身份漂移会让状态进入 `TRANSITION_INVALID`，并由 `rescue inspect` 报告事件数量、序号范围和一致性问题。审计日志仍只是可追溯性证据，不是恢复数据的权威来源；审计写入失败会在命令结果中给出 warning，不阻断数据恢复。
+- **事务状态投影**：`rescue inspect` 只读汇总 manifest/Rescue、stage、孤立 stage、清理 quarantine 和审计事件，并将事件投影为 `STAGED`、`PUBLISHED`、`CONFLICT`、`UNCERTAIN`、`ORPHANED`、`CLEANED` 等状态。状态是审计历史的解释视图，必须结合文件 SHA-256 与 manifest 身份判断，不可单独作为删除授权。状态投影使用显式允许迁移表；例如 `PUBLISHED → STAGED` 属于不允许回退，会显示 `TRANSITION_INVALID` 并使 inspect 返回 attention-required。当前有效 Rescue 对应的 stage 若 SHA-256 不匹配或不可读取，即使它尚未被发布，也会计入 `incomplete_stages` 并使 inspect 返回 attention-required，避免把进程崩溃留下的空文件/部分文件误报为正常。
+- **一键验收**：仓库根目录的 `test-all.bat` 可双击运行 Windows 测试入口；`scripts/test-all.ps1` 执行 editable dev 安装、全量 pytest、Harness eval、隔离临时工作区的 `scripts/rescue_smoke.py` 生命周期测试，以及 `scripts/test-rescue-fault-matrix.py`。故障矩阵既覆盖 syscall 故障注入，也启动独立 Python 子进程，在 stage 创建、部分写入、文件 fsync、目录同步、hardlink 发布和 cleanup quarantine 后调用 `os._exit()`，再由父进程运行 recover/inspect。它验证进程突然终止后的恢复行为，不等价于内核崩溃或断电持久性测试。所有测试工作区由 pytest 临时目录创建并自动清理。
+- **恢复安全边界**：目标父目录必须已存在且解析后仍位于 workspace 内；目标通过硬链接 create-if-absent 发布，不覆盖既有目标。workspace 写锁只协调 Jinlin 自身会话，不约束同权限外部进程；跨平台路径解析、路径式硬链接及 quarantine 操作仍有有限 TOCTOU 窗口，不宣称抵御拥有同等文件系统权限的恶意进程。
 - 失败信息包含 hunk 号与匹配诊断，便于模型自纠。
 
 ## 10. 上下文管理（T3 的核心）
@@ -468,7 +496,7 @@ $ jinlin-agent eval --suite all
 8. **完成门偏严**：证据引用不合规会多 1 轮；这是刻意的 trade-off（False Success 优先于步数）。
 9. **SQLite 投影未实现**：事件折叠直接承担 V1 查询。
 10. **无 MCP / skills / hooks / plugins**：扩展性显著弱于两条基线。
-11. **更新路径的残余 TOCTOU 窗口**：对**不受本程序控制的外部进程**，跨平台普通文件 API 没有按内容哈希的原子 compare-and-swap。写前哈希复核只能把"检查→替换"窗口缩到微秒级，不能消除；一个恰好在窗口内落盘的外部修改仍会被覆盖且无法事后检测。workspace 写锁消除的是**多个 Jinlin 会话之间**的竞争（硬保证），对外部进程仅是 best-effort。回滚与恢复侧已无覆盖与误删风险：本事务内容先原子改名到 trash/backup 再校验归属，所有放回走 `os.link` create-if-absent（路径被并发重建时双方保留并报 `RECOVERY_UNCERTAIN`），放回成功后源目录项**保留不删**（作为 `redundant_trash` 上报，供检查后受控清理），对外部进程既不覆盖也不误删；但 `link` 与后续任何操作之间仍非完整原子事务，恢复现场的不确定性（冗余目录项、放回不可判定）如实存在。新建文件侧：`O_CREAT|O_EXCL` 建立是文件系统级原子 no-clobber；失败清理只在 `(st_dev, st_ino)` 身份仍匹配时按名删除自身半写文件，路径被并发替换时保留现场并报 `RECOVERY_UNCERTAIN`。
+11. **更新与恢复路径的残余 TOCTOU 窗口**：对**不受本程序控制的外部进程**，跨平台普通文件 API 没有按内容哈希的原子 compare-and-swap。写前哈希复核只能缩小窗口，不能消除。workspace 写锁协调的是多个 Jinlin 会话，不约束同权限外部进程。Rescue 暂存发布使用文件描述符身份复核、SHA-256、普通文件检查及发布后身份核对，但最终 `os.link(stage, dest)` 仍按路径解析，检查与链接之间存在有限竞态；父目录解析与使用之间也存在外部目录替换窗口。POSIX 父目录 `fsync` 能增强目录项持久性，但 Windows 便携 API 无等价保证。受控清理采用 quarantine 后验证被移动对象再删除，降低按名误删风险；如果对象不匹配则保留 quarantine 证据。以上是 best-effort 防护，不宣称抵御拥有相同文件系统权限的恶意并发进程。
 
 ---
 
@@ -670,3 +698,121 @@ jinlin-agent run --workspace /tmp/repo -t "修复失败测试"
 4. OpenAI, *Unrolling the Codex agent loop.* <https://openai.com/index/unrolling-the-codex-agent-loop/>
 5. Claude Code Docs, *Hooks* / *Tools reference.* <https://code.claude.com/docs/en/hooks-guide>
 6. 本项目 README / PLAN / 规格评审：`README.md`、`docs/PLAN.md`、`../docs/review/spec-review-v1.md`
+
+
+## Rescue interrupted-cleanup quarantine classification
+
+`rescue inspect`, `rescue clean`, and `rescue quarantine inspect` classify quarantine files left by interrupted cleanup. Inspection is read-only and never restores or deletes data:
+
+- `safe-to-restore`: the former path is free and the quarantine matches a manifest-bound Rescue identity plus SHA-256, or a deterministic restore-stage path plus the Rescue SHA-256.
+- `already-restored`: the former path contains the verified recovery copy and its recorded manifest/stage identity is consistent.
+- `target-conflict`: the former path is occupied; a no-clobber restoration must not overwrite it.
+- `identity-mismatch`: content or recorded Rescue identity does not match.
+- `ambiguous`: multiple verified quarantine objects claim one former path.
+- `legacy-unverified`: an older manifest lacks SHA-256 evidence.
+- `unrecognized`: no manifest-backed Rescue or stage association can be established.
+
+Automatic mutation is never performed by inspection. The separate `rescue quarantine recover` command defaults to a dry-run and requires explicit `--apply` to restore verified evidence. Apply revalidates under the workspace lock and publishes with no-clobber semantics. The audit log is supporting diagnostic evidence, not the authority for file identity; same-privilege path races and platform durability limits remain explicit constraints.
+
+
+## Recovering interrupted Rescue cleanup quarantines
+
+A quarantine left by an interrupted `rescue clean --apply` is evidence, not disposable trash. Inspect it first:
+
+```powershell
+jinlin-agent rescue quarantine inspect --workspace .
+jinlin-agent rescue quarantine inspect --workspace . --json
+```
+
+Recovery is an explicit two-step operation. The default is a read-only preview; only `--apply` changes files:
+
+```powershell
+jinlin-agent rescue quarantine recover --workspace . --dry-run
+jinlin-agent rescue quarantine recover --workspace . --apply
+```
+
+Only manifest-backed quarantine files whose SHA-256 and, for Rescue files, recorded file identity can be verified are eligible. Occupied targets, symlinks, modified data, duplicate claims, unrecognized files, and legacy entries without SHA-256 are blocked. Publication uses a deterministic sibling stage, file fsync, and atomic no-clobber hard-link creation. If a process stops after creating a partial stage, a later apply may continue it only when its bytes are an exact prefix of the verified quarantine payload; arbitrary stage contents are never overwritten.
+
+The original quarantine remains as an independent evidence file. When a Rescue file is copied back, its manifest records the restored file identity separately from the retained quarantine identity. A stage quarantine is restored to its deterministic restore-stage pathname; run `jinlin-agent rescue recover --workspace .` afterward to complete the normal Rescue publication to the original target. Recovery is idempotent when the candidate already contains the verified bytes.
+
+This protects against accidental clobbering and detects many path substitutions, but it is not a defense against a hostile same-privilege process racing path operations. Directory-entry power-loss durability remains platform-dependent (Windows portable Python does not expose the same directory-fsync guarantee). A quarantine is never automatically deleted by this command.
+
+
+### Rescue transaction identity and audit v2
+
+New Rescue manifest entries carry a random persistent `transaction_id`. Every later restore, recovery, quarantine-recovery, and cleanup event reuses that ID, including cleanup events emitted after the manifest entry has been removed. This prevents separate operations over a similar path/content tuple from being silently collapsed into one deterministic identity.
+
+Audit v2 adds a monotonic workspace-wide `seq` and unique `event_id`. A v1-only historical log can be extended with v2 records; v1 records are not accepted after the first v2 record. The reader validates event schema, transaction ID format, sequence continuity, event-ID uniqueness, previous hash, and event hash. Any broken or partial append is preserved as evidence and blocks future appends rather than being truncated or guessed at.
+
+The state projection records each transaction's event count and sequence range. It also verifies that non-empty Rescue path, target path, and SHA-256 values remain consistent for a transaction. A reused transaction ID with changed resource identity is reported as `TRANSITION_INVALID`. Preview-only events remain auditable but do not create lifecycle transactions. Version-1 events remain readable as a compatibility prefix; their historical deterministic transaction IDs cannot be retroactively made unique.
+
+## Workspace lock and concurrent Rescue operations
+
+All in-process Rescue mutations and workspace cleanup entry points use the same persistent `.jinlin/write.lock` rendezvous file: restore, recover, clean, quarantine recovery, and the corresponding inspection/list operations. A caller that cannot acquire the non-blocking lock returns `locked` without entering the operation. A lock-contention result is not written as a Rescue lifecycle audit event, because no lifecycle operation was started.
+
+The lock file is intentionally **not removed on release**. Unlinking a lock pathname while another process has it open can split later contenders across different file objects, defeating mutual exclusion. The operating system releases the advisory lock when its owning process exits, including abrupt process termination; the persistent empty lock file is not itself a stale lock. POSIX opens use `O_NOFOLLOW` when available and verify that the opened object is a regular file before locking it. Windows uses the byte-range lock exposed by `msvcrt`; portable Python does not provide a fully equivalent no-follow guarantee for every Windows reparse-point scenario.
+
+The lock coordinates Jinlin processes that resolve to the same workspace lock object. It does not constrain arbitrary external programs, hostile same-privilege path replacement, network filesystems with weak advisory-lock semantics, or two workspace aliases that resolve to different lock paths. Filesystem operations therefore retain no-clobber publication, identity/hash revalidation, and evidence-preservation checks as independent safety layers; the advisory lock is not treated as the sole proof of file ownership. A process crash releases the OS lock but does not imply that its in-progress filesystem transaction completed; the Rescue recovery/inspection workflow remains responsible for reconciling the durable evidence.
+
+## Task package 04 — Crash consistency and cross-platform durability
+
+- Rescue manifest append now uses an OS file descriptor, validates the opened object as a regular file, writes the complete JSONL record with a forward-progress loop, and calls `fsync` before reporting success. When the manifest file is first created, its parent directory is also synced where supported.
+- Manifest replacement now creates an exclusive temporary file, writes and fsyncs its complete contents, atomically replaces the manifest, and fsyncs the containing directory where supported.
+- A malformed or unterminated existing manifest blocks append and rewrite. The normal read/scan path can still report valid prior rows and treat a torn tail as non-proof, but a subsequent writer may not append behind the torn bytes or rewrite away the damaged history.
+- First creation of `.jinlin/rescue-audit.jsonl` now fsyncs the audit file and then its parent directory where supported. Existing append behavior remains serialized by the audit lock and refuses to extend a damaged hash chain.
+- POSIX directory fsync is attempted and failures are surfaced as durability uncertainty. Portable Windows Python does not expose an equivalent directory-handle flush; file fsync is used, and directory-entry durability remains best-effort. A successful API return is not described as a universal guarantee against controller caches, network filesystems, or physical power loss.
+- Added syscall-level tests for manifest file fsync, directory fsync after first creation and atomic replacement, torn-tail refusal, manifest rewrite refusal on damaged history, and audit first-create directory sync outcomes.
+
+The fault-injection and child-process crash tests simulate process termination and syscall failures. They do not simulate a kernel panic, storage-controller cache loss, virtual-machine power cut, or physical power failure. Those require a dedicated disposable VM/device test environment and filesystem-specific validation.
+
+
+## Task package 05 — Seeded chaos testing and end-to-end recovery convergence
+
+- Added a deterministic seeded lifecycle sequence suite (`tests/test_rescue_chaos.py`). Each seed creates several independent manifest-backed Rescue transactions, varies their operation order and the number of inspection/recovery retries, restores the original targets, and repeats recovery/cleanup.
+- Every randomized sequence checks the central safety invariant: verified original payload bytes remain available at the restored target; a Rescue source is never silently lost before publication; repeated recovery and cleanup converge without overwriting the target.
+- Each sequence ends by checking the audit hash-chain reader and transaction-state projector for invalid transactions. The seed is included in assertion diagnostics so a failure can be replayed exactly.
+- Added valid-JSON audit payload tampering and truncated-tail tests. Both cases must be detected, future audit appends must fail closed, and the damaged evidence bytes must remain unchanged.
+- Extended `scripts/test-rescue-fault-matrix.py` so the focused matrix includes syscall fault injection, hard child-process crash/restart tests, and the seeded lifecycle chaos suite.
+- Existing focused fault cases remain intact: partial stage writes, file/directory fsync failures, no-clobber publish failure, post-publish durability uncertainty, cleanup unlink failure, target-creation race, and child-process exits around restore/quarantine/audit boundaries.
+
+The seeded sequence suite is deterministic, not an unbounded fuzz test. It exercises multiple reproducible operation interleavings against isolated temporary workspaces. The child-process tests still model abrupt process termination only; they do not establish kernel-crash, controller-cache-loss, or physical power-cut durability.
+
+
+## Task package 06 — Engineering delivery and test-runner observability
+
+### Single source of truth
+
+- Added repository-root `test-suite.json` as the authoritative source for task-package ID/name/version, suite version, runner metadata contract, and the required validation checklist.
+- Updated `scripts/test-all.ps1` to load and validate that file before running any test command. Missing/invalid metadata or an unsupported schema fails before tests start.
+- The runner compares its embedded `RunnerContractVersion` with `runner_contract_version` in the metadata. A stale runner exits with an explicit `STALE TEST RUNNER` message instead of silently executing an obsolete checklist.
+- The start banner and final success/failure summary print task package ID/name, package version, suite version, runner contract, repository path, branch/commit identity, timestamps, and log path.
+- `test-all.bat` remains a thin entry point delegating to the PowerShell runner, so there is only one implementation of the test sequence and banner.
+
+### Regression protection and handoff
+
+- Added `tests/test_test_runner_metadata.py` to verify the metadata schema, package identity, required checks, and agreement between the PowerShell runner contract and metadata.
+- The existing Windows CI step invokes `scripts/test-all.ps1 -SkipInstall`, so the real PowerShell metadata validation and reporting path is exercised in CI.
+- Updated README instructions with the stale-runner contract: whenever the runner/metadata contract changes, increment the contract version in both locations. Old script copies then fail closed.
+- This task package changes reporting and test orchestration only; it does not weaken or replace the existing pytest, harness, Rescue smoke, fault-injection, crash, or seeded-chaos checks.
+
+### Operator interpretation
+
+A green test result is meaningful only together with the printed task-package identity and commit. Before reporting acceptance, compare the displayed branch/short SHA with the intended branch HEAD. If the banner says `STALE TEST RUNNER`, update the local branch and rerun; do not treat that as a test failure in product code or bypass the guard.
+
+
+## Rescue lifecycle audit commit ordering
+
+A Rescue restore, recovery, or cleanup keeps the workspace write lock from the
+filesystem mutation through its corresponding audit append. The audit append
+uses a second, dedicated lock; the only permitted acquisition order is
+**workspace write lock, then audit lock**. This makes the order of lifecycle
+events agree with the serialized order of the filesystem operations and
+prevents a cleaner or recovery process from slipping between publication and
+the event that records it. A failed audit append remains an explicit warning:
+the filesystem result is not rolled back merely because the diagnostic audit
+channel is unavailable, and inspection reports the audit integrity issue.
+
+The lock order is also used by inspection and quarantine recovery. Audit-only
+writers never acquire the workspace lock while holding the audit lock, avoiding
+a reverse-order cycle. The guarantee coordinates Jinlin operations sharing the
+same workspace lock; it does not serialize arbitrary external programs.

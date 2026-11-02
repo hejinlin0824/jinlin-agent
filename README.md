@@ -74,6 +74,13 @@ jinlin-agent resume <session_id> [--answer "..."]   # 恢复（崩溃/等待用�
 jinlin-agent trace <session_id> --tail 60   # 事件流审计
 jinlin-agent stats <session_id>             # 指标（步数/token/验证/压缩）
 jinlin-agent eval --suite all               # HCS + E1-E8 评测
+jinlin-agent clean --workspace .              # 只预览可证明归属的普通残留文件
+jinlin-agent rescue list --workspace .        # 列出通过 manifest + SHA-256 校验的救援副本
+jinlin-agent rescue restore <rescue-path> --workspace .  # 暂存后原子无覆盖发布
+jinlin-agent rescue recover --workspace .                # 检查并恢复中断的暂存事务
+jinlin-agent rescue clean --workspace .                  # 预览可安全清理的冗余证据
+jinlin-agent rescue clean --apply --workspace .          # 显式清理已验证的 stage / Rescue 副本
+jinlin-agent rescue inspect --workspace .                # 只读检查事务状态、审计链和遗留证据
 ```
 
 安装为命令行（可选）：
@@ -267,3 +274,67 @@ python -m jinlin_agent eval --suite all
 ```
 
 约定：零第三方运行时依赖；所有副作用必须落事件；工具必须返回可序列化结果；先写测试再改行为。
+
+
+### Rescue 事务审计与一键验收
+
+每次 Rescue restore / recover / clean / quarantine-recover 都会尝试向 `.jinlin/rescue-audit.jsonl` 追加 SHA-256 hash-chain 事件。新事件采用 v2 格式，包含 manifest 中持久化的事务 ID、全局连续序号和唯一事件 ID；读取时兼容历史 v1 前缀，并验证序号、事件 ID、字段格式和 hash chain。事务状态投影还会检查状态迁移及同一事务的资源身份一致性。审计日志是追加式证据，不是恢复数据的权威来源；日志损坏时系统会报告完整性问题并拒绝继续追加，不会自动修复或覆盖旧日志。
+
+`rescue inspect` 是只读检查命令，汇总已验证 Rescue、暂存文件、孤立暂存、清理中断 quarantine、事务状态和审计链完整性。事务状态由审计事件投影得到：`STAGED`、`PUBLISHED`、`CONFLICT`、`UNCERTAIN`、`ORPHANED`、`CLEANED` 等；它不替代文件内容与 manifest 的实际校验。
+
+Windows 一键验收：
+
+```powershell
+.\test-all.bat
+```
+
+也可以在 PowerShell 中运行 `./scripts/test-all.ps1`。默认会安装 editable dev 依赖，然后依次执行五项检查：全量 pytest、Harness eval、Rescue 生命周期 smoke test、Rescue 故障注入 + 子进程崩溃 + seeded-chaos 矩阵，以及 Rescue CLI 命令注册检查（`rescue --help`）。CI 使用 `-SkipInstall` 跳过安装步骤，但仍执行验证项。故障矩阵可单独运行：`python scripts/test-rescue-fault-matrix.py`。除 syscall 故障注入外，矩阵还启动独立 Python 子进程，在 stage 创建、部分写入、文件同步、目录同步、hardlink 发布和 cleanup quarantine 后调用 `os._exit()`，随后由父进程重启恢复并检查证据。它模拟进程突然终止，不等价于内核崩溃或断电测试。所有测试只在 pytest 临时目录创建隔离工作区，不会在当前仓库里创建或删除测试 Rescue 文件。日志写入系统临时目录。
+
+
+### Rescue cleanup recovery diagnostics
+
+`jinlin-agent rescue inspect` classifies interrupted cleanup quarantine evidence using manifest identity, SHA-256, deterministic restore-stage association, former-path occupancy, and duplicate claims. Possible classifications are `safe-to-restore`, `target-conflict`, `identity-mismatch`, `ambiguous`, `unrecognized`, and `legacy-unverified`. This is strictly read-only: it does not restore, overwrite, or delete quarantine evidence.
+
+
+Machine-readable inspection is available with `jinlin-agent rescue inspect --workspace ./my-repo --json`; it emits the full report (including quarantine classifications and counts) and preserves the same exit-code semantics as text mode.
+
+
+## Recovering interrupted Rescue cleanup quarantines
+
+A quarantine left by an interrupted `rescue clean --apply` is evidence, not disposable trash. Inspect it first:
+
+```powershell
+jinlin-agent rescue quarantine inspect --workspace .
+jinlin-agent rescue quarantine inspect --workspace . --json
+```
+
+Recovery is an explicit two-step operation. The default is a read-only preview; only `--apply` changes files:
+
+```powershell
+jinlin-agent rescue quarantine recover --workspace . --dry-run
+jinlin-agent rescue quarantine recover --workspace . --apply
+```
+
+Only manifest-backed quarantine files whose SHA-256 and, for Rescue files, recorded file identity can be verified are eligible. Occupied targets, symlinks, modified data, duplicate claims, unrecognized files, and legacy entries without SHA-256 are blocked. Publication uses a deterministic sibling stage, file fsync, and atomic no-clobber hard-link creation. If a process stops after creating a partial stage, a later apply may continue it only when its bytes are an exact prefix of the verified quarantine payload; arbitrary stage contents are never overwritten.
+
+The original quarantine remains as an independent evidence file. When a Rescue file is copied back, its manifest records the restored file identity separately from the retained quarantine identity. A stage quarantine is restored to its deterministic restore-stage pathname; run `jinlin-agent rescue recover --workspace .` afterward to complete the normal Rescue publication to the original target. Recovery is idempotent when the candidate already contains the verified bytes.
+
+This protects against accidental clobbering and detects many path substitutions, but it is not a defense against a hostile same-privilege process racing path operations. Directory-entry power-loss durability remains platform-dependent (Windows portable Python does not expose the same directory-fsync guarantee). A quarantine is never automatically deleted by this command.
+
+
+## Test runner identity and release metadata
+
+The Windows one-click entry point is `test-all.bat` (or `./scripts/test-all.ps1`). The authoritative test-suite identity lives in the repository-root `test-suite.json`; do not duplicate the package name/version in wrapper scripts.
+
+Every run prints the task-package ID/name, package version, suite version, runner contract, current branch/commit, start time, and final result. The same identity is repeated in the completion/failure summary and transcript log. The runner validates the metadata schema and contract before running tests.
+
+**Stale-script detection:** `scripts/test-all.ps1` embeds the runner contract version it understands and compares it with `test-suite.json`. Whenever the runner/metadata contract changes, update both and increment `runner_contract_version`; an old script then stops with `STALE TEST RUNNER` rather than silently running an obsolete checklist. The contract is covered by `tests/test_test_runner_metadata.py` and exercised by the Windows CI PowerShell-runner step.
+
+Run locally:
+
+```powershell
+git fetch origin
+git switch review/followup-fixes
+git pull --ff-only origin review/followup-fixes
+.\\test-all.bat
+```

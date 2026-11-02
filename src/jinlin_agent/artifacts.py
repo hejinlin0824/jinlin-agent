@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +38,7 @@ class ArtifactStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self._index_path = self.root / "index.json"
         self._index: dict[str, Artifact] = {}
+        self._save_lock = threading.RLock()
         if self._index_path.exists():
             try:
                 raw = json.loads(self._index_path.read_text(encoding="utf-8"))
@@ -92,9 +95,43 @@ class ArtifactStore:
         return items
 
     def _save_index(self) -> None:
-        tmp = self._index_path.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps({k: v.to_dict() for k, v in self._index.items()}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        os.replace(tmp, self._index_path)
+        """Persist the index atomically with a unique same-directory temp file.
+
+        A fixed index.tmp name lets concurrent writers collide. Windows may
+        also briefly deny a destination rename while an antivirus or indexer
+        has the file open. Flush the temp file, then retry only transient
+        Windows access/sharing errors. Persistent failures still propagate.
+        """
+        with self._save_lock:
+            payload = json.dumps(
+                {k: v.to_dict() for k, v in self._index.items()},
+                ensure_ascii=False,
+            )
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=".index-",
+                suffix=".tmp",
+                dir=str(self.root),
+            )
+            tmp = Path(tmp_name)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+                    fh.write(payload)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+
+                delays = (0.02, 0.05, 0.1, 0.2)
+                for attempt in range(len(delays) + 1):
+                    try:
+                        os.replace(tmp, self._index_path)
+                        break
+                    except PermissionError as exc:
+                        if getattr(exc, "winerror", None) not in (5, 32, 33):
+                            raise
+                        if attempt >= len(delays):
+                            raise
+                        time.sleep(delays[attempt])
+            finally:
+                try:
+                    tmp.unlink()
+                except FileNotFoundError:
+                    pass
