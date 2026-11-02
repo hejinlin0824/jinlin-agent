@@ -158,7 +158,7 @@ class OpenAICompatibleProvider:
 
     def _complete_blocking(self, request: ModelRequest) -> ModelResponse:
         with self._request(request, stream=False) as resp:
-            raw = resp.read().decode("utf-8", "replace")
+            raw = _decode_provider_bytes(resp.read())
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -180,7 +180,7 @@ class OpenAICompatibleProvider:
 
         with self._request(request, stream=True, include_usage=include_usage) as resp:
             for raw_line in resp:
-                line = raw_line.decode("utf-8", "replace").strip()
+                line = _decode_provider_bytes(raw_line).strip()
                 if not line:
                     continue
                 raw_lines.append(line)
@@ -264,6 +264,18 @@ class OpenAICompatibleProvider:
 
 
 # --------------------------------------------------------------------------- helpers
+
+
+def _decode_provider_bytes(raw: bytes) -> str:
+    """Decode provider payloads strictly; replacement characters hide wire corruption."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise AgentError(
+            MODEL_INVALID_RESPONSE,
+            "provider response is not valid UTF-8; check the configured model endpoint and response encoding",
+            source="model",
+        ) from exc
 
 
 def _finalize_calls(calls: dict[int, dict[str, Any]]) -> list[ToolCallRequest]:
