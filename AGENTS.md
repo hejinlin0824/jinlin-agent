@@ -44,7 +44,7 @@ sourcing, deterministic control, verification), not in the number of tools.
 ## Testing
 
 ```bash
-python -m pytest -q                 # unit + probes + review regressions (64 tests)
+python -m pytest -q                 # unit + probes + review regressions
 python -m jinlin_agent eval --suite all
 ```
 
