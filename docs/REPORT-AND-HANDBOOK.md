@@ -24,8 +24,9 @@
 - `main` 固定基线：`249bbab7d86f76f71acbf8c88000fc7971297ce6`；本次工作未修改 `main`。
 - PR #1：Draft、open、unmerged；合并决定保留给仓库所有者。
 - 主体任务包 01–06 已完成并由所有者本地验收。
-- 最终收尾包 01–03 已完成。收尾包 03 的提交 `b326972a4e041e3230e43cbf794fee339ad1ccde` 已通过所有者 Windows `test-all.bat` 验收，以及该 SHA 对应的 Push CI 和 PR CI；两个 workflow 均包含 Ubuntu 与 Windows 成功 job。
-- 最终收尾包 04 正在核对 README、AGENT、测试 runner、机器可读测试元数据、报告和 PR 描述的一致性；收尾包 05 是最后的发布候选审查，不再扩展功能范围。
+- 最终收尾包 01–04 已完成。收尾包 04 包含 README、AGENT、测试 runner、机器可读测试元数据、报告与 PR 描述的一致性收口；Windows 所有者在最新 HEAD `40c196f3564b0820a9249cbaf888052ea2436578` 上执行 `test-all.bat` 并确认 ALL CHECKS PASSED。
+- 最新 HEAD `40c196f3564b0820a9249cbaf888052ea2436578` 的 Push CI `41402450170` 与 PR CI `41402456224` 均已完成，Ubuntu 与 Windows jobs 全部 success。
+- 最终收尾包 05 为最后的发布候选审查：检查完整 diff、提交历史、测试证据、可靠性边界、分支与 PR 状态；不再扩展功能范围。
 
 当前一键验收入口为根目录 `test-all.bat`，实际执行由 `scripts/test-all.ps1` 负责；测试套件身份来自 `test-suite.json`。成功结果必须与 runner 打印的分支/提交 SHA 一起核对。CI 结果和历史文档不能替代所有者在目标 Windows 环境上的最终验收。
 

@@ -9,8 +9,8 @@ branches:
   main: 249bbab   # 本次独立复核的固定基线；禁止直接修改
   review/followup-fixes: live GitHub ref   # 使用前查询实时 HEAD；不要依赖静态短 SHA
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
-test_status: "主体任务包 01–06 与最终收尾包 01–03 均已由所有者本地验收；收尾包 03 的 Ubuntu/Windows CI 均通过"
-review_status: "主体任务包 01–06 完成；最终收尾包 01–03 完成；收尾包 04 文档与交付一致性收口进行中；收尾包 05 为最终发布候选验收"
+test_status: "主体任务包 01–06、最终收尾包 01–04 均已由所有者本地验收；最新 HEAD 40c196f 的 Push/PR CI 均在 Ubuntu 与 Windows 通过"
+review_status: "主体任务包 01–06 完成；最终收尾包 01–04 完成；最终收尾包 05 发布候选审查进行中（不扩展功能）"
 trash_cleanup: "jinlin-agent clean [--workspace W] [--apply]（默认 dry-run；归属证明 = 严格命名模式 + .jinlin/trash-manifest.jsonl 记录）"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
@@ -21,7 +21,7 @@ non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
 
 - 当前工作分支：`review/followup-fixes`；禁止直接修改 `main`。
 - `main` 基线：`249bbab7d86f76f71acbf8c88000fc7971297ce6`。
-- 主体任务包 01–06 已由所有者本地验收通过。最终收尾包 01（审计日志边界）、02（文件持久性）、03（事务与并发）均已完成本地验收及双平台 CI；收尾包 04（文档/runner/PR 一致性）正在收口，收尾包 05 是最后的发布候选验收。
+- 主体任务包 01–06、最终收尾包 01–04 均已由所有者本地验收通过。最新 HEAD 为 `40c196f3564b0820a9249cbaf888052ea2436578`；其 Push CI `41402450170` 与 PR CI `41402456224` 的 Ubuntu、Windows jobs 均成功。收尾包 05 是最后的发布候选审查，不扩展功能。
 - PR #1：Draft、open、未合并。任何后续工作都不得自行合并。
 - 当前测试入口：`test-all.bat` → `scripts/test-all.ps1`。任务包标识的唯一来源是仓库根目录 `test-suite.json`；执行时会校验 runner contract 并打印任务包、版本、分支和提交 SHA。
 - 若下方旧章节中的分支 SHA、测试数量、历史轮次与本节冲突，以本节及 GitHub 实时分支/PR/CI 为准；下方历史文字用于解释早期设计背景，不代表当前 HEAD。
@@ -69,7 +69,7 @@ non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
 
 ---
 
-## 2. 当前仓库状态（2026-11-01，第 3 轮整改后）
+## 2. 历史仓库状态快照（2026-11-01；仅供追溯，已被上方 2026-11-02 当前交接状态取代）
 
 ### 2.1 分支与提交
 
