@@ -220,10 +220,9 @@ def test_simultaneous_clean_processes_preserve_restored_target(tmp_path):
     rescue = tmp_path / ".clean-race.py.jinlin-rescue-b1c2d3e4"
     rescue.write_bytes(payload)
     assert record_trash(tmp_path, rescue, "clean-race.py", "rescue")
-    restored = __import__("jinlin_agent.trash", fromlist=["restore_rescue"]).restore_rescue(tmp_path, rescue.name)
+    restored = restore_rescue(tmp_path, rescue.name)
     assert restored["status"] == "restored"
 
     results = _race_two_processes(tmp_path, rescue, "clean")
     assert all(item.get("status") in {"applied", "locked", "dry-run"} for item in results), results
     assert (tmp_path / "clean-race.py").read_bytes() == payload
-    assert rescue.exists() or not rescue.exists()
