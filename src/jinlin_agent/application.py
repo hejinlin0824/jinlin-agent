@@ -262,9 +262,9 @@ class ApplicationService:
             raise AgentError("SESSION_NOT_FOUND", "session does not belong to this workspace", source="application")
         sandbox = create_sandbox(self.workspace, self.config)
         session = SessionManager.open(self.config, session_id, sandbox)
-        if answer:
-            session.emit("session.user_input", {"text": answer})
         try:
+            if answer:
+                session.emit("session.user_input", {"text": answer})
             if on_session:
                 on_session(session, sandbox)
             from .loop import Harness
