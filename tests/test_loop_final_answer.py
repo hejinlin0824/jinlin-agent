@@ -11,7 +11,7 @@ class _Session:
         self.events.append((event_type, payload))
 
 
-def _harness_with_state(*, written_files=None):
+def _harness_with_state(*, written_files=None, read_only=False):
     harness = Harness.__new__(Harness)
     harness.state = SimpleNamespace(
         written_files=written_files or {},
@@ -21,6 +21,7 @@ def _harness_with_state(*, written_files=None):
     harness.history = []
     harness.invalid_decisions = 0
     harness.progress_callback = lambda _message: None
+    harness.read_only = read_only
     return harness
 
 
@@ -56,3 +57,21 @@ def test_text_only_response_after_workspace_changes_still_requires_completion_ga
     assert harness.session.events == []
     assert harness.history
     assert "propose_completion" in harness.history[-1].content
+
+
+
+def test_read_only_completion_proposal_skips_verification_gate():
+    harness = _harness_with_state(read_only=True)
+    harness.harness_verifier = None
+    result = harness._handle_completion({"summary": "项目结构分析完成", "claims": []})
+    assert result == "terminal"
+    assert harness.session.events[-1] == (
+        "session.completed",
+        {
+            "result": "completed",
+            "summary": "项目结构分析完成",
+            "report_artifact_id": None,
+            "warnings": ["Read-only analysis completed; no verification commands were run."],
+            "evidence": {"mode": "read-only"},
+        },
+    )

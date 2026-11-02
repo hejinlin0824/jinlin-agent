@@ -35,7 +35,7 @@ from .tokens import estimate_messages_tokens
 from .tools.base import ToolContext
 from .tools.registry import build_default_registry
 from .policy import PolicyEngine
-from .verify import CompletionGate, Verifier, detect_project
+from .verify import CompletionGate, Verifier
 
 
 class Harness:
@@ -60,8 +60,11 @@ class Harness:
         self.log = log if callable(log) else (lambda msg: None)
         self.stream_callback = stream_callback
         self.progress_callback = progress_callback or (lambda message: None)
-        self.progress_callback("正在识别项目结构并加载项目说明…")
-        self.harness_verifier = Verifier(
+        self.read_only = bool(read_only)
+        self.progress_callback("正在加载项目说明和可用工具…" if self.read_only else "正在识别项目结构并加载项目说明…")
+        # Read-only turns do not run the verification ladder or project test
+        # discovery. That work is deferred to a write-capable task.
+        self.harness_verifier = None if self.read_only else Verifier(
             session.workspace,
             config,
             session.sandbox,
@@ -69,7 +72,7 @@ class Harness:
             emit=lambda t, p: session.emit(t, p),
             state=self.state,
         )
-        self.project = detect_project(session.workspace, config)
+        self.project = self.harness_verifier.project if self.harness_verifier else None
         self.project_instructions = load_project_instructions(
             session.workspace, config.project.get("instruction_files", [])
         )
@@ -104,6 +107,7 @@ class Harness:
             artifacts=session.artifacts,
             sandbox=session.sandbox,
             project_instructions=self.project_instructions,
+            read_only=self.read_only,
         )
         self.history: list[Message] = self._restore_history()
         self.progress_callback("项目环境已就绪，正在准备任务上下文…")
@@ -285,7 +289,7 @@ class Harness:
         return ModelRequest(
             request_id=new_id("req"),
             messages=messages,
-            tools=self.registry.definitions(),
+            tools=self.registry.definitions(read_only=self.read_only),
             temperature=float(self.config.model.temperature),
             max_output_tokens=int(self.config.model.max_output_tokens),
             stream=True,
@@ -325,6 +329,31 @@ class Harness:
 
     def _handle_completion(self, completion: dict[str, Any]) -> str:
         state = self.state
+        if self.read_only:
+            # A read-only turn is complete when the model has answered. Running
+            # the code-change gate here caused false rejections (plan/evidence
+            # requirements) and could launch L3/L5 test commands that policy
+            # correctly denies. Treat any observed mutation as an invariant breach.
+            if state.written_files or state.deleted_files:
+                self._fail(AgentError(
+                    "READ_ONLY_INVARIANT_VIOLATION",
+                    "read-only task recorded workspace mutations; refusing completion",
+                    source="runtime",
+                ))
+                return "terminal"
+            summary = str(completion.get("summary", "") or "").strip()
+            self.session.emit(
+                "session.completed",
+                {
+                    "result": "completed",
+                    "summary": summary,
+                    "report_artifact_id": None,
+                    "warnings": ["Read-only analysis completed; no verification commands were run."],
+                    "evidence": {"mode": "read-only"},
+                },
+            )
+            self.progress_callback("只读分析已完成")
+            return "terminal"
         state.claims = [Claim.from_dict(c) for c in completion.get("claims", [])]
         # the harness verifies; the model's own claims are only inputs
         self._run_harness_verification(state.claims)
@@ -377,6 +406,8 @@ class Harness:
         return "continue"
 
     def _run_harness_verification(self, claims: list[Any] | None = None) -> None:
+        if getattr(self, "harness_verifier", None) is None:
+            return
         state = self.state
         changed = bool(state.written_files or state.deleted_files)
         claims = claims or []

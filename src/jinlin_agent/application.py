@@ -12,6 +12,7 @@ from typing import Any, Callable
 from .config import Config, load_config
 from .errors import AgentError
 from .sandbox import create_sandbox
+from .sandbox.null import NullSandbox
 from .session import SessionManager, workspace_snapshot
 from .state import recover
 from .events import read_events
@@ -232,9 +233,14 @@ class ApplicationService:
         if not self.config.api_key() and not mock_script:
             raise AgentError("CONFIG_INVALID", f"no API key configured ({self.config.model.api_key_env})", source="application")
         if progress_callback:
-            progress_callback("正在创建隔离环境和会话…")
-        sandbox = create_sandbox(self.workspace, self.config)
-        session = SessionManager.create(self.config, self.workspace, task.strip(), sandbox)
+            progress_callback("正在创建只读会话…" if read_only else "正在创建隔离环境和会话…")
+        # Read-only turns never execute arbitrary commands, so constructing the
+        # Windows restricted-token sandbox (ACL probes + token setup) is wasted
+        # startup work. PolicyEngine still rejects every non-read side effect.
+        sandbox = NullSandbox(str(self.workspace)) if read_only else create_sandbox(self.workspace, self.config)
+        session = SessionManager.create(
+            self.config, self.workspace, task.strip(), sandbox, read_only=read_only
+        )
         try:
             if on_session:
                 on_session(session, sandbox)
