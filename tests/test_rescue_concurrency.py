@@ -146,3 +146,84 @@ def test_lock_file_symlink_is_rejected_without_touching_target(tmp_path):
     with pytest.raises(SessionLockedError, match="cannot safely open session lock"):
         SessionLock(lock_path).acquire()
     assert target.read_bytes() == b"outside"
+
+
+_RACER = r"""
+import json
+import sys
+import time
+from pathlib import Path
+import jinlin_agent.trash as trash
+
+workspace = Path(sys.argv[1])
+rescue = sys.argv[2]
+action = sys.argv[3]
+gate = Path(sys.argv[4])
+deadline = time.monotonic() + 15
+while not gate.exists() and time.monotonic() < deadline:
+    time.sleep(0.005)
+if not gate.exists():
+    raise SystemExit("start gate timed out")
+if action == "restore":
+    result = trash.restore_rescue(workspace, rescue)
+elif action == "clean":
+    result = trash.clean_rescue(workspace, apply=True)
+else:
+    raise SystemExit("unknown action")
+print(json.dumps(result, sort_keys=True))
+"""
+
+
+def _race_two_processes(workspace: Path, rescue: Path, action: str):
+    gate = workspace / f"{action}.start"
+    commands = [
+        subprocess.Popen(
+            [sys.executable, "-c", _RACER, str(workspace), rescue.name, action, str(gate)],
+            cwd=Path(__file__).resolve().parents[1],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(2)
+    ]
+    gate.write_text("go", encoding="utf-8")
+    results = []
+    for process in commands:
+        stdout, stderr = process.communicate(timeout=20)
+        assert process.returncode == 0, f"worker failed: {stdout}\n{stderr}"
+        import json
+        results.append(json.loads(stdout.strip().splitlines()[-1]))
+    return results
+
+
+def test_simultaneous_restore_processes_never_clobber_or_lose_evidence(tmp_path):
+    import hashlib
+    from jinlin_agent.trash import record_trash
+
+    payload = b"same-workspace-concurrent-restore\n"
+    rescue = tmp_path / ".race.py.jinlin-rescue-a1b2c3d4"
+    rescue.write_bytes(payload)
+    assert record_trash(tmp_path, rescue, "race.py", "rescue")
+
+    results = _race_two_processes(tmp_path, rescue, "restore")
+    assert all(item.get("status") in {"restored", "already-published", "locked"} for item in results), results
+    target = tmp_path / "race.py"
+    assert target.read_bytes() == payload
+    assert rescue.read_bytes() == payload
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == hashlib.sha256(rescue.read_bytes()).hexdigest()
+
+
+def test_simultaneous_clean_processes_preserve_restored_target(tmp_path):
+    from jinlin_agent.trash import record_trash
+
+    payload = b"same-workspace-concurrent-clean\n"
+    rescue = tmp_path / ".clean-race.py.jinlin-rescue-b1c2d3e4"
+    rescue.write_bytes(payload)
+    assert record_trash(tmp_path, rescue, "clean-race.py", "rescue")
+    restored = __import__("jinlin_agent.trash", fromlist=["restore_rescue"]).restore_rescue(tmp_path, rescue.name)
+    assert restored["status"] == "restored"
+
+    results = _race_two_processes(tmp_path, rescue, "clean")
+    assert all(item.get("status") in {"applied", "locked", "dry-run"} for item in results), results
+    assert (tmp_path / "clean-race.py").read_bytes() == payload
+    assert rescue.exists() or not rescue.exists()
