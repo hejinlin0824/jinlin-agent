@@ -73,6 +73,7 @@ def _read_audit(workspace: Path) -> dict[str, Any]:
         raw = b""
     except OSError as exc:
         return {"events": [], "issues": [{"line": 0, "reason": f"read failed: {exc}"}], "last_hash": previous}
+    seen_event_ids: set[str] = set()
     for number, line in enumerate(raw.splitlines(), 1):
         if not line.strip():
             continue
@@ -80,6 +81,22 @@ def _read_audit(workspace: Path) -> dict[str, Any]:
             event = json.loads(line.decode("utf-8"))
             if not isinstance(event, dict):
                 raise ValueError("event is not an object")
+            version = event.get("version")
+            if version not in (1, 2):
+                raise ValueError(f"unsupported audit event version: {version!r}")
+            txid = event.get("txid")
+            if not isinstance(txid, str) or not re.fullmatch(r"[0-9a-f]{24,32}", txid):
+                raise ValueError("transaction id is missing or malformed")
+            if version == 2:
+                expected_seq = len(events) + 1
+                if event.get("seq") != expected_seq:
+                    raise ValueError(f"event sequence is not contiguous (expected {expected_seq})")
+                event_id = event.get("event_id")
+                if not isinstance(event_id, str) or not re.fullmatch(r"[0-9a-f]{32}", event_id):
+                    raise ValueError("event id is missing or malformed")
+                if event_id in seen_event_ids:
+                    raise ValueError("duplicate event id")
+                seen_event_ids.add(event_id)
             supplied = event.get("event_hash")
             body = {key: value for key, value in event.items() if key != "event_hash"}
             expected = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -108,10 +125,15 @@ def _append_audit_event(workspace: Path, action: str, status: str, **fields: Any
         audit = _read_audit(workspace)
         if audit["issues"]:
             return False, "audit log has integrity issues; refusing to append"
-        identity = "|".join(str(fields.get(key, "")) for key in ("rescue", "target", "sha256"))
-        txid = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+        txid = fields.pop("txid", None)
+        if not isinstance(txid, str) or not re.fullmatch(r"[0-9a-f]{24,32}", txid):
+            # Compatibility path for callers and old manifest entries that
+            # predate persistent transaction identifiers.
+            identity = "|".join(str(fields.get(key, "")) for key in ("rescue", "target", "sha256"))
+            txid = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
         body = {
-            "version": 1, "ts": utcnow_iso(), "txid": txid,
+            "version": 2, "seq": len(audit["events"]) + 1, "event_id": uuid.uuid4().hex,
+            "ts": utcnow_iso(), "txid": txid,
             "action": action, "status": status, "prev_hash": audit["last_hash"],
             **fields,
         }
@@ -145,6 +167,10 @@ def _audit_result(workspace: Path, action: str, result: dict[str, Any], **fields
     for key in ("rescue", "target", "stage", "sha256", "detail"):
         if result.get(key) is not None:
             event_fields.setdefault(key, result[key])
+    event_fields.setdefault("txid", result.get("txid"))
+    if not event_fields.get("txid") and event_fields.get("rescue"):
+        entry = _load_manifest(workspace).get(str(event_fields["rescue"]), {})
+        event_fields["txid"] = entry.get("transaction_id")
     ok, warning = _append_audit_event(workspace, action, status, **event_fields)
     if not ok:
         result.setdefault("audit_warnings", []).append(warning or "audit append failed")
@@ -261,6 +287,7 @@ def record_trash(workspace: Path, trash_path: Path, orig_rel: str, kind: str) ->
                         "orig": orig_rel,
                         "kind": kind,
                         "identity": identity,
+                        "transaction_id": uuid.uuid4().hex,
                         "ts": utcnow_iso(),
                     },
                     ensure_ascii=False,
