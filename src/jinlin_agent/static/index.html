@@ -91,6 +91,9 @@ async function refreshTask(c){
  if(!c.taskId)return;
  const t=await api("/api/v1/tasks/"+encodeURIComponent(c.taskId));
  c.status=t.status;c.sessionId=t.session_id||c.sessionId;c.approval=t.pending_approval;c.error=t.error;
+ if(!c.sessionId){
+  updateAssistant(c,t.stream_text||"正在启动本地 Agent……",statusText(t.status));
+ }
  if(c.sessionId){
   const s=await loadSession(c);
   const events=c.events||[];
@@ -126,7 +129,7 @@ async function selectConversation(id){
 async function connect(){
  try{
   const d=await api("/api/v1/doctor");$("workspace").textContent=d.workspace||"已连接";
-  connection(true,"本机服务已连接");error("");state.retry=0;
+  connection(true,"本机服务已连接");error("");state.retry=0;sessionStorage.removeItem("jinlin.auth.reload");
   const [sessions,tasks]=await Promise.all([api("/api/v1/sessions"),api("/api/v1/tasks")]);
   const taskBySession=new Map();
   tasks.forEach(t=>{if(t.session_id)taskBySession.set(t.session_id,t)});
@@ -145,7 +148,10 @@ async function connect(){
  }catch(e){handleConnectionError(e)}
 }
 function handleConnectionError(e){
- if(e.status===401&&!state.authReloaded){state.authReloaded=true;location.reload();return}
+ if(e.status===401){
+  if(!sessionStorage.getItem("jinlin.auth.reload")){sessionStorage.setItem("jinlin.auth.reload","1");location.reload();return}
+  connection(false,"认证失败，请刷新页面或重启服务");error("本机服务认证失败。请确认服务仍在运行，然后手动刷新页面。");return;
+ }
  connection(false,"连接中断，正在重连");error(e.message||"连接中断，正在重试");
  if(state.reconnectTimer)clearTimeout(state.reconnectTimer);
  const delay=Math.min(30000,1000*Math.pow(2,state.retry++));
