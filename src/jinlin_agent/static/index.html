@@ -132,7 +132,7 @@ async function selectConversation(id){
 async function connect(){
  try{
   const d=await api("/api/v1/doctor");$("workspace").textContent=d.workspace||"已连接";
-  connection(true,"本机服务已连接");error("");state.retry=0;sessionStorage.removeItem("jinlin.auth.reload");
+  connection(true,"本机服务已连接");error("");state.retry=0;sessionStorage.removeItem("jinlin.auth.reload");if(state.reconnectTimer){clearTimeout(state.reconnectTimer);state.reconnectTimer=null}
   const [sessions,tasks]=await Promise.all([api("/api/v1/sessions"),api("/api/v1/tasks")]);
   const taskBySession=new Map();
   tasks.forEach(t=>{if(t.session_id)taskBySession.set(t.session_id,t)});
@@ -165,7 +165,7 @@ async function poll(){
  state.polling=true;
  try{
   const active=state.conversations.filter(c=>c.taskId&&activeStatuses.has(c.status));
-  for(const c of active){try{await refreshTask(c)}catch(e){if(e.status===401)throw e;error("暂时无法刷新任务状态："+e.message)}}
+  await Promise.all(active.map(async c=>{try{await refreshTask(c)}catch(e){if(e.status===401)throw e;error("暂时无法刷新任务状态："+e.message)}}));
   await loadSessionsList();
   if(state.activeId){const c=current();if(c)renderMessages()}
  }catch(e){handleConnectionError(e)}
