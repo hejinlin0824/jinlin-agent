@@ -326,7 +326,7 @@ def _session_user_input(s: SessionState, p: dict[str, Any]) -> None:
     if text:
         s.user_messages.append(text)
     s.pending_question = None
-    s.status = Status.RUNNING.value
+    s.status = transition_session_status(s.status, Status.RUNNING.value)
 
 
 def _completion_proposed(s: SessionState, p: dict[str, Any]) -> None:
