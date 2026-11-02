@@ -23,7 +23,7 @@ jinlin-agent = "jinlin_agent.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-jinlin_agent = ["prompts/*.md"]
+jinlin_agent = ["prompts/*.md", "static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
