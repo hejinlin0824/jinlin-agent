@@ -983,7 +983,7 @@ def test_rescue_audit_v2_rejects_sequence_gap_and_refuses_append(tmp_path):
     event["event_hash"] = hashlib.sha256(
         json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     ).hexdigest()
-    path.write_text(json.dumps(event, sort_keys=True) + "\\n", encoding="utf-8")
+    path.write_text(json.dumps(event, sort_keys=True) + "\n", encoding="utf-8")
 
     audit = trash_mod._read_audit(tmp_path)
     assert audit["issues"]
@@ -1006,7 +1006,7 @@ def test_rescue_audit_accepts_legacy_v1_prefix_then_appends_v2(tmp_path):
     ).hexdigest()
     path = tmp_path / trash_mod.AUDIT_REL
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps(legacy_body, sort_keys=True) + "\\n", encoding="utf-8")
+    path.write_text(json.dumps(legacy_body, sort_keys=True) + "\n", encoding="utf-8")
 
     ok, warning = trash_mod._append_audit_event(tmp_path, "clean", "cleanup-blocked", txid="b" * 32)
     assert ok and warning is None
@@ -1015,6 +1015,44 @@ def test_rescue_audit_accepts_legacy_v1_prefix_then_appends_v2(tmp_path):
     assert [event["version"] for event in audit["events"]] == [1, 2]
     assert audit["events"][1]["seq"] == 2
     assert audit["events"][1]["txid"] == "b" * 32
+
+
+
+def test_rescue_audit_v2_rejects_duplicate_event_id(tmp_path):
+    import json
+    import jinlin_agent.trash as trash_mod
+    trash_mod._append_audit_event(tmp_path, "restore", "restored", txid="d" * 32)
+    trash_mod._append_audit_event(tmp_path, "recover", "already-published", txid="d" * 32)
+    path = tmp_path / trash_mod.AUDIT_REL
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    events[1]["event_id"] = events[0]["event_id"]
+    body = {key: value for key, value in events[1].items() if key != "event_hash"}
+    events[1]["event_hash"] = hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    path.write_text("".join(json.dumps(event, sort_keys=True) + "\\n" for event in events), encoding="utf-8")
+    audit = trash_mod._read_audit(tmp_path)
+    assert audit["issues"]
+    assert "duplicate event id" in audit["issues"][0]["reason"]
+
+
+def test_rescue_audit_v2_rejects_legacy_event_after_v2(tmp_path):
+    import json
+    import jinlin_agent.trash as trash_mod
+    trash_mod._append_audit_event(tmp_path, "restore", "restored", txid="e" * 32)
+    path = tmp_path / trash_mod.AUDIT_REL
+    first = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    legacy = {
+        "version": 1, "ts": "2026-01-01T00:00:00Z", "txid": "f" * 24,
+        "action": "clean", "status": "removed", "prev_hash": first["event_hash"],
+    }
+    legacy["event_hash"] = hashlib.sha256(
+        json.dumps(legacy, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    path.write_text(json.dumps(first, sort_keys=True) + "\\n" + json.dumps(legacy, sort_keys=True) + "\\n", encoding="utf-8")
+    audit = trash_mod._read_audit(tmp_path)
+    assert audit["issues"]
+    assert "cannot follow version-2" in audit["issues"][0]["reason"]
 
 
 def test_rescue_transaction_projector_detects_resource_identity_reuse_and_ignores_preview():
