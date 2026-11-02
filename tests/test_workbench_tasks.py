@@ -195,7 +195,8 @@ def test_workbench_root_serves_local_ui_without_exposing_api_data(tmp_path):
             assert "Jinlin Agent" in page
             assert "开发者详情" in page
             assert "Bearer Token" not in page
-            assert "sessionStorage.getItem" not in page
+            assert "jinlin.workbench.token" not in page
+            assert 'sessionStorage.setItem("jinlin.workbench.token"' not in page
             assert "/api/v1/tasks" in page
     finally:
         server.shutdown()
