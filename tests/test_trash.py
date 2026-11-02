@@ -1158,7 +1158,7 @@ def test_quarantine_recovery_refuses_conflict_tampering_ambiguity_and_legacy(tmp
     for entry in entries:
         if entry["path"] == legacy.name:
             entry["identity"].pop("sha256", None)
-    manifest_path.write_text("".join(json.dumps(entry) + "\\n" for entry in entries), encoding="utf-8")
+    manifest_path.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
     legacy_q = legacy.with_name(f".{legacy.name}.jinlin-clean-10101017")
     os.replace(legacy, legacy_q)
 
