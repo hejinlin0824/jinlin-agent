@@ -165,8 +165,6 @@ def test_service_rejects_session_folder_identity_mismatch(tmp_path):
     ConnectionAbortedError("peer aborted"),
 ])
 def test_json_response_tolerates_client_disconnect(tmp_path, disconnect_error):
-    import io
-
     root = tmp_path / "workspace"
     root.mkdir()
     server, _service, _token = create_server(root, port=0, token="test-token")
