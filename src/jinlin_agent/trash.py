@@ -178,55 +178,97 @@ def _audit_result(workspace: Path, action: str, result: dict[str, Any], **fields
 
 
 def _transaction_states(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Project audit events through an explicit lifecycle transition table."""
+    """Project ordered audit events into transaction state and consistency evidence.
+
+    Dry-run observations remain in the audit chain but do not create or advance
+    a transaction. Legacy version-1 events remain readable; version-2 events
+    carry a persistent transaction id and a globally ordered event sequence.
+    """
     allowed = {
         "CREATED": {"STAGED", "PUBLISHED", "CONFLICT", "UNCERTAIN", "ORPHANED", "CLEANUP_BLOCKED"},
         "STAGED": {"STAGED", "PUBLISHED", "CONFLICT", "UNCERTAIN", "CLEANUP_BLOCKED"},
         "PUBLISHED": {"PUBLISHED", "CLEANED", "CLEANUP_BLOCKED"},
-        "CONFLICT": {"CONFLICT", "PUBLISHED", "UNCERTAIN"},
-        "UNCERTAIN": {"UNCERTAIN", "STAGED", "PUBLISHED", "CLEANUP_BLOCKED"},
-        "ORPHANED": {"ORPHANED", "UNCERTAIN"},
-        "CLEANUP_BLOCKED": {"CLEANUP_BLOCKED", "CLEANED", "PUBLISHED"},
+        "CONFLICT": {"CONFLICT", "PUBLISHED", "UNCERTAIN", "CLEANUP_BLOCKED"},
+        "UNCERTAIN": {"UNCERTAIN", "STAGED", "PUBLISHED", "CONFLICT", "CLEANUP_BLOCKED"},
+        "ORPHANED": {"ORPHANED", "UNCERTAIN", "PUBLISHED"},
+        "CLEANUP_BLOCKED": {"CLEANUP_BLOCKED", "CLEANED", "PUBLISHED", "CONFLICT", "UNCERTAIN"},
         "CLEANED": {"CLEANED"},
         "TRANSITION_INVALID": {"TRANSITION_INVALID"},
     }
     states: dict[str, dict[str, Any]] = {}
     for event in events:
+        action = str(event.get("action", ""))
+        status = str(event.get("status", "unknown"))
+        if status in ("dry-run", "preview"):
+            continue
         txid = str(event.get("txid", ""))
         if not txid:
             continue
-        item = states.setdefault(txid, {"txid": txid, "state": "CREATED", "history": [], "transition_issues": []})
-        status = str(event.get("status", "unknown"))
-        action = str(event.get("action", ""))
+        item = states.setdefault(txid, {
+            "txid": txid, "state": "CREATED", "history": [],
+            "transition_issues": [], "identity_issues": [],
+            "identity": {},
+        })
+        for key in ("rescue", "target", "sha256"):
+            value = event.get(key)
+            if value in (None, ""):
+                continue
+            previous_value = item["identity"].get(key)
+            if previous_value not in (None, value):
+                item["identity_issues"].append({
+                    "field": key, "previous": previous_value, "observed": value,
+                    "event_id": event.get("event_id"), "seq": event.get("seq"),
+                    "reason": "one transaction id was reused for different resource identity",
+                })
+            else:
+                item["identity"][key] = value
+
         if action == "clean" and status == "removed":
-            state = "CLEANED"
-        elif status in ("restored", "already-published"):
-            state = "PUBLISHED"
-        elif status in ("staged", "incomplete"):
-            state = "STAGED"
-        elif status == "conflict":
-            state = "CONFLICT"
-        elif status in ("rejected", "uncertain", "unrecognized", "published-not-durable"):
-            state = "UNCERTAIN"
+            next_state = "CLEANED"
+        elif action in ("restore", "recover", "quarantine-recover") and status in ("restored", "already-published", "already-restored"):
+            next_state = "PUBLISHED"
+        elif action in ("restore", "recover", "quarantine-recover") and status in ("staged", "incomplete"):
+            next_state = "STAGED"
+        elif status in ("conflict", "ambiguous"):
+            next_state = "CONFLICT"
+        elif status in ("rejected", "uncertain", "unrecognized", "published-not-durable", "blocked"):
+            next_state = "UNCERTAIN"
         elif status == "orphaned":
-            state = "ORPHANED"
-        elif action == "clean" and status not in ("dry-run", "applied"):
-            state = "CLEANUP_BLOCKED"
+            next_state = "ORPHANED"
+        elif action == "clean" and status == "cleanup-blocked":
+            next_state = "CLEANUP_BLOCKED"
         else:
-            state = item["state"]
+            next_state = None
+
         previous_state = item["state"]
-        if state != previous_state and state not in allowed.get(previous_state, set()):
+        if next_state is not None and next_state != previous_state:
+            if next_state not in allowed.get(previous_state, set()):
+                item["transition_issues"].append({
+                    "from": previous_state, "to": next_state, "action": action, "status": status,
+                    "event_id": event.get("event_id"), "seq": event.get("seq"),
+                    "reason": "transition is not allowed by the Rescue lifecycle state machine",
+                })
+                item["state"] = "TRANSITION_INVALID"
+            elif previous_state != "TRANSITION_INVALID":
+                item["state"] = next_state
+        if item["identity_issues"] and item["state"] != "TRANSITION_INVALID":
             item["transition_issues"].append({
-                "from": previous_state, "to": state, "action": action, "status": status,
-                "reason": "transition is not allowed by the Rescue lifecycle state machine",
+                "from": item["state"], "to": "TRANSITION_INVALID", "action": action, "status": status,
+                "reason": "transaction resource identity changed within one transaction",
             })
-            state = "TRANSITION_INVALID"
-        item["state"] = state
+            item["state"] = "TRANSITION_INVALID"
         item["last_action"] = action
         item["last_status"] = status
         item["last_ts"] = event.get("ts")
-        item["history"].append({"action": action, "status": status, "ts": event.get("ts")})
-    return sorted(states.values(), key=lambda item: item["last_ts"] or "")
+        item["event_count"] = item.get("event_count", 0) + 1
+        item["first_seq"] = item.get("first_seq", event.get("seq"))
+        item["last_seq"] = event.get("seq", item.get("last_seq"))
+        item["history"].append({
+            "action": action, "status": status, "ts": event.get("ts"),
+            "event_id": event.get("event_id"), "seq": event.get("seq"),
+            "state": item["state"],
+        })
+    return sorted(states.values(), key=lambda item: (item.get("last_seq") or 0, item.get("last_ts") or ""))
 
 
 def _manifest_path(workspace: Path) -> Path:
