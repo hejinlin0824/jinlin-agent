@@ -128,12 +128,6 @@ def cmd_run(args: Any) -> int:
     if args.base_url:
         cfg.model.base_url = args.base_url
     workspace = _setup_workspace(args, cfg)
-    if not cfg.api_key() and not getattr(args, "mock_script", None):
-        _print(
-            f"[error] no API key. Set ${cfg.model.api_key_env} (or pass --mock-script for a scripted run).",
-            file=sys.stderr,
-        )
-        return 4
     task = args.task or ""
     if not task:
         _print("[task] describe the task (end with a blank line):")
@@ -150,40 +144,80 @@ def cmd_run(args: Any) -> int:
     if not task:
         _print("[error] empty task", file=sys.stderr)
         return 4
-    sandbox = _open_sandbox(cfg, workspace, args)
-    session = SessionManager.create(cfg, workspace, task, sandbox)
-    _print(f"[session] {session.id}  workspace={workspace}  model={cfg.model.model}")
-    _print(f"[task] {task.splitlines()[0][:140]}")
-    try:
-        harness = _make_harness(cfg, session, args)
-        status = harness.run()
-    finally:
-        session.close()
-    return _finish(session, status)
 
+    from .application import ApplicationService
+
+    quiet = getattr(args, "quiet", False)
+    streaming = not quiet and sys.stdout.isatty()
+
+    def on_delta(text: str) -> None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    def log(msg: str) -> None:
+        if not quiet:
+            _print(msg)
+
+    approval = None if getattr(args, "yes", False) else (_interactive_approval if sys.stdin.isatty() else None)
+    if approval is None and not getattr(args, "yes", False) and not quiet:
+        _print("[approval] non-interactive session: risky operations will be denied (fail-closed)")
+
+    def on_session(session: Any, sandbox: Any) -> None:
+        level = getattr(sandbox, "level", "L0")
+        engine = getattr(sandbox, "engine", "none")
+        if level == "L0" and not quiet:
+            _print(f"[sandbox] L0 ({engine}) — policy + approval only; no OS-level write isolation")
+        elif not quiet:
+            _print(f"[sandbox] {level} ({engine})")
+        _print(f"[session] {session.id}  workspace={workspace}  model={cfg.model.model}")
+        _print(f"[task] {task.splitlines()[0][:140]}")
+
+    service = ApplicationService(workspace, config=cfg)
+    session, status = service.run(
+        task,
+        read_only=bool(getattr(args, "read_only", False)),
+        auto_approve=bool(getattr(args, "yes", False)),
+        approval_handler=approval,
+        mock_script=getattr(args, "mock_script", None),
+        log=log,
+        stream_callback=on_delta if streaming else None,
+        on_session=on_session,
+    )
+    return _finish(session, status)
 
 def cmd_resume(args: Any) -> int:
-    cfg = load_config(Path(args.workspace or ".").resolve())
-    session_dir = cfg.sessions_dir / args.session_id
-    if not session_dir.exists():
-        _print(f"[error] unknown session: {args.session_id}", file=sys.stderr)
-        return 4
-    sandbox_holder: dict[str, Any] = {}
-    cfg_path = session_dir / "session.json"
-    workspace = Path(args.workspace).resolve() if args.workspace else _workspace_from_events(session_dir) or Path(".")
-    sandbox = create_sandbox(workspace, cfg)
-    session = SessionManager.open(cfg, args.session_id, sandbox)
-    previous_status = session.state.status
-    if args.answer:
-        session.emit("session.user_input", {"text": args.answer})
-    _print(f"[session] {session.id} resumed (status was {previous_status})")
-    try:
-        harness = _make_harness(cfg, session, args)
-        status = harness.run()
-    finally:
-        session.close()
-    return _finish(session, status)
+    workspace = Path(args.workspace or ".").expanduser().resolve()
+    cfg = load_config(workspace)
+    from .application import ApplicationService
 
+    quiet = getattr(args, "quiet", False)
+    streaming = not quiet and sys.stdout.isatty()
+
+    def on_delta(text: str) -> None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    def log(msg: str) -> None:
+        if not quiet:
+            _print(msg)
+
+    approval = None if getattr(args, "yes", False) else (_interactive_approval if sys.stdin.isatty() else None)
+    if approval is None and not getattr(args, "yes", False) and not quiet:
+        _print("[approval] non-interactive session: risky operations will be denied (fail-closed)")
+
+    service = ApplicationService(workspace, config=cfg)
+    session, status = service.resume(
+        args.session_id,
+        answer=args.answer,
+        read_only=bool(getattr(args, "read_only", False)),
+        auto_approve=bool(getattr(args, "yes", False)),
+        approval_handler=approval,
+        mock_script=getattr(args, "mock_script", None),
+        log=log,
+        stream_callback=on_delta if streaming else None,
+    )
+    _print(f"[session] {session.id} resumed")
+    return _finish(session, status)
 
 def _workspace_from_events(session_dir: Path) -> Path | None:
     state = recover(_iter_events(session_dir))
@@ -266,53 +300,38 @@ def _summarize_event(etype: str, payload: dict[str, Any]) -> str:
 
 
 def cmd_stats(args: Any) -> int:
-    cfg = load_config(Path(args.workspace or ".").resolve())
-    session_dir = cfg.sessions_dir / args.session_id
-    events = list(_iter_events(session_dir))
-    if not events:
-        _print("[error] no events", file=sys.stderr)
+    from .application import ApplicationService
+
+    service = ApplicationService(Path(args.workspace or ".").resolve())
+    try:
+        payload = service.stats(args.session_id)
+    except AgentError:
+        _print("[error] no events or unknown session", file=sys.stderr)
         return 4
-    state = recover(events)
-    _print(json.dumps(
-        {
-            "session_id": state.session_id,
-            "status": state.status,
-            "phase": state.phase,
-            "steps": state.step_index,
-            "model_calls": state.model_calls,
-            "tool_calls": state.tool_calls_total,
-            "tokens_in": state.tokens_in,
-            "tokens_out": state.tokens_out,
-            "compactions": state.compactions,
-            "loop_events": state.loop_events,
-            "verification_runs": len(state.verification_runs),
-            "final_result": (state.completion or {}).get("result"),
-            "report_artifact_id": state.report_artifact_id,
-        },
-        ensure_ascii=False,
-        indent=2,
-    ))
+    _print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
 def cmd_doctor(args: Any) -> int:
-    workspace = Path(args.workspace or ".").resolve()
-    cfg = load_config(workspace)
-    _print(f"python: {sys.version.split()[0]} ({sys.executable})")
-    _print(f"workspace: {workspace}")
-    _print(f"model: {cfg.model.model} @ {cfg.model.base_url}")
-    key = cfg.api_key()
-    _print(f"api key: {'set (' + cfg.model.api_key_env + ')' if key else 'MISSING (' + cfg.model.api_key_env + ')'}")
-    _print(f"sessions dir: {cfg.sessions_dir}")
-    sandbox = create_sandbox(workspace, cfg)
-    _print(f"sandbox: level={sandbox.level} engine={sandbox.engine} details={json.dumps(sandbox.describe(), ensure_ascii=False)}")
-    snap = workspace_snapshot(workspace, cfg, sandbox)
+    from .application import ApplicationService
+
+    report = ApplicationService(Path(args.workspace or ".").resolve()).doctor()
+    _print(f"python: {report['python']} ({sys.executable})")
+    _print(f"workspace: {report['workspace']}")
+    _print(f"model: {report['model']['model']} @ {report['model']['base_url']}")
+    key = report["model"]["api_key_configured"]
+    env_name = report["model"]["api_key_env"]
+    _print(f"api key: {'set (' + env_name + ')' if key else 'MISSING (' + env_name + ')'}")
+    _print(f"sessions dir: {report['sessions_dir']}")
+    sandbox = report["sandbox"]
+    _print(f"sandbox: level={sandbox['level']} engine={sandbox['engine']} details={json.dumps(sandbox['details'], ensure_ascii=False)}")
+    snap = report["workspace_snapshot"]
     _print(f"project types: {snap.get('project_types')}")
     _print(f"test commands: {snap.get('test_commands')}")
     _print(f"git: repo={snap.get('git_repo')} branch={snap.get('branch')} head={snap.get('head')} dirty={len(snap.get('dirty_files', []))}")
-    _print(f"config sources: {cfg.sources}")
-    if cfg.violations:
-        _print(f"config violations: {cfg.violations}")
+    _print(f"config sources: {report['config_sources']}")
+    if report["config_violations"]:
+        _print(f"config violations: {report['config_violations']}")
     return 0
 
 
@@ -465,6 +484,32 @@ def cmd_rescue(args: Any) -> int:
     return 0 if result["status"] in ("restored", "already-published") else 2
 
 
+def cmd_serve(args: Any) -> int:
+    from .web import create_server
+
+    server, _service, token = create_server(
+        Path(args.workspace or ".").expanduser().resolve(),
+        host=args.host,
+        port=args.port,
+    )
+    host, port = server.server_address[:2]
+    _print("Jinlin Agent local workbench API")
+    _print(f"workspace: {Path(args.workspace or '.').expanduser().resolve()}")
+    _print(f"listening: http://{host}:{port}")
+    _print("API: /api/v1/health, /api/v1/doctor, /api/v1/sessions")
+    _print("Authorization: Bearer <token> (token shown once below)")
+    _print(f"token: {token}")
+    _print("Security: loopback-only, read-only API in WP-1; press Ctrl+C to stop.")
+    try:
+        server.serve_forever(poll_interval=0.25)
+    except KeyboardInterrupt:
+        _print("\n[serve] stopping")
+    finally:
+        server.shutdown()
+        server.server_close()
+    return 0
+
+
 def cmd_eval(args: Any) -> int:
     from .evalkit import run_suite
 
@@ -568,6 +613,12 @@ def build_parser() -> argparse.ArgumentParser:
     quarantine_mode.add_argument("--apply", action="store_true", help="perform verified no-clobber recovery")
     quarantine_recover.add_argument("--json", action="store_true", help="emit machine-readable recovery report")
     quarantine_recover.set_defaults(func=cmd_rescue)
+
+    serve = sub.add_parser("serve", help="start the authenticated local workbench API")
+    serve.add_argument("--workspace", default=".", help="one fixed workspace exposed by this server")
+    serve.add_argument("--host", default="127.0.0.1", choices=["127.0.0.1", "::1", "localhost"])
+    serve.add_argument("--port", type=int, default=8765)
+    serve.set_defaults(func=cmd_serve)
 
     ev = sub.add_parser("eval", help="run the harness conformance / evaluation suite")
     ev.add_argument("--suite", default="all", choices=["all", "hcs", "e1e8"])
