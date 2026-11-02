@@ -6,7 +6,7 @@ import sys
 
 
 def main() -> int:
-    command = [sys.executable, "-m", "pytest", "-q", "tests/test_rescue_fault_matrix.py"]
+    command = [sys.executable, "-m", "pytest", "-q", "tests/test_rescue_fault_matrix.py", "tests/test_rescue_crash_recovery.py"]
     print("========== Rescue fault-injection matrix ==========", flush=True)
     completed = subprocess.run(command, check=False)
     if completed.returncode:
