@@ -1197,6 +1197,68 @@ def test_quarantine_recovery_resumes_partial_stage_without_overwrite(tmp_path):
 
 
 
+
+def test_quarantine_recovery_manifest_failure_is_reconciled_on_retry(tmp_path, monkeypatch):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"manifest update retry"
+    rescue = _mk_trash(tmp_path, ".manifest-retry.py.jinlin-rescue-b1b2c3e5", payload)
+    record_trash(tmp_path, rescue, "manifest-retry.py", "rescue")
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-10101022")
+    os.replace(rescue, quarantine)
+    real_write_manifest = trash_mod._write_manifest_atomic
+    monkeypatch.setattr(trash_mod, "_write_manifest_atomic", lambda *_args, **_kwargs: False)
+
+    first = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+
+    assert first["status"] == "attention-required"
+    assert first["blocked"][0]["status"] == "uncertain"
+    assert rescue.read_bytes() == payload and quarantine.read_bytes() == payload
+    assert os.stat(rescue).st_ino != os.stat(quarantine).st_ino
+
+    monkeypatch.setattr(trash_mod, "_write_manifest_atomic", real_write_manifest)
+    second = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+
+    assert second["status"] == "applied"
+    assert second["recovered"][0]["status"] == "already-restored"
+    assert trash_mod.list_rescue(tmp_path)["rescued"][0]["path"] == rescue.name
+    assert quarantine.read_bytes() == payload
+    assert os.stat(rescue).st_ino != os.stat(quarantine).st_ino
+
+
+def test_quarantine_recovery_partial_write_failure_can_be_retried(tmp_path, monkeypatch):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"partial write retry for quarantine"
+    rescue = _mk_trash(tmp_path, ".partial-retry.py.jinlin-rescue-b1b2c3e6", payload)
+    record_trash(tmp_path, rescue, "partial-retry.py", "rescue")
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-10101023")
+    os.replace(rescue, quarantine)
+    real_write = trash_mod.os.write
+    writes = {"count": 0}
+
+    def fail_after_prefix(fd, data):
+        writes["count"] += 1
+        if writes["count"] == 1:
+            return real_write(fd, data[:6])
+        if writes["count"] == 2:
+            raise OSError("injected stage write interruption")
+        return real_write(fd, data)
+
+    monkeypatch.setattr(trash_mod.os, "write", fail_after_prefix)
+    first = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+    assert first["status"] == "attention-required"
+    stage = trash_mod._quarantine_restore_stage_path(rescue, sha(payload))
+    assert stage.read_bytes() == payload[:6]
+    assert not rescue.exists() and quarantine.read_bytes() == payload
+
+    monkeypatch.setattr(trash_mod.os, "write", real_write)
+    second = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+    assert second["status"] == "applied"
+    assert rescue.read_bytes() == payload and quarantine.read_bytes() == payload
+    assert not stage.exists()
+
+
 def test_quarantine_recovery_target_race_is_no_clobber(tmp_path, monkeypatch):
     import os
     import jinlin_agent.trash as trash_mod
