@@ -278,7 +278,7 @@ python -m jinlin_agent eval --suite all
 
 ### Rescue 事务审计与一键验收
 
-每次 Rescue restore / recover / clean 都会尝试向 `.jinlin/rescue-audit.jsonl` 追加一条带 SHA-256 hash chain 的审计事件。审计日志是追加式证据，不是恢复数据的权威来源；日志损坏时系统会报告完整性问题并拒绝继续追加，不会自动修复或覆盖旧日志。
+每次 Rescue restore / recover / clean / quarantine-recover 都会尝试向 `.jinlin/rescue-audit.jsonl` 追加 SHA-256 hash-chain 事件。新事件采用 v2 格式，包含 manifest 中持久化的事务 ID、全局连续序号和唯一事件 ID；读取时兼容历史 v1 前缀，并验证序号、事件 ID、字段格式和 hash chain。事务状态投影还会检查状态迁移及同一事务的资源身份一致性。审计日志是追加式证据，不是恢复数据的权威来源；日志损坏时系统会报告完整性问题并拒绝继续追加，不会自动修复或覆盖旧日志。
 
 `rescue inspect` 是只读检查命令，汇总已验证 Rescue、暂存文件、孤立暂存、清理中断 quarantine、事务状态和审计链完整性。事务状态由审计事件投影得到：`STAGED`、`PUBLISHED`、`CONFLICT`、`UNCERTAIN`、`ORPHANED`、`CLEANED` 等；它不替代文件内容与 manifest 的实际校验。
 
