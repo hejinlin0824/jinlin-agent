@@ -121,3 +121,29 @@ def test_session_recovery_restores_the_original_task_contract():
         },
     }])
     assert TaskContract.from_dict(state.task_contract) == contract
+
+
+def test_session_status_machine_rejects_terminal_resurrection():
+    from jinlin_agent.task_contract import transition_session_status
+
+    assert transition_session_status("running", "waiting_approval") == "waiting_approval"
+    assert transition_session_status("waiting_approval", "running") == "running"
+    assert transition_session_status("running", "waiting_user") == "waiting_user"
+    assert transition_session_status("waiting_user", "running") == "running"
+    assert transition_session_status("running", "completed") == "completed"
+    with pytest.raises(ValueError, match="invalid session status transition"):
+        transition_session_status("completed", "running")
+
+
+def test_event_recovery_projects_valid_session_lifecycle():
+    from jinlin_agent.state import recover
+
+    events = [
+        {"seq": 1, "type": "session.created", "payload": {"session_id": "sess_20261103_000000_abcdef", "request": "question"}},
+        {"seq": 2, "type": "session.waiting_user", "payload": {"question": "clarify"}},
+        {"seq": 3, "type": "session.user_input", "payload": {"text": "answer"}},
+        {"seq": 4, "type": "session.completed", "payload": {"result": "completed", "summary": "done"}},
+    ]
+    state = recover(events)
+    assert state.status == "completed"
+    assert state.user_messages == ["answer"]

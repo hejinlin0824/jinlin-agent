@@ -11,6 +11,8 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from .task_contract import transition_session_status
+
 from .domain import (
     Claim,
     Decision,
@@ -152,7 +154,7 @@ def _session_created(s: SessionState, p: dict[str, Any]) -> None:
     s.config_hash = p.get("config_hash", s.config_hash)
     s.task_contract = dict(p.get("task_contract") or s.task_contract)
     s.started_at = p.get("started_at", s.started_at)
-    s.status = Status.RUNNING.value
+    s.status = transition_session_status(s.status, Status.RUNNING.value)
     s.phase = Phase.INITIALIZING.value
 
 
@@ -168,7 +170,7 @@ def _phase_changed(s: SessionState, p: dict[str, Any]) -> None:
 
 def _step_started(s: SessionState, p: dict[str, Any]) -> None:
     s.step_index = int(p.get("step_index", s.step_index + 1))
-    s.status = Status.RUNNING.value
+    s.status = transition_session_status(s.status, Status.RUNNING.value)
 
 
 def _context_built(s: SessionState, p: dict[str, Any]) -> None:
@@ -276,13 +278,13 @@ def _tool_denied(s: SessionState, p: dict[str, Any]) -> None:
 
 def _approval_requested(s: SessionState, p: dict[str, Any]) -> None:
     s.pending_approval = p.get("approval") or p
-    s.status = Status.WAITING_APPROVAL.value
+    s.status = transition_session_status(s.status, Status.WAITING_APPROVAL.value)
 
 
 def _approval_resolved(s: SessionState, p: dict[str, Any]) -> None:
     s.pending_approval = None
     s.approval_count += 1
-    s.status = Status.RUNNING.value
+    s.status = transition_session_status(s.status, Status.RUNNING.value)
 
 
 def _plan_updated(s: SessionState, p: dict[str, Any]) -> None:
@@ -315,7 +317,7 @@ def _verification_baseline(s: SessionState, p: dict[str, Any]) -> None:
 
 
 def _session_waiting_user(s: SessionState, p: dict[str, Any]) -> None:
-    s.status = Status.WAITING_USER.value
+    s.status = transition_session_status(s.status, Status.WAITING_USER.value)
     s.pending_question = p.get("question") or p
 
 
@@ -346,19 +348,19 @@ def _session_completed(s: SessionState, p: dict[str, Any]) -> None:
         "summary": p.get("summary", ""),
     }
     s.report_artifact_id = p.get("report_artifact_id")
-    s.status = Status.COMPLETED.value
+    s.status = transition_session_status(s.status, Status.COMPLETED.value)
     s.phase = Phase.COMPLETED.value
     s.last_error = None
     s.pending_question = None
 
 
 def _session_failed(s: SessionState, p: dict[str, Any]) -> None:
-    s.status = Status.FAILED.value
+    s.status = transition_session_status(s.status, Status.FAILED.value)
     s.last_error = p.get("error") or {"code": "SESSION_CORRUPTED", "message": ""}
 
 
 def _session_cancelled(s: SessionState, p: dict[str, Any]) -> None:
-    s.status = Status.CANCELLED.value
+    s.status = transition_session_status(s.status, Status.CANCELLED.value)
 
 
 def _sandbox_mode(s: SessionState, p: dict[str, Any]) -> None:

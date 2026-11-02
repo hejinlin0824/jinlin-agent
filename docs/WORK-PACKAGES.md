@@ -117,3 +117,6 @@ This is an incremental compatibility layer, not the final persisted TaskContract
 The current slice now persists the immutable task contract in the `session.created` event and restores it from the event log when a session is resumed. The Workbench task status path is guarded by a shared transition function: queued → running → waiting_approval / waiting_user → running → terminal; terminal states cannot be resurrected. This is the Workbench task lifecycle only; the richer Session phase model remains a separate projection over the durable session event log.
 
 The existing `read_only` argument is still supported as a compatibility adapter. New callers should pass a `TaskContract`. Contract snapshots are versioned so a later durable task store can migrate them explicitly.
+
+
+The Session event reducer also validates lifecycle edges (created → running → waiting_approval / waiting_user → running → terminal). Replaying an event log that attempts to resurrect a terminal Session now fails loudly instead of silently changing it back to running. Task and Session lifecycles remain separate state machines because the Workbench task may outlive/refer to a Session, but both share the same explicit-transition principle.

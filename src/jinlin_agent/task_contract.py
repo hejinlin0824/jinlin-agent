@@ -106,6 +106,27 @@ class TaskContract:
         }
 
 
+_SESSION_TRANSITIONS = {
+    "created": {"running", "failed", "cancelled"},
+    "running": {"waiting_approval", "waiting_user", "paused", "completed", "failed", "cancelled"},
+    "waiting_approval": {"running", "failed", "cancelled"},
+    "waiting_user": {"running", "failed", "cancelled"},
+    "paused": {"running", "failed", "cancelled"},
+    "completed": set(),
+    "failed": set(),
+    "cancelled": set(),
+}
+
+
+def transition_session_status(current: str, target: str) -> str:
+    """Validate a durable Session status transition during event projection."""
+    if current == target:
+        return target
+    if target not in _SESSION_TRANSITIONS.get(current, set()):
+        raise ValueError(f"invalid session status transition: {current} -> {target}")
+    return target
+
+
 class TaskStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
