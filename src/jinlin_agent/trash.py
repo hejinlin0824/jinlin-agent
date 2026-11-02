@@ -74,6 +74,7 @@ def _read_audit(workspace: Path) -> dict[str, Any]:
     except OSError as exc:
         return {"events": [], "issues": [{"line": 0, "reason": f"read failed: {exc}"}], "last_hash": previous}
     seen_event_ids: set[str] = set()
+    seen_version_2 = False
     for number, line in enumerate(raw.splitlines(), 1):
         if not line.strip():
             continue
@@ -87,9 +88,16 @@ def _read_audit(workspace: Path) -> dict[str, Any]:
             txid = event.get("txid")
             if not isinstance(txid, str) or not re.fullmatch(r"[0-9a-f]{24,32}", txid):
                 raise ValueError("transaction id is missing or malformed")
+            if not isinstance(event.get("action"), str) or not event.get("action"):
+                raise ValueError("event action is missing or malformed")
+            if not isinstance(event.get("status"), str) or not event.get("status"):
+                raise ValueError("event status is missing or malformed")
+            if not isinstance(event.get("ts"), str) or not event.get("ts"):
+                raise ValueError("event timestamp is missing or malformed")
             if version == 2:
+                seen_version_2 = True
                 expected_seq = len(events) + 1
-                if event.get("seq") != expected_seq:
+                if type(event.get("seq")) is not int or event.get("seq") != expected_seq:
                     raise ValueError(f"event sequence is not contiguous (expected {expected_seq})")
                 event_id = event.get("event_id")
                 if not isinstance(event_id, str) or not re.fullmatch(r"[0-9a-f]{32}", event_id):
@@ -97,7 +105,11 @@ def _read_audit(workspace: Path) -> dict[str, Any]:
                 if event_id in seen_event_ids:
                     raise ValueError("duplicate event id")
                 seen_event_ids.add(event_id)
+            elif seen_version_2:
+                raise ValueError("legacy version-1 event cannot follow version-2 events")
             supplied = event.get("event_hash")
+            if not isinstance(supplied, str) or not re.fullmatch(r"[0-9a-f]{64}", supplied):
+                raise ValueError("event hash is missing or malformed")
             body = {key: value for key, value in event.items() if key != "event_hash"}
             expected = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
             if event.get("prev_hash") != previous:
