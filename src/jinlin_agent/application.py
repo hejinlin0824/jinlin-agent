@@ -253,7 +253,7 @@ class ApplicationService:
         except Exception as exc:
             failure = AgentError(
                 "INTERNAL_ERROR",
-                f"unexpected {type(exc).__name__} during agent execution",
+                f"unexpected {type(exc).__name__} during agent execution: {str(exc)[:500]}",
                 source="application",
             )
             if not session.state.is_terminal():
