@@ -11,6 +11,7 @@ import ipaddress
 import json
 import secrets
 import socket
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -54,6 +55,25 @@ def create_server(workspace, host: str = "127.0.0.1", port: int = 8765, token: s
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _html(self):
+            page = Path(__file__).resolve().parent / "static" / "index.html"
+            try:
+                body = page.read_bytes()
+            except OSError:
+                self._json(404, {"error": {"code": "UI_NOT_FOUND", "message": "Workbench UI is not installed"}})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'")
             self.end_headers()
             self.wfile.write(body)
 
@@ -154,6 +174,9 @@ def create_server(workspace, host: str = "127.0.0.1", port: int = 8765, token: s
                 self._json(403, {"error": {"code": "ORIGIN_REJECTED", "message": "request host or origin is not allowed"}})
                 return
             parsed = urlsplit(self.path)
+            if parsed.path in ("/", "/workbench"):
+                self._html()
+                return
             if parsed.path == API_PREFIX + "/health":
                 self._json(200, {"ok": True, "api_version": 1, "version": __version__})
                 return
