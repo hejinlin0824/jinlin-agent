@@ -18,14 +18,14 @@ This removes the `stat → unlink` race as the final safety boundary: what is
 deleted is always the object that was just verified, never whatever happens
 to sit at the scanned path.
 
-The manifest itself is rewritten atomically (temp file + fsync + replace):
-a crash during a rewrite leaves the previous records intact instead of
-silently dropping ownership. Manifest write failures never break the
-transaction that produced the trash — the file then degrades to
-"unrecognized" (report-only) and the degradation is reported to the caller.
-Note: the directory-entry rename is not fsynced, so a power-loss exactly at
-the replace is not covered — atomicity under normal operation is claimed,
-not power-loss durability of the directory entry.
+The manifest is appended with a complete JSONL record, file-fsynced,
+and its parent directory is fsynced when the manifest is first created.
+Rewrites use an exclusive temporary file, fsync its contents, replace the
+manifest, and fsync the containing directory where supported. A malformed or
+torn existing manifest blocks append/rewrite rather than allowing a later
+write to hide or concatenate damaged history. On platforms where directory
+fsync is unavailable, notably portable Windows Python, directory-entry
+durability is explicitly best-effort rather than guaranteed.
 
 Cleanup runs under the workspace write lock (it cannot race an active jinlin
 session), is repeatable, keeps manifest entries whose deletion failed, and
