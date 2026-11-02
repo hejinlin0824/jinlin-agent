@@ -25,7 +25,7 @@ class _FakeService:
             approval_id="approval-1",
             tool="shell",
             risk="medium",
-            summary="run pytest",
+            summary="pytest --api-key superSecret123",
             reason="verification command",
             impact=["Runs the project's test suite"],
             arguments={"command": ["pytest"], "api_key": "must-not-leak"},
@@ -55,7 +55,8 @@ def test_task_manager_requires_matching_explicit_approval_and_hides_arguments():
     waiting = _wait_for(manager, created["task_id"], "waiting_approval")
     assert waiting["session_id"] == "sess_20261102_120000_abcdef"
     assert waiting["pending_approval"]["approval_id"] == "approval-1"
-    assert waiting["pending_approval"]["summary"] == "run pytest"
+    assert "[REDACTED]" in waiting["pending_approval"]["summary"]
+    assert "superSecret123" not in json.dumps(waiting)
     assert "arguments" not in waiting["pending_approval"]
     assert "api_key" not in json.dumps(waiting)
 
