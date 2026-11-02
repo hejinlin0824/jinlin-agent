@@ -971,6 +971,15 @@ def test_rescue_audit_v2_has_monotonic_sequence_unique_event_ids_and_persistent_
     assert projected[0]["first_seq"] == 1 and projected[0]["last_seq"] == 2
 
 
+
+def test_rescue_audit_refuses_malformed_explicit_transaction_id(tmp_path):
+    import jinlin_agent.trash as trash_mod
+    ok, warning = trash_mod._append_audit_event(tmp_path, "restore", "restored", txid="../bad")
+    assert not ok
+    assert "transaction id is malformed" in warning
+    assert trash_mod._read_audit(tmp_path)["events"] == []
+
+
 def test_rescue_audit_v2_rejects_sequence_gap_and_refuses_append(tmp_path):
     import json
     import jinlin_agent.trash as trash_mod
