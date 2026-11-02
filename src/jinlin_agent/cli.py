@@ -205,6 +205,9 @@ def cmd_resume(args: Any) -> int:
     if approval is None and not getattr(args, "yes", False) and not quiet:
         _print("[approval] non-interactive session: risky operations will be denied (fail-closed)")
 
+    def on_session(session: Any, sandbox: Any) -> None:
+        _print(f"[session] {session.id} resumed")
+
     service = ApplicationService(workspace, config=cfg)
     session, status = service.resume(
         args.session_id,
@@ -215,8 +218,8 @@ def cmd_resume(args: Any) -> int:
         mock_script=getattr(args, "mock_script", None),
         log=log,
         stream_callback=on_delta if streaming else None,
+        on_session=on_session,
     )
-    _print(f"[session] {session.id} resumed")
     return _finish(session, status)
 
 def _workspace_from_events(session_dir: Path) -> Path | None:
