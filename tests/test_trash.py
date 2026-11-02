@@ -870,6 +870,89 @@ def test_rescue_audit_hash_chain_and_transaction_state_lifecycle(tmp_path):
 
 
 
+@pytest.mark.parametrize("operation", ["restore", "recover", "clean"])
+def test_rescue_lifecycle_audit_is_written_while_workspace_lock_is_held(tmp_path, monkeypatch, operation):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, f".{operation}.py.jinlin-rescue-10203050", b"lock ordering payload")
+    assert record_trash(tmp_path, rescue, f"{operation}.py", "rescue")
+    digest = sha(b"lock ordering payload")
+    if operation == "recover":
+        stage = trash_mod._restore_stage_path(tmp_path / f"{operation}.py", digest)
+        stage.write_bytes(b"lock ordering payload")
+    elif operation == "clean":
+        assert trash_mod.restore_rescue(tmp_path, rescue.name)["status"] == "restored"
+
+    real_lock = trash_mod.SessionLock
+    real_append = trash_mod._append_audit_event
+    write_path = tmp_path / ".jinlin" / "write.lock"
+    held = {"depth": 0}
+    observed = []
+
+    class TrackingLock:
+        def __init__(self, path):
+            self.path = Path(path)
+            self.inner = real_lock(path)
+
+        def acquire(self, blocking=False):
+            self.inner.acquire(blocking=blocking)
+            if self.path == write_path:
+                held["depth"] += 1
+
+        def release(self):
+            if self.path == write_path and held["depth"]:
+                held["depth"] -= 1
+            self.inner.release()
+
+    def track_append(workspace, action, status, **fields):
+        observed.append((action, held["depth"] > 0))
+        return real_append(workspace, action, status, **fields)
+
+    monkeypatch.setattr(trash_mod, "SessionLock", TrackingLock)
+    monkeypatch.setattr(trash_mod, "_append_audit_event", track_append)
+
+    if operation == "restore":
+        result = trash_mod.restore_rescue(tmp_path, rescue.name)
+        assert result["status"] == "restored"
+    elif operation == "recover":
+        result = trash_mod.recover_rescue(tmp_path)
+        assert result["items"][0]["status"] == "restored"
+    else:
+        result = trash_mod.clean_rescue(tmp_path, apply=True)
+        assert result["removed"] == [rescue.name]
+
+    assert observed
+    assert all(lock_held for _action, lock_held in observed), observed
+
+
+def test_restore_and_clean_cannot_reorder_transaction_audit_events(tmp_path, monkeypatch):
+    import jinlin_agent.trash as trash_mod
+
+    rescue = _mk_trash(tmp_path, ".ordered.py.jinlin-rescue-10203051", b"ordered payload")
+    assert record_trash(tmp_path, rescue, "ordered.py", "rescue")
+    real_append = trash_mod._append_audit_event
+    nested_clean = []
+    triggered = {"value": False}
+
+    def interleave_clean(workspace, action, status, **fields):
+        if action == "restore" and not triggered["value"]:
+            triggered["value"] = True
+            nested_clean.append(trash_mod.clean_rescue(workspace, apply=True))
+        return real_append(workspace, action, status, **fields)
+
+    monkeypatch.setattr(trash_mod, "_append_audit_event", interleave_clean)
+    restored = trash_mod.restore_rescue(tmp_path, rescue.name)
+
+    assert restored["status"] == "restored"
+    assert nested_clean and nested_clean[0]["status"] == "locked"
+    assert rescue.exists(), "the competing cleaner must not run between publication and audit commit"
+    events = trash_mod._read_audit(tmp_path)["events"]
+    assert [event["action"] for event in events] == ["restore"]
+    states = trash_mod._transaction_states(events)
+    assert states[0]["state"] == "PUBLISHED"
+    assert states[0]["transition_issues"] == []
+
+
 def test_rescue_audit_syncs_workspace_entry_before_persisting_audit_file(tmp_path, monkeypatch):
     import jinlin_agent.trash as trash_mod
 

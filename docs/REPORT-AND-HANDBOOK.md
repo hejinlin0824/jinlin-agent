@@ -780,3 +780,21 @@ The seeded sequence suite is deterministic, not an unbounded fuzz test. It exerc
 ### Operator interpretation
 
 A green test result is meaningful only together with the printed task-package identity and commit. Before reporting acceptance, compare the displayed branch/short SHA with the intended branch HEAD. If the banner says `STALE TEST RUNNER`, update the local branch and rerun; do not treat that as a test failure in product code or bypass the guard.
+
+
+## Rescue lifecycle audit commit ordering
+
+A Rescue restore, recovery, or cleanup keeps the workspace write lock from the
+filesystem mutation through its corresponding audit append. The audit append
+uses a second, dedicated lock; the only permitted acquisition order is
+**workspace write lock, then audit lock**. This makes the order of lifecycle
+events agree with the serialized order of the filesystem operations and
+prevents a cleaner or recovery process from slipping between publication and
+the event that records it. A failed audit append remains an explicit warning:
+the filesystem result is not rolled back merely because the diagnostic audit
+channel is unavailable, and inspection reports the audit integrity issue.
+
+The lock order is also used by inspection and quarantine recovery. Audit-only
+writers never acquire the workspace lock while holding the audit lock, avoiding
+a reverse-order cycle. The guarantee coordinates Jinlin operations sharing the
+same workspace lock; it does not serialize arbitrary external programs.

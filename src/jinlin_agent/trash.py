@@ -1007,7 +1007,9 @@ def _publish_restore_stage(stage: Path, dest: Path, digest: str) -> dict[str, An
             os.close(sync_fd)
 
 
-def _restore_rescue_impl(workspace: Path, rescue_rel: str) -> dict[str, Any]:
+def _restore_rescue_impl(
+    workspace: Path, rescue_rel: str, *, workspace_lock_held: bool = False
+) -> dict[str, Any]:
     """Stage, fsync, verify, then atomically publish without clobbering a target.
 
     A process crash can leave a deterministic sibling staging file. It is
@@ -1015,11 +1017,13 @@ def _restore_rescue_impl(workspace: Path, rescue_rel: str) -> dict[str, Any]:
     publish a complete stage, while incomplete stages remain untouched.
     """
     workspace = Path(workspace).resolve()
-    lock = SessionLock(workspace / ".jinlin" / "write.lock")
-    try:
-        lock.acquire()
-    except SessionLockedError:
-        return {"status": "locked", "detail": "another jinlin session holds the workspace write lock"}
+    lock = None
+    if not workspace_lock_held:
+        lock = SessionLock(workspace / ".jinlin" / "write.lock")
+        try:
+            lock.acquire()
+        except SessionLockedError:
+            return {"status": "locked", "detail": "another jinlin session holds the workspace write lock"}
     try:
         listed = list_rescue_unlocked(workspace)
         item = next((x for x in listed["rescued"] if x["path"] == rescue_rel), None)
@@ -1083,17 +1087,20 @@ def _restore_rescue_impl(workspace: Path, rescue_rel: str) -> dict[str, Any]:
         published.update({"target": orig, "rescue": rescue_rel, "stage": _relative_posix(stage, workspace), "sha256": digest})
         return published
     finally:
-        lock.release()
+        if lock is not None:
+            lock.release()
 
 
-def _recover_rescue_impl(workspace: Path) -> dict[str, Any]:
+def _recover_rescue_impl(workspace: Path, *, workspace_lock_held: bool = False) -> dict[str, Any]:
     """Reconcile deterministic restore stages against verified rescue sources."""
     workspace = Path(workspace).resolve()
-    lock = SessionLock(workspace / ".jinlin" / "write.lock")
-    try:
-        lock.acquire()
-    except SessionLockedError:
-        return {"status": "locked", "items": []}
+    lock = None
+    if not workspace_lock_held:
+        lock = SessionLock(workspace / ".jinlin" / "write.lock")
+        try:
+            lock.acquire()
+        except SessionLockedError:
+            return {"status": "locked", "items": []}
     try:
         listed = list_rescue_unlocked(workspace)
         items: list[dict[str, Any]] = []
@@ -1144,7 +1151,8 @@ def _recover_rescue_impl(workspace: Path) -> dict[str, Any]:
         orphaned.sort(key=lambda item: item["path"])
         return {"status": "ok", "items": items, "orphaned": orphaned}
     finally:
-        lock.release()
+        if lock is not None:
+            lock.release()
 
 
 def _quarantine_and_unlink_verified(
@@ -1189,7 +1197,9 @@ def _quarantine_and_unlink_verified(
         return False, f"quarantined object could not be safely verified/removed ({exc}); retained at {quarantine.name}"
 
 
-def _clean_rescue_impl(workspace: Path, apply: bool = False) -> dict[str, Any]:
+def _clean_rescue_impl(
+    workspace: Path, apply: bool = False, *, workspace_lock_held: bool = False
+) -> dict[str, Any]:
     """Dry-run or explicitly clean redundant restore evidence.
 
     A Rescue and its stage are eligible only when the restored target is a
@@ -1202,12 +1212,14 @@ def _clean_rescue_impl(workspace: Path, apply: bool = False) -> dict[str, Any]:
         "status": "dry-run", "eligible": [], "removed": [], "failed": [],
         "manifest_degraded": [], "unrecognized": [], "quarantined": [],
     }
-    lock = SessionLock(workspace / ".jinlin" / "write.lock")
-    try:
-        lock.acquire()
-    except SessionLockedError:
-        report["status"] = "locked"
-        return report
+    lock = None
+    if not workspace_lock_held:
+        lock = SessionLock(workspace / ".jinlin" / "write.lock")
+        try:
+            lock.acquire()
+        except SessionLockedError:
+            report["status"] = "locked"
+            return report
     try:
         listed = list_rescue_unlocked(workspace)
         report["unrecognized"] = [item["path"] for item in listed["unrecognized"]]
@@ -1293,7 +1305,8 @@ def _clean_rescue_impl(workspace: Path, apply: bool = False) -> dict[str, Any]:
             report["removed"].append(item["rescue"])
         return report
     finally:
-        lock.release()
+        if lock is not None:
+            lock.release()
 
 
 
@@ -1587,47 +1600,81 @@ def recover_clean_quarantines(workspace: Path, apply: bool = False) -> dict[str,
         lock.release()
 
 
+def _workspace_write_lock(workspace: Path) -> SessionLock:
+    """Return the shared mutation lock used to order filesystem and audit commits."""
+    return SessionLock(Path(workspace) / ".jinlin" / "write.lock")
+
+
 def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
-    result = _restore_rescue_impl(workspace, rescue_rel)
-    if result.get("status") == "locked":
-        return result
-    return _audit_result(workspace, "restore", result, rescue=rescue_rel)
+    workspace = Path(workspace).resolve()
+    lock = _workspace_write_lock(workspace)
+    try:
+        lock.acquire()
+    except SessionLockedError:
+        return {"status": "locked", "detail": "another jinlin session holds the workspace write lock"}
+    try:
+        result = _restore_rescue_impl(workspace, rescue_rel, workspace_lock_held=True)
+        if result.get("status") == "locked":
+            return result
+        # Keep the lifecycle event ordered with the filesystem mutation. Lock
+        # order is always workspace write lock -> audit lock.
+        return _audit_result(workspace, "restore", result, rescue=rescue_rel)
+    finally:
+        lock.release()
 
 
 def recover_rescue(workspace: Path) -> dict[str, Any]:
-    result = _recover_rescue_impl(workspace)
-    if result.get("status") == "locked":
+    workspace = Path(workspace).resolve()
+    lock = _workspace_write_lock(workspace)
+    try:
+        lock.acquire()
+    except SessionLockedError:
+        return {"status": "locked", "items": []}
+    try:
+        result = _recover_rescue_impl(workspace, workspace_lock_held=True)
+        if result.get("status") == "locked":
+            return result
+        for item in result.get("items", []):
+            _audit_result(workspace, "recover", item, rescue=item.get("rescue"), target=item.get("target"))
+        for item in result.get("orphaned", []):
+            _audit_result(workspace, "recover", item, target=item.get("path"))
         return result
-    for item in result.get("items", []):
-        _audit_result(workspace, "recover", item, rescue=item.get("rescue"), target=item.get("target"))
-    for item in result.get("orphaned", []):
-        _audit_result(workspace, "recover", item, target=item.get("path"))
-    return result
+    finally:
+        lock.release()
 
 
 def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
-    result = _clean_rescue_impl(workspace, apply=apply)
-    if result.get("status") == "locked":
+    workspace = Path(workspace).resolve()
+    lock = _workspace_write_lock(workspace)
+    try:
+        lock.acquire()
+    except SessionLockedError:
+        return {"status": "locked"}
+    try:
+        result = _clean_rescue_impl(workspace, apply=apply, workspace_lock_held=True)
+        if result.get("status") == "locked":
+            return result
+        action = "clean" if apply else "clean-preview"
+        for item in result.get("eligible", []):
+            if not apply:
+                _audit_result(workspace, action, {"status": "dry-run"}, rescue=item.get("rescue"),
+                              target=item.get("target"), stage=item.get("stage"), sha256=item.get("sha256"))
+        eligible_by_rescue = {item.get("rescue"): item for item in result.get("eligible", [])}
+        for path in result.get("removed", []):
+            item = eligible_by_rescue.get(path, {})
+            _audit_result(workspace, "clean", {"status": "removed", "txid": item.get("transaction_id")}, rescue=path,
+                          target=item.get("target"), stage=item.get("stage"), sha256=item.get("sha256"),
+                          txid=item.get("transaction_id"))
+        for item in result.get("failed", []):
+            eligible = eligible_by_rescue.get(item.get("rescue"), {})
+            _audit_result(workspace, "clean", {"status": "cleanup-blocked", "detail": item.get("reason"),
+                              "txid": eligible.get("transaction_id")},
+                          rescue=item.get("rescue"), target=eligible.get("target"),
+                          stage=eligible.get("stage"), sha256=eligible.get("sha256"),
+                          txid=eligible.get("transaction_id"))
         return result
-    action = "clean" if apply else "clean-preview"
-    for item in result.get("eligible", []):
-        if not apply:
-            _audit_result(workspace, action, {"status": "dry-run"}, rescue=item.get("rescue"),
-                          target=item.get("target"), stage=item.get("stage"), sha256=item.get("sha256"))
-    eligible_by_rescue = {item.get("rescue"): item for item in result.get("eligible", [])}
-    for path in result.get("removed", []):
-        item = eligible_by_rescue.get(path, {})
-        _audit_result(workspace, "clean", {"status": "removed", "txid": item.get("transaction_id")}, rescue=path,
-                      target=item.get("target"), stage=item.get("stage"), sha256=item.get("sha256"),
-                      txid=item.get("transaction_id"))
-    for item in result.get("failed", []):
-        eligible = eligible_by_rescue.get(item.get("rescue"), {})
-        _audit_result(workspace, "clean", {"status": "cleanup-blocked", "detail": item.get("reason"),
-                          "txid": eligible.get("transaction_id")},
-                      rescue=item.get("rescue"), target=eligible.get("target"),
-                      stage=eligible.get("stage"), sha256=eligible.get("sha256"),
-                      txid=eligible.get("transaction_id"))
-    return result
+    finally:
+        lock.release()
 
 
 def inspect_rescue(workspace: Path) -> dict[str, Any]:
