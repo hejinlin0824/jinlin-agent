@@ -1196,6 +1196,53 @@ def test_quarantine_recovery_resumes_partial_stage_without_overwrite(tmp_path):
     assert quarantine.read_bytes() == payload
 
 
+
+def test_quarantine_recovery_target_race_is_no_clobber(tmp_path, monkeypatch):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"quarantine race payload"
+    external = b"external target wins"
+    rescue = _mk_trash(tmp_path, ".race.py.jinlin-rescue-b1b2c3e3", payload)
+    record_trash(tmp_path, rescue, "race.py", "rescue")
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-10101020")
+    os.replace(rescue, quarantine)
+    real_link = trash_mod.os.link
+
+    def race_link(source, destination, *args, **kwargs):
+        if Path(destination) == rescue and "jinlin-quarantine-restore-" in Path(source).name:
+            rescue.write_bytes(external)
+            raise FileExistsError(str(rescue))
+        return real_link(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(trash_mod.os, "link", race_link)
+    report = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+
+    assert report["status"] == "attention-required"
+    assert rescue.read_bytes() == external
+    assert quarantine.read_bytes() == payload
+    assert report["blocked"][0]["status"] == "conflict"
+
+
+def test_quarantine_recovery_rejects_non_prefix_stage_without_mutation(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"verified quarantine source"
+    rescue = _mk_trash(tmp_path, ".bad-stage.py.jinlin-rescue-b1b2c3e4", payload)
+    record_trash(tmp_path, rescue, "bad-stage.py", "rescue")
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-10101021")
+    os.replace(rescue, quarantine)
+    stage = trash_mod._quarantine_restore_stage_path(rescue, sha(payload))
+    stage.write_bytes(b"not a prefix")
+
+    report = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+
+    assert report["status"] == "attention-required"
+    assert not rescue.exists()
+    assert stage.read_bytes() == b"not a prefix"
+    assert quarantine.read_bytes() == payload
+    assert report["blocked"][0]["status"] == "rejected"
+
+
 def test_quarantine_recovery_cli_requires_explicit_apply_and_supports_json(tmp_path, capsys):
     import os
     import json
