@@ -416,7 +416,14 @@ def cmd_rescue(args: Any) -> int:
         for key, value in report.get("counts", {}).items():
             _print(f"  {key}: {value}")
         for item in report.get("transactions", []):
-            _print(f"  transaction {item['txid']}: {item['state']} (last={item.get('last_action')}/{item.get('last_status')})")
+            sequence = f" seq={item.get('first_seq')}..{item.get('last_seq')}" if item.get("last_seq") is not None else ""
+            _print(f"  transaction {item['txid']}: {item['state']} "
+                   f"(events={item.get('event_count', 0)}{sequence}; "
+                   f"last={item.get('last_action')}/{item.get('last_status')})")
+            for issue in item.get("identity_issues", []):
+                _print(f"    transaction-identity-error: {issue}")
+            for issue in item.get("transition_issues", []):
+                _print(f"    transaction-transition-error: {issue}")
         for item in report.get("stages", []):
             _print(f"  stage {item['path']}: {item['state']} [{item['integrity']}]")
         for item in report.get("orphaned", []):
