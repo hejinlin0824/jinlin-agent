@@ -34,6 +34,19 @@ def make_ctx(tmp_path: Path, config=None):
     return ctx
 
 
+def test_tool_context_normalizes_explicit_none_logger(tmp_path):
+    cfg = load_config(tmp_path)
+    ctx = ToolContext(
+        workspace=tmp_path,
+        config=cfg,
+        sandbox=NullSandbox(str(tmp_path)),
+        artifacts=None,
+        log=None,
+    )
+    assert callable(ctx.log)
+    ctx.log("safe no-op")
+
+
 def test_event_log_roundtrip(tmp_path):
     log = EventLog(tmp_path / "s", "sess_test").open()
     log.append("session.created", {"request": "hello"})
