@@ -9,6 +9,7 @@ import hmac
 import ipaddress
 import json
 import secrets
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -130,6 +131,9 @@ def create_server(workspace, host: str = "127.0.0.1", port: int = 8765, token: s
             except Exception:
                 self._json(500, {"error": {"code": "INTERNAL_ERROR", "message": "request could not be completed"}})
 
-    server = ThreadingHTTPServer((host, int(port)), Handler)
+    class LocalThreadingHTTPServer(ThreadingHTTPServer):
+        address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+    server = LocalThreadingHTTPServer((host, int(port)), Handler)
     server.daemon_threads = True
     return server, service, bearer
