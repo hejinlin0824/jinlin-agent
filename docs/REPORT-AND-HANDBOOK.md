@@ -684,16 +684,17 @@ jinlin-agent run --workspace /tmp/repo -t "修复失败测试"
 
 ## Rescue interrupted-cleanup quarantine classification
 
-`rescue inspect` and `rescue clean` classify quarantine files left by interrupted cleanup. This is read-only and never restores or deletes data:
+`rescue inspect`, `rescue clean`, and `rescue quarantine inspect` classify quarantine files left by interrupted cleanup. Inspection is read-only and never restores or deletes data:
 
 - `safe-to-restore`: the former path is free and the quarantine matches a manifest-bound Rescue identity plus SHA-256, or a deterministic restore-stage path plus the Rescue SHA-256.
+- `already-restored`: the former path contains the verified recovery copy and its recorded manifest/stage identity is consistent.
 - `target-conflict`: the former path is occupied; a no-clobber restoration must not overwrite it.
 - `identity-mismatch`: content or recorded Rescue identity does not match.
 - `ambiguous`: multiple verified quarantine objects claim one former path.
 - `legacy-unverified`: an older manifest lacks SHA-256 evidence.
 - `unrecognized`: no manifest-backed Rescue or stage association can be established.
 
-This is evidence classification only. Automatic quarantine restoration is not exposed. The audit log is supporting diagnostic evidence, not the authority for file identity. Any later apply operation must revalidate under the workspace lock and publish with no-clobber semantics; same-privilege path races and platform durability limits remain explicit constraints.
+Automatic mutation is never performed by inspection. The separate `rescue quarantine recover` command defaults to a dry-run and requires explicit `--apply` to restore verified evidence. Apply revalidates under the workspace lock and publishes with no-clobber semantics. The audit log is supporting diagnostic evidence, not the authority for file identity; same-privilege path races and platform durability limits remain explicit constraints.
 
 
 ## Recovering interrupted Rescue cleanup quarantines
