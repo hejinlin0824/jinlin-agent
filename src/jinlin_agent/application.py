@@ -179,6 +179,12 @@ class ApplicationService:
                 "level": verification.get("level"),
                 "status": verification.get("status"),
             })
+        elif etype == "session.waiting_user":
+            question = payload.get("question")
+            if isinstance(question, str):
+                result["question"] = question[:2000]
+            elif isinstance(question, dict):
+                result["question"] = str(question.get("question") or question.get("text") or "")[:2000]
         elif etype in ("session.failed", "session.cancelled"):
             result["error_code"] = (payload.get("error") or {}).get("code")
         return result
