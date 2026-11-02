@@ -288,4 +288,4 @@ Windows 一键验收：
 .\test-all.bat
 ```
 
-也可以在 PowerShell 中运行 `.scripts\test-all.ps1`。脚本会安装 editable dev 依赖、执行全量 pytest、Harness eval，并在系统临时目录创建隔离工作区执行 Rescue 生命周期 smoke test。不会在当前仓库里创建或删除测试 Rescue 文件。日志写入系统临时目录。
+也可以在 PowerShell 中运行 `./scripts/test-all.ps1`。脚本会安装 editable dev 依赖、执行全量 pytest、Harness eval、Rescue 生命周期 smoke test 和故障注入矩阵。故障矩阵可单独运行：`python scripts/test-rescue-fault-matrix.py`。测试只在 pytest 临时目录创建隔离工作区，不会在当前仓库里创建或删除测试 Rescue 文件。日志写入系统临时目录。
