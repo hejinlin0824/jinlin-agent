@@ -100,7 +100,7 @@ async function refreshTask(c){
   else if(t.status==="completed")reply=s.completion_summary||"任务已完成。";
   else if(t.status==="failed")reply="任务执行失败，请展开开发者详情查看事件记录。";
   else if(t.status==="waiting_user")reply="我需要你补充一点信息才能继续。";
-  else reply="我正在处理这个任务。"+(recent?"\n\n"+recent:"");
+  else reply=t.stream_text||("我正在处理这个任务。"+(recent?"\n\n"+recent:""));
   updateAssistant(c,reply,statusText(t.status));
  }
  if(c.id===state.activeId){
