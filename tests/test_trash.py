@@ -1054,6 +1054,170 @@ def test_rescue_inspect_cli_explains_quarantine_without_mutating_evidence(tmp_pa
     assert (audit_path.read_bytes() if audit_path.exists() else None) == audit_before
 
 
+
+def test_quarantine_recovery_dry_run_is_strictly_read_only(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"quarantine restore dry-run"
+    rescue = _mk_trash(tmp_path, ".dry.py.jinlin-rescue-b1b2c3d4", payload)
+    record_trash(tmp_path, rescue, "dry.py", "rescue")
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-10101010")
+    os.replace(rescue, quarantine)
+    audit_path = tmp_path / trash_mod.AUDIT_REL
+    before_audit = audit_path.read_bytes() if audit_path.exists() else None
+    before_manifest = (tmp_path / trash_mod.MANIFEST_REL).read_bytes()
+    before_quarantine = quarantine.read_bytes()
+
+    report = trash_mod.recover_clean_quarantines(tmp_path, apply=False)
+
+    assert report["status"] == "dry-run"
+    assert report["items"][0]["classification"] == "safe-to-restore"
+    assert not rescue.exists()
+    assert quarantine.read_bytes() == before_quarantine
+    assert (tmp_path / trash_mod.MANIFEST_REL).read_bytes() == before_manifest
+    assert (audit_path.read_bytes() if audit_path.exists() else None) == before_audit
+
+
+def test_quarantine_recovery_restores_independent_rescue_and_preserves_evidence(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"independent quarantine evidence"
+    rescue = _mk_trash(tmp_path, ".independent.py.jinlin-rescue-b1b2c3d5", payload)
+    record_trash(tmp_path, rescue, "independent.py", "rescue")
+    original_identity = os.stat(rescue)
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-10101011")
+    os.replace(rescue, quarantine)
+
+    report = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+
+    assert report["status"] == "applied"
+    assert report["blocked"] == []
+    assert report["recovered"][0]["status"] == "already-restored"
+    assert rescue.read_bytes() == payload
+    assert quarantine.read_bytes() == payload
+    assert os.stat(rescue).st_ino != os.stat(quarantine).st_ino
+    listed = trash_mod.list_rescue(tmp_path)
+    assert [item["path"] for item in listed["rescued"]] == [rescue.name]
+    inspected = trash_mod.inspect_rescue(tmp_path)
+    assert inspected["quarantined"][0]["classification"] == "already-restored"
+    assert os.stat(quarantine).st_ino == original_identity.st_ino
+
+
+def test_quarantine_recovery_restores_stage_then_normal_recovery_publishes_target(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"quarantined restore stage"
+    rescue = _mk_trash(tmp_path, ".stage-recover.py.jinlin-rescue-b1b2c3d6", payload)
+    record_trash(tmp_path, rescue, "stage-recover.py", "rescue")
+    target = tmp_path / "stage-recover.py"
+    target.write_bytes(payload)
+    stage = trash_mod._restore_stage_path(target, sha(payload))
+    stage.write_bytes(payload)
+    quarantine = stage.with_name(f".{stage.name}.jinlin-clean-10101012")
+    os.replace(stage, quarantine)
+
+    report = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+
+    assert report["status"] == "applied"
+    assert stage.read_bytes() == payload
+    assert quarantine.read_bytes() == payload
+    recovered = trash_mod.recover_rescue(tmp_path)
+    assert recovered["items"][0]["status"] == "already-published"
+    assert target.read_bytes() == payload
+
+
+def test_quarantine_recovery_refuses_conflict_tampering_ambiguity_and_legacy(tmp_path):
+    import os
+    import json
+    import jinlin_agent.trash as trash_mod
+
+    # Occupied target: never overwrite.
+    conflict = _mk_trash(tmp_path, ".conflict.py.jinlin-rescue-b1b2c3d7", b"expected")
+    record_trash(tmp_path, conflict, "conflict.py", "rescue")
+    conflict_q = conflict.with_name(f".{conflict.name}.jinlin-clean-10101013")
+    os.replace(conflict, conflict_q)
+    conflict.write_bytes(b"external")
+    # Tampered quarantine.
+    tampered = _mk_trash(tmp_path, ".tamper-q.py.jinlin-rescue-b1b2c3d8", b"original")
+    record_trash(tmp_path, tampered, "tamper-q.py", "rescue")
+    tampered_q = tampered.with_name(f".{tampered.name}.jinlin-clean-10101014")
+    os.replace(tampered, tampered_q)
+    tampered_q.write_bytes(b"changed")
+    # Ambiguous duplicate claim.
+    duplicate = _mk_trash(tmp_path, ".duplicate-q.py.jinlin-rescue-b1b2c3d9", b"duplicate")
+    record_trash(tmp_path, duplicate, "duplicate-q.py", "rescue")
+    duplicate_q = duplicate.with_name(f".{duplicate.name}.jinlin-clean-10101015")
+    duplicate_q2 = duplicate.with_name(f".{duplicate.name}.jinlin-clean-10101016")
+    os.replace(duplicate, duplicate_q)
+    os.link(duplicate_q, duplicate_q2)
+    # Legacy record without SHA-256.
+    legacy = _mk_trash(tmp_path, ".legacy-q.py.jinlin-rescue-b1b2c3e0", b"legacy")
+    record_trash(tmp_path, legacy, "legacy-q.py", "rescue")
+    manifest_path = tmp_path / trash_mod.MANIFEST_REL
+    entries = [json.loads(line) for line in manifest_path.read_text(encoding="utf-8").splitlines()]
+    for entry in entries:
+        if entry["path"] == legacy.name:
+            entry["identity"].pop("sha256", None)
+    manifest_path.write_text("".join(json.dumps(entry) + "\\n" for entry in entries), encoding="utf-8")
+    legacy_q = legacy.with_name(f".{legacy.name}.jinlin-clean-10101017")
+    os.replace(legacy, legacy_q)
+
+    report = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+
+    assert report["status"] == "attention-required"
+    assert conflict.read_bytes() == b"external"
+    assert tampered_q.read_bytes() == b"changed"
+    assert duplicate_q.exists() and duplicate_q2.exists()
+    assert legacy_q.read_bytes() == b"legacy"
+    assert not tampered.exists() and not duplicate.exists() and not legacy.exists()
+    statuses = {item.get("classification", item.get("status")) for item in report["blocked"]}
+    assert "target-conflict" in statuses
+    assert "identity-mismatch" in statuses
+    assert "ambiguous" in statuses
+    assert "legacy-unverified" in statuses
+
+
+def test_quarantine_recovery_resumes_partial_stage_without_overwrite(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"resume this interrupted quarantine stage"
+    rescue = _mk_trash(tmp_path, ".resume.py.jinlin-rescue-b1b2c3e1", payload)
+    record_trash(tmp_path, rescue, "resume.py", "rescue")
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-10101018")
+    os.replace(rescue, quarantine)
+    stage = trash_mod._quarantine_restore_stage_path(rescue, sha(payload))
+    stage.write_bytes(payload[:9])
+
+    report = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+
+    assert report["status"] == "applied"
+    assert rescue.read_bytes() == payload
+    assert stage.exists() is False
+    assert quarantine.read_bytes() == payload
+
+
+def test_quarantine_recovery_cli_requires_explicit_apply_and_supports_json(tmp_path, capsys):
+    import os
+    import json
+    from jinlin_agent.cli import main
+    payload = b"quarantine cli"
+    rescue = _mk_trash(tmp_path, ".cli-q.py.jinlin-rescue-b1b2c3e2", payload)
+    record_trash(tmp_path, rescue, "cli-q.py", "rescue")
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-10101019")
+    os.replace(rescue, quarantine)
+
+    assert main(["rescue", "quarantine", "inspect", "--workspace", str(tmp_path), "--json"]) == 2
+    inspected = json.loads(capsys.readouterr().out)
+    assert inspected["counts"]["safe_to_restore"] == 1
+    assert main(["rescue", "quarantine", "recover", "--workspace", str(tmp_path), "--json"]) == 0
+    dry = json.loads(capsys.readouterr().out)
+    assert dry["status"] == "dry-run" and not rescue.exists()
+    assert main(["rescue", "quarantine", "recover", "--apply", "--workspace", str(tmp_path), "--json"]) == 0
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["status"] == "applied"
+    assert rescue.read_bytes() == payload and quarantine.read_bytes() == payload
+
+
 def test_rescue_inspect_cli_json_emits_machine_readable_classification(tmp_path, capsys):
     import json
     import os
