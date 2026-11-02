@@ -56,6 +56,12 @@ class ToolContext:
     processes: dict[str, Any] = field(default_factory=dict)
     log: Callable[[str], None] = lambda msg: None
 
+    def __post_init__(self) -> None:
+        # Optional callbacks may be passed explicitly as None by service
+        # adapters. Keep the ToolContext contract callable in every case.
+        if self.log is None:
+            self.log = lambda msg: None
+
     # ------------------------------------------------------------------ paths
 
     def resolve(self, path: str, must_exist: bool = False) -> Path:
