@@ -1304,6 +1304,32 @@ def test_quarantine_recovery_does_not_claim_unrelated_same_bytes_target(tmp_path
     assert report["blocked"][0]["classification"] == "target-conflict"
 
 
+
+def test_quarantine_recovery_revalidates_identity_when_racing_same_bytes_target(tmp_path, monkeypatch):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"racing writer chose identical bytes"
+    rescue = _mk_trash(tmp_path, ".same-race.py.jinlin-rescue-b1b2c3e9", payload)
+    record_trash(tmp_path, rescue, "same-race.py", "rescue")
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-10101026")
+    os.replace(rescue, quarantine)
+    real_link = trash_mod.os.link
+
+    def race_same_bytes(source, destination, *args, **kwargs):
+        if Path(destination) == rescue and "jinlin-quarantine-restore-" in Path(source).name:
+            rescue.write_bytes(payload)
+            raise FileExistsError(str(rescue))
+        return real_link(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(trash_mod.os, "link", race_same_bytes)
+    report = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+
+    assert report["status"] == "attention-required"
+    assert report["blocked"][0]["status"] == "conflict"
+    assert rescue.read_bytes() == payload and quarantine.read_bytes() == payload
+    assert os.stat(rescue).st_ino != os.stat(quarantine).st_ino
+
+
 def test_quarantine_recovery_refuses_to_share_quarantine_inode(tmp_path):
     import os
     import jinlin_agent.trash as trash_mod
