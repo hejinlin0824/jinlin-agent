@@ -454,7 +454,7 @@ class ContextBuilder:
 
     def _render_frame(self, blocks: list[ContextBlock], state: Any) -> str:
         parts = [b.content for b in blocks if b.source in ("task", "status")]
-        plan = [b.content for b in blocks if b.source == "plan"]
+        plan = [] if self.read_only else [b.content for b in blocks if b.source == "plan"]
         rest = [b for b in blocks if b.source not in ("task", "status", "plan")]
         out = ["# Working context", "", *parts, "", *plan, ""]
         for block in sorted(rest, key=lambda b: -b.priority):

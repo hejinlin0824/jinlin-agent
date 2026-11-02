@@ -94,6 +94,7 @@ class SessionManager:
                 "config_hash": config.effective_hash(),
                 "started_at": utcnow_iso(),
                 "sandbox_level": getattr(sandbox, "level", "L0"),
+                "read_only": bool(read_only),
                 "source_configs": config.sources,
             },
         )

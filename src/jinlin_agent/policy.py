@@ -279,12 +279,18 @@ class PolicyEngine:
     # ------------------------------------------------------------------ tool
 
     def evaluate(self, tool_name: str, side_effect: str, args: dict[str, Any], tool_call_id: str = "") -> PolicyDecision:
-        if self.read_only and side_effect not in (SideEffect.READ.value, SideEffect.NONE.value):
+        if self.read_only and not (
+            side_effect == SideEffect.READ.value or tool_name == "request_user_input"
+        ):
             return PolicyDecision(
                 allowed=False,
                 risk=RiskLevel.HIGH.value,
                 reason="read-only session",
-                error=AgentError(COMMAND_DENIED, "session is read-only; this operation needs write access", source="policy"),
+                error=AgentError(
+                    COMMAND_DENIED,
+                    "session is read-only; only observational tools and user clarification are allowed",
+                    source="policy",
+                ),
             )
         if side_effect in (SideEffect.READ.value, SideEffect.NONE.value):
             return self._check_reads(tool_name, args)

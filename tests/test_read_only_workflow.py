@@ -109,3 +109,21 @@ def test_read_only_session_creation_skips_baseline_capture(tmp_path, monkeypatch
         assert "read-only session" in session.state.baseline["reason"]
     finally:
         session.close()
+
+
+def test_read_only_policy_rejects_session_workflow_mutations_but_allows_clarification(tmp_path):
+    from jinlin_agent.policy import PolicyEngine
+
+    config = SimpleNamespace(
+        workspace={"follow_symlinks": False, "allow_write": True, "allow_delete": False},
+        approval={},
+    )
+    policy = PolicyEngine(config, tmp_path, read_only=True)
+
+    plan = policy.evaluate("update_plan", SideEffect.NONE.value, {})
+    completion = policy.evaluate("propose_completion", SideEffect.NONE.value, {})
+    question = policy.evaluate("request_user_input", SideEffect.NONE.value, {})
+
+    assert not plan.allowed
+    assert not completion.allowed
+    assert question.allowed

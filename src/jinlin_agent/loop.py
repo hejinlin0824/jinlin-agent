@@ -110,7 +110,11 @@ class Harness:
             read_only=self.read_only,
         )
         self.history: list[Message] = self._restore_history()
-        self.progress_callback("项目环境已就绪，正在准备任务上下文…")
+        self.progress_callback(
+            "只读会话已就绪，正在准备首次请求…"
+            if self.read_only
+            else "项目环境已就绪，正在准备任务上下文…"
+        )
         self.invalid_decisions = 0
         self.turns = 0
         self._started = time.monotonic()
