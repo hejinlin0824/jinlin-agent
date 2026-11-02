@@ -110,3 +110,10 @@ The initial verification planner is deterministic over the recorded changed-file
 - If an optional check is actually run and fails, the completion gate does not ignore that failure.
 
 This is an incremental compatibility layer, not the final persisted TaskContract API. Workbench request validation, durable contract snapshots, approval scopes and resume semantics remain follow-up work under WP-2.2/WP-2.3.
+
+
+### WP-2.1 lifecycle implementation note
+
+The current slice now persists the immutable task contract in the `session.created` event and restores it from the event log when a session is resumed. The Workbench task status path is guarded by a shared transition function: queued → running → waiting_approval / waiting_user → running → terminal; terminal states cannot be resurrected. This is the Workbench task lifecycle only; the richer Session phase model remains a separate projection over the durable session event log.
+
+The existing `read_only` argument is still supported as a compatibility adapter. New callers should pass a `TaskContract`. Contract snapshots are versioned so a later durable task store can migrate them explicitly.

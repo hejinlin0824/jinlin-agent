@@ -166,7 +166,7 @@ class WorkbenchTaskManager:
                 task.error = {"code": exc.code, "message": _safe_approval_summary(exc.message)[:1000]}
         except Exception:
             with self._condition:
-                task.status = "failed"
+                task.status = transition_task_status(task.status, "failed")
                 task.progress = "任务执行失败"
                 task.error = {"code": "INTERNAL_ERROR", "message": "task execution failed; inspect the session event log"}
         finally:
@@ -191,7 +191,7 @@ class WorkbenchTaskManager:
             task._approval_decision = decision
             task._approval_note = "approved in local Workbench" if decision != "denied" else "denied in local Workbench"
             task.pending_approval = None
-            task.status = "running"
+            task.status = transition_task_status(task.status, "running")
             self._condition.notify_all()
         return self.get(task_id)
 

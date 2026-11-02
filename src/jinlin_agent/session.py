@@ -14,6 +14,7 @@ from .domain import Status, utcnow_iso
 from .errors import SESSION_CORRUPTED, AgentError
 from .events import EventLog, new_session_id, read_events
 from .state import SessionState, recover
+from .task_contract import TaskContract
 from .verify import detect_project
 
 

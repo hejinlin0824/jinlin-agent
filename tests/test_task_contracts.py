@@ -103,3 +103,21 @@ def test_task_lifecycle_rejects_resurrection_from_terminal_state():
         transition_task_status("completed", "running")
     with pytest.raises(ValueError, match="invalid task status transition"):
         transition_task_status("failed", "completed")
+
+
+def test_session_recovery_restores_the_original_task_contract():
+    from jinlin_agent.state import recover
+
+    contract = TaskContract.legacy(read_only=True)
+    state = recover([{
+        "seq": 1,
+        "ts": "2026-11-03T00:00:00Z",
+        "type": "session.created",
+        "payload": {
+            "session_id": "sess_20261103_000000_abcdef",
+            "workspace": ".",
+            "request": "inspect",
+            "task_contract": contract.to_dict(),
+        },
+    }])
+    assert TaskContract.from_dict(state.task_contract) == contract
