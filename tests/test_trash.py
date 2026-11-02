@@ -1052,3 +1052,21 @@ def test_rescue_inspect_cli_explains_quarantine_without_mutating_evidence(tmp_pa
     assert 'classification=safe-to-restore' in output
     assert rescue.exists() is False and quarantine.read_bytes() == payload
     assert (audit_path.read_bytes() if audit_path.exists() else None) == audit_before
+
+
+def test_rescue_inspect_cli_json_emits_machine_readable_classification(tmp_path, capsys):
+    import json
+    import os
+    import jinlin_agent.trash as trash_mod
+    from jinlin_agent.cli import main
+    payload = b'json quarantine evidence'
+    rescue = _mk_trash(tmp_path, '.json.py.jinlin-rescue-a1b2c3e1', payload)
+    record_trash(tmp_path, rescue, 'json.py', 'rescue')
+    quarantine = rescue.with_name(f'.{rescue.name}.jinlin-clean-01020312')
+    os.replace(rescue, quarantine)
+    assert main(['rescue', 'inspect', '--workspace', str(tmp_path), '--json']) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report['status'] == 'attention-required'
+    assert report['counts']['quarantine_safe_to_restore'] == 1
+    assert report['quarantined'][0]['classification'] == 'safe-to-restore'
+    assert quarantine.read_bytes() == payload and not rescue.exists()
