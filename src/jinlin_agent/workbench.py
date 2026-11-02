@@ -40,6 +40,7 @@ class WorkbenchTask:
     error: dict[str, str] | None = None
     pending_approval: dict[str, Any] | None = None
     stream_text: str = ""
+    progress: str = "正在排队…"
     created_thread: threading.Thread | None = field(default=None, repr=False)
 
 
@@ -78,11 +79,18 @@ class WorkbenchTaskManager:
     def _run(self, task: WorkbenchTask) -> None:
         with self._condition:
             task.status = "running"
+            task.progress = "正在启动本地 Agent…"
             self._condition.notify_all()
 
         def on_session(session: Any, _sandbox: Any) -> None:
             with self._condition:
                 task.session_id = session.id
+                task.progress = "会话已创建，正在初始化项目环境…"
+                self._condition.notify_all()
+
+        def on_progress(message: str) -> None:
+            with self._condition:
+                task.progress = str(message or "")[:500]
                 self._condition.notify_all()
 
         def on_text_delta(delta: str) -> None:
@@ -122,16 +130,20 @@ class WorkbenchTaskManager:
                 approval_handler=approve,
                 on_session=on_session,
                 stream_callback=on_text_delta,
+                progress_callback=on_progress,
             )
             with self._condition:
                 task.status = "waiting_user" if status == "waiting_user" else status
+                task.progress = "任务已结束" if task.status in ("completed", "failed", "waiting_user", "cancelled") else task.progress
         except AgentError as exc:
             with self._condition:
                 task.status = "failed"
+                task.progress = "任务执行失败"
                 task.error = {"code": exc.code, "message": _safe_approval_summary(exc.message)[:1000]}
         except Exception:
             with self._condition:
                 task.status = "failed"
+                task.progress = "任务执行失败"
                 task.error = {"code": "INTERNAL_ERROR", "message": "task execution failed; inspect the session event log"}
         finally:
             with self._condition:
@@ -178,5 +190,6 @@ class WorkbenchTaskManager:
             "session_id": task.session_id or None,
             "error": task.error,
             "stream_text": task.stream_text,
+            "progress": task.progress,
             "pending_approval": dict(task.pending_approval) if task.pending_approval else None,
         }
