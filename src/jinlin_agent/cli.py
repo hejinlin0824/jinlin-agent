@@ -32,6 +32,11 @@ def _print(msg: str = "") -> None:
     print(msg, flush=True)
 
 
+def _print_error(msg: str) -> None:
+    """Write a CLI diagnostic to stderr without changing the normal output helper."""
+    print(msg, file=sys.stderr, flush=True)
+
+
 # --------------------------------------------------------------------------- approval ui
 
 
@@ -142,7 +147,7 @@ def cmd_run(args: Any) -> int:
         except (EOFError, KeyboardInterrupt):
             return 3
     if not task:
-        _print("[error] empty task", file=sys.stderr)
+        _print_error("[error] empty task")
         return 4
 
     from .application import ApplicationService
@@ -268,7 +273,7 @@ def cmd_trace(args: Any) -> int:
     try:
         events = service.trace(args.session_id, tail=args.tail, include_other_workspaces=True)
     except AgentError:
-        _print("[error] unknown session", file=sys.stderr)
+        _print_error("[error] unknown session")
         return 4
     for evt in events:
         payload = evt.get("payload") or {}
@@ -311,7 +316,7 @@ def cmd_stats(args: Any) -> int:
     try:
         payload = service.stats(args.session_id, include_other_workspaces=True)
     except AgentError:
-        _print("[error] no events or unknown session", file=sys.stderr)
+        _print_error("[error] no events or unknown session")
         return 4
     _print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -492,14 +497,24 @@ def cmd_rescue(args: Any) -> int:
 def cmd_serve(args: Any) -> int:
     from .web import create_server
 
-    server, _service, token = create_server(
-        Path(args.workspace or ".").expanduser().resolve(),
-        host=args.host,
-        port=args.port,
-    )
+    workspace = Path(args.workspace or ".").expanduser().resolve()
+    try:
+        server, _service, token = create_server(
+            workspace,
+            host=args.host,
+            port=args.port,
+        )
+    except OSError as exc:
+        raise AgentError(
+            "SERVER_START_FAILED",
+            f"cannot bind workbench server to {args.host}:{args.port}: {exc}",
+            source="cli",
+        ) from exc
+    except ValueError as exc:
+        raise AgentError("CONFIG_INVALID", str(exc), source="cli") from exc
     host, port = server.server_address[:2]
     _print("Jinlin Agent local workbench API")
-    _print(f"workspace: {Path(args.workspace or '.').expanduser().resolve()}")
+    _print(f"workspace: {workspace}")
     _print(f"listening: http://[{host}]:{port}" if ":" in str(host) else f"listening: http://{host}:{port}")
     _print("API: /api/v1/health, /api/v1/doctor, /api/v1/sessions")
     _print("Authorization: Bearer <token> (token shown once below)")
@@ -643,7 +658,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(args.func(args))
     except AgentError as exc:
-        _print(f"[error] {exc.code}: {exc.message}", file=sys.stderr)
+        _print_error(f"[error] {exc.code}: {exc.message}")
         return 4
     except BrokenPipeError:
         return 0
