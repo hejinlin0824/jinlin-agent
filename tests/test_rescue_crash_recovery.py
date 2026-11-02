@@ -339,7 +339,9 @@ def test_first_audit_append_fsyncs_the_new_audit_directory_entry(tmp_path, monke
         rescue=".audit.py.jinlin-rescue-c0ffee04", target="audit.py", sha256="e" * 64,
     )
     assert ok and warning is None
-    assert calls == [tmp_path / ".jinlin"]
+    assert calls == [tmp_path, tmp_path / ".jinlin"], (
+        "sync the workspace entry for .jinlin before syncing the new audit entry"
+    )
     audit = trash._read_audit(tmp_path)
     assert audit["issues"] == []
     assert len(audit["events"]) == 1
@@ -355,9 +357,11 @@ def test_first_audit_append_reports_directory_sync_failure(tmp_path, monkeypatch
         rescue=".audit-sync.py.jinlin-rescue-c0ffee05", target="audit-sync.py", sha256="1" * 64,
     )
     assert not ok
-    assert "directory entry could not be synced" in warning
-    # The event bytes may be present, but the caller is told durability is
-    # uncertain and must not claim a fully durable audit commit.
+    assert "audit parent directory could not be synced before append" in warning
+    # The workspace directory sync is a prerequisite. If it fails, the audit
+    # event must not be created or appended at all.
+    audit_path = tmp_path / trash.AUDIT_REL
+    assert not audit_path.exists()
     audit = trash._read_audit(tmp_path)
     assert audit["issues"] == []
-    assert len(audit["events"]) == 1
+    assert audit["events"] == []
