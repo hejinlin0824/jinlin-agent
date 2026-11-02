@@ -138,7 +138,7 @@ button,input,textarea{font:inherit}button{cursor:pointer;border:1px solid #34445
   }
   async function loadTasks() {
     const tasks=await api("/api/v1/tasks");
-    if(!activeTask && tasks.length) activeTask=tasks[0].task_id;
+    if(!activeTask && !selectedSession && tasks.length) activeTask=tasks[0].task_id;
     if(!activeTask) return;
     const task=await api("/api/v1/tasks/"+encodeURIComponent(activeTask));
     $("taskStatus").textContent=task.status;
