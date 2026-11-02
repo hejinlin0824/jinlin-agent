@@ -360,7 +360,7 @@ def record_trash(workspace: Path, trash_path: Path, orig_rel: str, kind: str) ->
             existing = path.read_bytes()
         except FileNotFoundError:
             existing = b""
-        if existing and not existing.endswith(b"\\n"):
+        if existing and not existing.endswith(b"\n"):
             return False
         for line in existing.splitlines():
             if not line.strip():
@@ -372,7 +372,7 @@ def record_trash(workspace: Path, trash_path: Path, orig_rel: str, kind: str) ->
             "path": rel, "name": trash_path.name, "orig": orig_rel, "kind": kind,
             "identity": identity, "transaction_id": uuid.uuid4().hex, "ts": utcnow_iso(),
         }
-        encoded = (json.dumps(record, ensure_ascii=False) + "\\n").encode("utf-8")
+        encoded = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
         created = False
         flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -436,7 +436,7 @@ def _write_manifest_atomic(workspace: Path, entries: dict[str, dict[str, Any]]) 
     except OSError:
         return False
     if existing:
-        if not existing.endswith(b"\\n"):
+        if not existing.endswith(b"\n"):
             return False
         try:
             for line in existing.splitlines():
@@ -457,7 +457,7 @@ def _write_manifest_atomic(workspace: Path, entries: dict[str, dict[str, Any]]) 
             0o600,
         )
         for entry in entries.values():
-            view = memoryview((json.dumps(entry, ensure_ascii=False) + "\\n").encode("utf-8"))
+            view = memoryview((json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
             while view:
                 count = os.write(fd, view)
                 if count <= 0:
