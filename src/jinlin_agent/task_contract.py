@@ -65,6 +65,7 @@ class TaskContract:
             frozenset({
                 Capability.READ, Capability.WRITE, Capability.EXECUTE,
                 Capability.USER_INPUT, Capability.APPROVAL, Capability.WORKFLOW,
+                Capability.NETWORK, Capability.DELETE,
             }),
             VerificationProfile.CODE,
         )
@@ -103,6 +104,37 @@ class TaskContract:
             "verification_profile": self.verification_profile.value,
             "workspace_scope": self.workspace_scope,
         }
+
+
+class TaskStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
+    WAITING_USER = "waiting_user"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+_TASK_TRANSITIONS = {
+    TaskStatus.QUEUED: {TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.CANCELLED},
+    TaskStatus.RUNNING: {TaskStatus.WAITING_APPROVAL, TaskStatus.WAITING_USER, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED},
+    TaskStatus.WAITING_APPROVAL: {TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.CANCELLED},
+    TaskStatus.WAITING_USER: {TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.CANCELLED},
+    TaskStatus.COMPLETED: set(),
+    TaskStatus.FAILED: set(),
+    TaskStatus.CANCELLED: set(),
+}
+
+
+def transition_task_status(current: str | TaskStatus, target: str | TaskStatus) -> str:
+    source = TaskStatus(current)
+    destination = TaskStatus(target)
+    if destination == source:
+        return destination.value
+    if destination not in _TASK_TRANSITIONS[source]:
+        raise ValueError(f"invalid task status transition: {source.value} -> {destination.value}")
+    return destination.value
 
 
 @dataclass(frozen=True)

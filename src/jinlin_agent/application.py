@@ -246,7 +246,7 @@ class ApplicationService:
         # startup work. PolicyEngine still rejects every non-read side effect.
         sandbox = NullSandbox(str(self.workspace)) if read_only else create_sandbox(self.workspace, self.config)
         session = SessionManager.create(
-            self.config, self.workspace, task.strip(), sandbox, read_only=read_only
+            self.config, self.workspace, task.strip(), sandbox, read_only=read_only, task_contract=task_contract
         )
         try:
             if on_session:
@@ -305,6 +305,8 @@ class ApplicationService:
         previous = recover(events)
         if str(Path(previous.workspace or "").resolve()) != str(self.workspace):
             raise AgentError("SESSION_NOT_FOUND", "session does not belong to this workspace", source="application")
+        task_contract = TaskContract.from_dict(previous.task_contract) if previous.task_contract else TaskContract.legacy(read_only=read_only)
+        read_only = task_contract.read_only
         sandbox = NullSandbox(str(self.workspace)) if read_only else create_sandbox(self.workspace, self.config)
         session = SessionManager.open(self.config, session_id, sandbox)
         try:
@@ -322,6 +324,7 @@ class ApplicationService:
                 approval_handler=approval_handler,
                 auto_approve=bool(auto_approve),
                 read_only=bool(read_only),
+                task_contract=task_contract,
                 stream_callback=stream_callback,
                 log=log,
             )

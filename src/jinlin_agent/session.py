@@ -67,7 +67,10 @@ class SessionManager:
         session_id: str | None = None,
         *,
         read_only: bool = False,
+        task_contract: TaskContract | None = None,
     ) -> Session:
+        task_contract = task_contract or TaskContract.legacy(read_only=read_only)
+        read_only = task_contract.read_only
         workspace = Path(os.path.abspath(workspace))
         sid = session_id or new_session_id()
         session_dir = config.sessions_dir / sid
@@ -95,6 +98,7 @@ class SessionManager:
                 "started_at": utcnow_iso(),
                 "sandbox_level": getattr(sandbox, "level", "L0"),
                 "read_only": bool(read_only),
+                "task_contract": task_contract.to_dict(),
                 "source_configs": config.sources,
             },
         )

@@ -83,3 +83,23 @@ def test_policy_uses_contract_capabilities_not_prompt_mode(tmp_path):
     assert not denied.allowed
     assert denied.error.code == "COMMAND_DENIED"
     assert policy.evaluate("read_file", SideEffect.READ.value, {"path": "README.md"}).allowed
+
+
+def test_task_lifecycle_allows_wait_resume_and_terminal_paths():
+    from jinlin_agent.task_contract import transition_task_status
+
+    assert transition_task_status("queued", "running") == "running"
+    assert transition_task_status("running", "waiting_approval") == "waiting_approval"
+    assert transition_task_status("waiting_approval", "running") == "running"
+    assert transition_task_status("running", "waiting_user") == "waiting_user"
+    assert transition_task_status("waiting_user", "running") == "running"
+    assert transition_task_status("running", "completed") == "completed"
+
+
+def test_task_lifecycle_rejects_resurrection_from_terminal_state():
+    from jinlin_agent.task_contract import transition_task_status
+
+    with pytest.raises(ValueError, match="invalid task status transition"):
+        transition_task_status("completed", "running")
+    with pytest.raises(ValueError, match="invalid task status transition"):
+        transition_task_status("failed", "completed")

@@ -14,8 +14,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .errors import AgentError
+from .task_contract import transition_task_status
 
-_ACTIVE = {"queued", "running", "waiting_approval"}
+_ACTIVE = {"queued", "running", "waiting_approval", "waiting_user"}
 _SECRET_FLAG = re.compile(r"(?i)(--?(?:api[-_]?key|access[-_]?token|token|password|secret|authorization))(?:=|\s+)([^\s]+)")
 _SECRET_ASSIGNMENT = re.compile(r"(?i)\b(api[-_]?key|access[-_]?token|password|secret|authorization)\s*[:=]\s*([^\s,;]+)")
 _BEARER_VALUE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
@@ -88,7 +89,7 @@ class WorkbenchTaskManager:
             return max(0, int((time.monotonic() - task.submitted_monotonic) * 1000))
 
         with self._condition:
-            task.status = "running"
+            task.status = transition_task_status(task.status, "running")
             task.progress = "正在启动本地 Agent…"
             self._condition.notify_all()
 
@@ -135,7 +136,7 @@ class WorkbenchTaskManager:
             }
             with self._condition:
                 task.pending_approval = safe_request
-                task.status = "waiting_approval"
+                task.status = transition_task_status(task.status, "waiting_approval")
                 self._condition.notify_all()
                 while task.pending_approval is not None:
                     self._condition.wait()
@@ -156,11 +157,11 @@ class WorkbenchTaskManager:
                 progress_callback=on_progress,
             )
             with self._condition:
-                task.status = "waiting_user" if status == "waiting_user" else status
+                task.status = transition_task_status(task.status, "waiting_user" if status == "waiting_user" else status)
                 task.progress = "任务已结束" if task.status in ("completed", "failed", "waiting_user", "cancelled") else task.progress
         except AgentError as exc:
             with self._condition:
-                task.status = "failed"
+                task.status = transition_task_status(task.status, "failed")
                 task.progress = "任务执行失败"
                 task.error = {"code": exc.code, "message": _safe_approval_summary(exc.message)[:1000]}
         except Exception:

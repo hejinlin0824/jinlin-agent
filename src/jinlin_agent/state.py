@@ -30,6 +30,7 @@ class SessionState:
     request: str = ""
     model: str = ""
     config_hash: str = ""
+    task_contract: dict[str, Any] = field(default_factory=dict)
     status: str = Status.CREATED.value
     phase: str = Phase.CREATED.value
     turn_index: int = 0
@@ -149,6 +150,7 @@ def _session_created(s: SessionState, p: dict[str, Any]) -> None:
     s.request = p.get("request", s.request)
     s.model = p.get("model", s.model)
     s.config_hash = p.get("config_hash", s.config_hash)
+    s.task_contract = dict(p.get("task_contract") or s.task_contract)
     s.started_at = p.get("started_at", s.started_at)
     s.status = Status.RUNNING.value
     s.phase = Phase.INITIALIZING.value
