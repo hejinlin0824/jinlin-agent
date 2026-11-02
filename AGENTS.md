@@ -30,10 +30,21 @@ sourcing, deterministic control, verification), not in the number of tools.
 10. The event log is the only truth: tolerate a torn tail, reject mid-log
     corruption and sequence gaps (`SESSION_CORRUPTED`).
 
+11. The CLI and local Workbench must call the same application service; never fork
+    a second agent loop or bypass Harness, ToolDispatcher, Approval, Sandbox, or
+    CompletionGate from an HTTP handler.
+12. The Workbench HTTP server is loopback-only, uses a random bearer token,
+    validates Host/Origin, and is bound to one fixed workspace per process.
+    Never accept a workspace path from an HTTP request.
+13. HTTP read models must be narrow projections: do not expose raw tool args,
+    tool output, secrets, or arbitrary event payloads. Keep the WP-1 API read-only.
+14. Keep the runtime dependency set empty; use the Python standard library for
+    the local HTTP server unless a future ADR explicitly approves otherwise.
+
 ## Testing
 
 ```bash
-python -m pytest -q                 # unit + probes + review regressions (64 tests)
+python -m pytest -q                 # unit + probes + review regressions
 python -m jinlin_agent eval --suite all
 ```
 
