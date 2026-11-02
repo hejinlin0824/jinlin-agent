@@ -1285,6 +1285,43 @@ def test_quarantine_recovery_target_race_is_no_clobber(tmp_path, monkeypatch):
     assert report["blocked"][0]["status"] == "conflict"
 
 
+
+def test_quarantine_recovery_does_not_claim_unrelated_same_bytes_target(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"same bytes do not prove ownership"
+    rescue = _mk_trash(tmp_path, ".same-bytes.py.jinlin-rescue-b1b2c3e7", payload)
+    record_trash(tmp_path, rescue, "same-bytes.py", "rescue")
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-10101024")
+    os.replace(rescue, quarantine)
+    rescue.write_bytes(payload)  # Same bytes, but a different unrecorded inode.
+
+    inspected = trash_mod.inspect_rescue(tmp_path)
+    assert inspected["quarantined"][0]["classification"] == "target-conflict"
+    report = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+    assert report["status"] == "attention-required"
+    assert rescue.read_bytes() == payload and quarantine.read_bytes() == payload
+    assert report["blocked"][0]["classification"] == "target-conflict"
+
+
+def test_quarantine_recovery_refuses_to_share_quarantine_inode(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b"do not share evidence inode"
+    rescue = _mk_trash(tmp_path, ".shared-inode.py.jinlin-rescue-b1b2c3e8", payload)
+    record_trash(tmp_path, rescue, "shared-inode.py", "rescue")
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-10101025")
+    os.replace(rescue, quarantine)
+    os.link(quarantine, rescue)
+
+    report = trash_mod.recover_clean_quarantines(tmp_path, apply=True)
+
+    assert report["status"] == "attention-required"
+    assert rescue.read_bytes() == payload and quarantine.read_bytes() == payload
+    assert os.stat(rescue).st_ino == os.stat(quarantine).st_ino
+    assert report["blocked"][0]["status"] == "conflict"
+
+
 def test_quarantine_recovery_rejects_non_prefix_stage_without_mutation(tmp_path):
     import os
     import jinlin_agent.trash as trash_mod
