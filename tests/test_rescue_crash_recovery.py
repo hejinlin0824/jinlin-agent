@@ -141,6 +141,7 @@ def test_real_child_process_crash_before_publish_is_reconciled_safely(
         assert not target.exists()
         inspection = trash.inspect_rescue(tmp_path)
         assert inspection["status"] == "attention-required"
+        assert inspection["counts"]["incomplete_stages"] == 1
     else:
         assert target.read_bytes() == PAYLOAD
         inspection = trash.inspect_rescue(tmp_path)
