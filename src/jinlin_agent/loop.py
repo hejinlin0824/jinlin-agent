@@ -231,6 +231,9 @@ class Harness:
         request = self._build_request(bundle.messages)
         self._tool_event("model.requested", {"request_id": request.request_id, "model": self.config.model.model})
         try:
+            if self.stream_callback:
+                # Start a fresh visible response for this model turn.
+                self.stream_callback("")
             response = self.provider.complete(request, on_text_delta=self.stream_callback)
         except AgentError as exc:
             self._tool_event("model.attempt", {"error_code": exc.code, "error_message": exc.message, "retriable": exc.retriable})
