@@ -523,7 +523,11 @@ def _inspect_clean_quarantines(workspace: Path, manifest: dict[str, dict[str, An
             continue
         digest = identity.get("sha256")
         if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest):
-            rescue_expected[rescue_rel] = {"sha256": digest, "identity": entry.get("quarantine_identity", identity)}
+            rescue_expected[rescue_rel] = {
+                "sha256": digest,
+                "identity": entry.get("quarantine_identity", identity),
+                "candidate_identity": identity,
+            }
             target, error = _safe_rescue_target(workspace, str(entry.get("orig", "")))
             if not error and target is not None:
                 stage = _restore_stage_path(target, digest)
@@ -588,12 +592,32 @@ def _inspect_clean_quarantines(workspace: Path, manifest: dict[str, dict[str, An
                     if not candidate.is_symlink():
                         try:
                             candidate_st = os.stat(candidate, follow_symlinks=False)
-                            if stat.S_ISREG(candidate_st.st_mode) and hashlib.sha256(candidate.read_bytes()).hexdigest() == expected.get("sha256"):
+                            candidate_identity = (candidate_st.st_dev, candidate_st.st_ino, candidate_st.st_size, candidate_st.st_mtime_ns)
+                            recorded_candidate = expected.get("candidate_identity") if candidate_kind == "rescue" else None
+                            identity_matches = (
+                                isinstance(recorded_candidate, dict)
+                                and candidate_identity == (
+                                    recorded_candidate.get("dev"), recorded_candidate.get("ino"),
+                                    recorded_candidate.get("size"), recorded_candidate.get("mtime_ns")
+                                )
+                            )
+                            recovery_stage = _quarantine_restore_stage_path(candidate, str(expected.get("sha256", "")))
+                            stage_matches = False
+                            if candidate_kind == "rescue" and (recovery_stage.exists() or recovery_stage.is_symlink()) and not recovery_stage.is_symlink():
+                                try:
+                                    stage_st = os.stat(recovery_stage, follow_symlinks=False)
+                                    stage_matches = _same_file_identity(candidate_st, stage_st)
+                                except OSError:
+                                    stage_matches = False
+                            rescue_already_proven = candidate_kind != "rescue" or identity_matches or stage_matches
+                            if (stat.S_ISREG(candidate_st.st_mode)
+                                    and hashlib.sha256(candidate.read_bytes()).hexdigest() == expected.get("sha256")
+                                    and rescue_already_proven):
                                 item["classification"] = "already-restored"
-                                item["reason"] = "former pathname already contains the verified bytes; recovery can reconcile metadata"
+                                item["reason"] = "former pathname already contains the verified bytes and its recovery identity is consistent"
                             else:
                                 item["classification"] = "target-conflict"
-                                item["reason"] = "former pathname is occupied by different content"
+                                item["reason"] = "former pathname is occupied by unproven or different content"
                         except OSError as exc:
                             item["classification"] = "target-conflict"
                             item["reason"] = f"former pathname is occupied and cannot be verified: {exc}"
@@ -1182,6 +1206,9 @@ def _quarantine_recover_one_locked(workspace: Path, item: dict[str, Any], manife
         if published_error or published is None or published_identity is None:
             return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict", "detail": published_error or "candidate does not match"}
         if candidate_kind == "rescue":
+            if published_identity == source_identity:
+                return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict",
+                        "detail": "candidate shares the quarantine inode; independent evidence cannot be guaranteed"}
             updated = dict(entry)
             updated["quarantine_identity"] = {
                 "dev": source_identity[0], "ino": source_identity[1], "size": source_identity[2],
