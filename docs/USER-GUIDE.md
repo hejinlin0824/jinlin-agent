@@ -78,9 +78,9 @@ git_push = "deny"
 - 用户级配置位于 `~/.jinlin-agent/config.toml`；项目级配置位于目标仓库的 `.jinlin/config.toml`。
 - 项目级配置只能收紧安全策略，不能覆盖放宽用户级限制。
 
-## 4. 本地 Web API（WP-1）
+## 4. 本地 Web API（WP-1）与任务 API（WP-2 基础）
 
-WP-1 已提供一个**仅绑定本机回环地址、只读**的 HTTP API 基座。它目前用于验证服务层、会话查询和本地访问保护；完整任务提交、审批交互和前端界面属于 WP-2/WP-3，尚未在此版本开放。
+WP-1 提供本机回环 HTTP 服务和只读会话查询。WP-2 已在此基础上增加受认证的后台任务提交、任务状态轮询和待处理审批决策 API。**当前尚未提供浏览器前端 UI**；这一增量先完成后端生命周期与安全契约。
 
 启动：
 
@@ -100,6 +100,10 @@ jinlin-agent serve --workspace "E:\codebase\your-project"
 | GET | `/sessions/{session_id}` | Bearer | 会话状态摘要 |
 | GET | `/sessions/{session_id}/events?tail=100` | Bearer | 最近事件的脱敏摘要，tail 最大 1000 |
 | GET | `/sessions/{session_id}/stats` | Bearer | 会话统计信息 |
+| GET | `/tasks` | Bearer | 最近的 Workbench 任务 |
+| GET | `/tasks/{task_id}` | Bearer | 任务状态和安全审批摘要 |
+| POST | `/tasks` | Bearer | 提交任务，默认只读 |
+| POST | `/tasks/{task_id}/approvals/decision` | Bearer | 决策当前待处理审批 |
 
 请求示例：
 
@@ -109,13 +113,24 @@ Invoke-RestMethod -Headers $headers -Uri "http://127.0.0.1:8765/api/v1/doctor"
 Invoke-RestMethod -Headers $headers -Uri "http://127.0.0.1:8765/api/v1/sessions"
 ```
 
+任务提交示例：
+
+```powershell
+$body = @{ task = "只读分析当前项目结构和测试入口"; read_only = $true } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Headers $headers -ContentType "application/json" -Body $body -Uri "http://127.0.0.1:8765/api/v1/tasks"
+```
+
+审批只接受当前任务正在等待的 approval_id；决策值为 `approved_once`、`approved_for_session` 或 `denied`。审批摘要不会把原始工具参数传给浏览器。任务执行期间可轮询 `GET /api/v1/tasks/{task_id}` 和对应的会话接口。
+
+当前限制：每个服务进程只允许一个活动任务；任务注册表暂存在内存中，服务重启后任务 ID 不保留，但会话事件日志仍然持久化。取消、恢复、回答 Agent 追问、SSE 和前端页面仍在 WP-2 后续增量中。新任务默认只读；服务端不接受自动批准参数。
+
 安全约束：
-- WP-1 只允许绑定 `127.0.0.1`、`::1` 或 `localhost`；不支持局域网/公网监听。
+- 只允许绑定 `127.0.0.1`、`::1` 或 `localhost`；不支持局域网/公网监听。
 - 除健康检查外，API 必须提供 Bearer Token；不启用 CORS，并校验 Host/Origin。
 - 服务实例固定绑定启动时指定的一个已存在工作区；浏览器请求不能传入另一个工作区路径。
 - 会话 ID 必须符合内部格式，并且事件文件必须真实位于 Jinlin sessions 目录内；不读取符号链接指向目录之外的会话文件。
 - API 只返回事件摘要，不返回原始工具参数、工具输出或任意原始事件 payload。
-- WP-1 的 HTTP API 是只读的；POST/PUT/DELETE 不会执行任务或修改文件。
+- 当前 POST 仅用于提交 Agent 任务和决策当前待处理审批；不会直接执行浏览器传入的命令或写入文件。PUT/DELETE 不支持。
 
 ## 5. 第一次使用：推荐工作流
 
