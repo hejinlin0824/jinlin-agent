@@ -941,3 +941,93 @@ def test_rescue_state_machine_flags_published_to_staged_regression():
     assert states[0]["state"] == "TRANSITION_INVALID"
     assert states[0]["transition_issues"][0]["from"] == "PUBLISHED"
     assert states[0]["transition_issues"][0]["to"] == "STAGED"
+
+
+def test_rescue_quarantine_inspect_classifies_verified_rescue_as_recoverable(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b'verified interrupted cleanup'
+    rescue = _mk_trash(tmp_path, '.recoverable.py.jinlin-rescue-a1b2c3d4', payload)
+    record_trash(tmp_path, rescue, 'recoverable.py', 'rescue')
+    quarantine = rescue.with_name(f'.{rescue.name}.jinlin-clean-01020304')
+    os.replace(rescue, quarantine)
+    item = trash_mod.inspect_rescue(tmp_path)['quarantined'][0]
+    assert item['classification'] == 'safe-to-restore'
+    assert item['candidate'] == rescue.name
+    assert item['candidate_kind'] == 'rescue'
+    assert item['sha256'] == sha(payload)
+    assert quarantine.read_bytes() == payload and not rescue.exists()
+
+
+def test_rescue_quarantine_inspect_never_marks_occupied_candidate_safe(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b'verified interrupted cleanup'
+    rescue = _mk_trash(tmp_path, '.occupied.py.jinlin-rescue-a1b2c3d5', payload)
+    record_trash(tmp_path, rescue, 'occupied.py', 'rescue')
+    quarantine = rescue.with_name(f'.{rescue.name}.jinlin-clean-01020305')
+    os.replace(rescue, quarantine)
+    rescue.write_bytes(b'new unrelated file')
+    item = trash_mod.inspect_rescue(tmp_path)['quarantined'][0]
+    assert item['classification'] == 'target-conflict'
+    assert rescue.read_bytes() == b'new unrelated file' and quarantine.read_bytes() == payload
+
+
+def test_rescue_quarantine_inspect_detects_content_tampering(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    rescue = _mk_trash(tmp_path, '.tampered.py.jinlin-rescue-a1b2c3d6', b'original')
+    record_trash(tmp_path, rescue, 'tampered.py', 'rescue')
+    quarantine = rescue.with_name(f'.{rescue.name}.jinlin-clean-01020306')
+    os.replace(rescue, quarantine)
+    quarantine.write_bytes(b'modified')
+    item = trash_mod.inspect_rescue(tmp_path)['quarantined'][0]
+    assert item['classification'] == 'identity-mismatch'
+    assert 'SHA-256' in item['reason']
+
+
+def test_rescue_quarantine_inspect_classifies_verified_restore_stage(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b'stage interrupted cleanup'
+    rescue = _mk_trash(tmp_path, '.stage.py.jinlin-rescue-a1b2c3d7', payload)
+    record_trash(tmp_path, rescue, 'stage.py', 'rescue')
+    target = tmp_path / 'stage.py'
+    target.write_bytes(payload)
+    stage = trash_mod._restore_stage_path(target, sha(payload))
+    stage.write_bytes(payload)
+    quarantine = stage.with_name(f'.{stage.name}.jinlin-clean-01020307')
+    os.replace(stage, quarantine)
+    item = trash_mod.inspect_rescue(tmp_path)['quarantined'][0]
+    assert item['classification'] == 'safe-to-restore'
+    assert item['candidate_kind'] == 'stage' and item['candidate'] == stage.name
+
+
+def test_rescue_quarantine_inspect_marks_duplicate_claims_ambiguous(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    payload = b'duplicate quarantine'
+    rescue = _mk_trash(tmp_path, '.duplicate.py.jinlin-rescue-a1b2c3d8', payload)
+    record_trash(tmp_path, rescue, 'duplicate.py', 'rescue')
+    first = rescue.with_name(f'.{rescue.name}.jinlin-clean-01020308')
+    second = rescue.with_name(f'.{rescue.name}.jinlin-clean-01020309')
+    os.replace(rescue, first)
+    os.link(first, second)
+    items = trash_mod.inspect_rescue(tmp_path)['quarantined']
+    assert len(items) == 2 and {item['classification'] for item in items} == {'ambiguous'}
+    assert first.read_bytes() == payload and second.read_bytes() == payload
+
+
+def test_rescue_quarantine_inspect_keeps_legacy_manifest_unverified(tmp_path):
+    import os
+    import jinlin_agent.trash as trash_mod
+    rescue = _mk_trash(tmp_path, '.legacy.py.jinlin-rescue-a1b2c3d9', b'legacy payload')
+    record_trash(tmp_path, rescue, 'legacy.py', 'rescue')
+    manifest_path = tmp_path / trash_mod.MANIFEST_REL
+    entry = json.loads(manifest_path.read_text(encoding='utf-8').splitlines()[-1])
+    entry['identity'].pop('sha256', None)
+    manifest_path.write_text(json.dumps(entry) + '\n', encoding='utf-8')
+    quarantine = rescue.with_name(f'.{rescue.name}.jinlin-clean-01020310')
+    os.replace(rescue, quarantine)
+    item = trash_mod.inspect_rescue(tmp_path)['quarantined'][0]
+    assert item['classification'] == 'legacy-unverified' and quarantine.exists()
