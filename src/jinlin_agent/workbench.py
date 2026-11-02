@@ -1,8 +1,8 @@
 """In-process lifecycle manager for local Workbench tasks.
 
-Tasks execute through ApplicationService; this module owns only background
-thread coordination and browser approval rendezvous. It is intentionally
-single-task-at-a-time and keeps no second agent loop or durable task database.
+Tasks execute through ApplicationService; this module owns background thread
+coordination, streamed text snapshots and browser approval rendezvous. Each task
+is independent; the registry is process-local and no second agent loop is created.
 """
 from __future__ import annotations
 
