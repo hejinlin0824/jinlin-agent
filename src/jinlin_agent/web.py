@@ -68,7 +68,7 @@ def create_server(workspace, host: str = "127.0.0.1", port: int = 8765, token: s
         def _html(self):
             page = Path(__file__).resolve().parent / "static" / "index.html"
             try:
-                body = page.read_bytes()
+                body = page.read_bytes().replace(b"__JINLIN_WORKBENCH_TOKEN__", bearer.encode("ascii"))
             except OSError:
                 self._json(404, {"error": {"code": "UI_NOT_FOUND", "message": "Workbench UI is not installed"}})
                 return
