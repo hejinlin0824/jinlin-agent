@@ -40,6 +40,7 @@ try {
     Invoke-Check "Full pytest suite" @("-m", "pytest", "-q")
     Invoke-Check "Harness evaluation (all)" @("-m", "jinlin_agent", "eval", "--suite", "all")
     Invoke-Check "Rescue lifecycle end-to-end smoke test" @("scripts/rescue_smoke.py")
+    Invoke-Check "Rescue fault-injection matrix" @("scripts/test-rescue-fault-matrix.py")
     Invoke-Check "Rescue CLI command registration" @("-m", "jinlin_agent", "rescue", "--help")
 
     Write-Host ""
