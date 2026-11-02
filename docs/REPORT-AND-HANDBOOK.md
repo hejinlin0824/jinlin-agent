@@ -7,7 +7,7 @@
 | 被评系统 | `jinlin-code-agent`（CLI：`jinlin-agent`） |
 | 版本 | 0.1.0（文档 v1.1） |
 | 对应代码提交 | 见 `git log -1`（v1.1 为独立评审整改后的提交） |
-| 文档日期 | 2026-11-01（v1.0：2026-10-31） |
+| 文档日期 | 2026-11-02（v1.0：2026-10-31） |
 | 文档性质 | 技术报告 + 产品手册二合一；供其他 AI 模型评审打分 |
 | 运行环境（实测） | Windows 11，Python 3.13.15，DeepSeek-V4.1-Flash（API id `deepseek-flash`） |
 | 基线系统 | **DeepSeek Harness（DSH）**、**ZCode** |
@@ -20,19 +20,20 @@
 
 本文主体技术分析保留其撰写时的评审数据与实验记录；其中旧测试数量、旧提交号和旧 CI 编号均为历史快照，不应被当作当前分支状态。当前可复核交付状态如下：
 
-- 仓库：`hejinlin0824/jinlin-agent`；工作分支：`review/followup-fixes`。
-- `main` 固定基线：`249bbab7d86f76f71acbf8c88000fc7971297ce6`；本次工作未修改 `main`。
-- PR #1：Draft、open、unmerged；合并决定保留给仓库所有者。
-- 主体任务包 01–06 已完成并由所有者本地验收。
-- 最终收尾包 01–04 已完成。收尾包 04 包含 README、AGENT、测试 runner、机器可读测试元数据、报告与 PR 描述的一致性收口；Windows 所有者在最新 HEAD `40c196f3564b0820a9249cbaf888052ea2436578` 上执行 `test-all.bat` 并确认 ALL CHECKS PASSED。
-- 最新 HEAD `40c196f3564b0820a9249cbaf888052ea2436578` 的 Push CI `41402450170` 与 PR CI `41402456224` 均已完成，Ubuntu 与 Windows jobs 全部 success。
-- 最终收尾包 05 为最后的发布候选审查：检查完整 diff、提交历史、测试证据、可靠性边界、分支与 PR 状态；不再扩展功能范围。
+- 仓库：`hejinlin0824/jinlin-agent`。
+- PR #1（`P2 security hardening follow-up`）已成功合并到 `main`。
+- 合并前最终整改提交：`f1af81cce992df48e110c43afdcfa26033ea6c53`；合并提交：`bcb0e39f4195b9cad89eb3052b97947bcc53781d`。
+- 主体任务包 01–06 与五个收尾包均已完成；Windows 所有者在最终整改提交上运行 `.\test-all.bat` 并确认 `ALL CHECKS PASSED`。
+- 最终整改提交的 GitHub Actions Ubuntu / Windows 双平台 CI 均成功。
+- 后续产品化工作应从最新 `main` 建立独立功能分支，不应把本次已合并的安全整改分支当作持续开发分支。
 
 当前一键验收入口为根目录 `test-all.bat`，实际执行由 `scripts/test-all.ps1` 负责；测试套件身份来自 `test-suite.json`。成功结果必须与 runner 打印的分支/提交 SHA 一起核对。CI 结果和历史文档不能替代所有者在目标 Windows 环境上的最终验收。
 
 **可靠性边界仍然有效：** 子进程崩溃测试不等于内核崩溃或物理断电测试；Windows portable Python 对目录项持久性的保证弱于 POSIX 显式目录 fsync；workspace advisory lock 只协调使用同一 lock object 的 Jinlin 操作，不约束任意外部程序或恶意同权限进程。
 
 ---
+
+📘 面向实际使用者的完整操作说明见 [docs/USER-GUIDE.md](USER-GUIDE.md)，包括安装、配置、CLI 工作流、Rescue 操作和本地 Web 工作台产品路线图。
 
 ## 0. 给评审 AI 的说明（先读这一节）
 
