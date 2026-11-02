@@ -1050,7 +1050,7 @@ def test_rescue_audit_v2_rejects_legacy_event_after_v2(tmp_path):
     legacy["event_hash"] = hashlib.sha256(
         json.dumps(legacy, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     ).hexdigest()
-    path.write_text(json.dumps(first, sort_keys=True) + "\n" + json.dumps(legacy, sort_keys=True) + "\\n", encoding="utf-8")
+    path.write_text(json.dumps(first, sort_keys=True) + "\n" + json.dumps(legacy, sort_keys=True) + "\n", encoding="utf-8")
     audit = trash_mod._read_audit(tmp_path)
     assert audit["issues"]
     assert "cannot follow version-2" in audit["issues"][0]["reason"]
