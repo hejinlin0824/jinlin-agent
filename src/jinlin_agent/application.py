@@ -223,6 +223,7 @@ class ApplicationService:
         mock_script: str | None = None,
         log: Callable[[str], None] | None = None,
         stream_callback: Callable[[str], None] | None = None,
+        progress_callback: Callable[[str], None] | None = None,
         on_session: Callable[[Any, Any], None] | None = None,
     ) -> tuple[Any, str]:
         """Run a task through the canonical Harness; caller owns presentation."""
@@ -230,6 +231,8 @@ class ApplicationService:
             raise AgentError("REQUEST_INVALID", "task must be a non-empty string", source="application")
         if not self.config.api_key() and not mock_script:
             raise AgentError("CONFIG_INVALID", f"no API key configured ({self.config.model.api_key_env})", source="application")
+        if progress_callback:
+            progress_callback("正在创建隔离环境和会话…")
         sandbox = create_sandbox(self.workspace, self.config)
         session = SessionManager.create(self.config, self.workspace, task.strip(), sandbox)
         try:
@@ -246,6 +249,7 @@ class ApplicationService:
                 auto_approve=bool(auto_approve),
                 read_only=bool(read_only),
                 stream_callback=stream_callback,
+                progress_callback=progress_callback,
                 log=log,
             )
             status = harness.run()
