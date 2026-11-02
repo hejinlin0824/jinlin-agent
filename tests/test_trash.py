@@ -1034,3 +1034,21 @@ def test_rescue_quarantine_inspect_keeps_legacy_manifest_unverified(tmp_path):
     os.replace(rescue, quarantine)
     item = trash_mod.inspect_rescue(tmp_path)['quarantined'][0]
     assert item['classification'] == 'legacy-unverified' and quarantine.exists()
+
+
+def test_rescue_inspect_cli_explains_quarantine_without_mutating_evidence(tmp_path, capsys):
+    import os
+    import jinlin_agent.trash as trash_mod
+    from jinlin_agent.cli import main
+    payload = b'cli quarantine evidence'
+    rescue = _mk_trash(tmp_path, '.cli.py.jinlin-rescue-a1b2c3e0', payload)
+    record_trash(tmp_path, rescue, 'cli.py', 'rescue')
+    quarantine = rescue.with_name(f'.{rescue.name}.jinlin-clean-01020311')
+    os.replace(rescue, quarantine)
+    audit_path = tmp_path / trash_mod.AUDIT_REL
+    audit_before = audit_path.read_bytes() if audit_path.exists() else None
+    assert main(['rescue', 'inspect', '--workspace', str(tmp_path)]) == 2
+    output = capsys.readouterr().out
+    assert 'classification=safe-to-restore' in output
+    assert rescue.exists() is False and quarantine.read_bytes() == payload
+    assert (audit_path.read_bytes() if audit_path.exists() else None) == audit_before
