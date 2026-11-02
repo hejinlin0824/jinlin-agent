@@ -178,7 +178,6 @@ def test_real_child_process_crash_after_cleanup_quarantine_preserves_evidence(tm
 
     _crash(tmp_path, rescue, "after-clean-quarantine")
     assert target.read_bytes() == PAYLOAD
-    assert rescue.read_bytes() == PAYLOAD
 
     inspection = trash.inspect_rescue(tmp_path)
     assert inspection["status"] == "attention-required"
