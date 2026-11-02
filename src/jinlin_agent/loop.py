@@ -48,6 +48,7 @@ class Harness:
         auto_approve: bool = False,
         read_only: bool = False,
         stream_callback: Callable[[str], None] | None = None,
+        progress_callback: Callable[[str], None] | None = None,
         log: Callable[[str], None] = lambda msg: None,
     ) -> None:
         self.session = session
@@ -58,6 +59,8 @@ class Harness:
         # Normalize once so both Harness and ToolContext always receive a callable.
         self.log = log if callable(log) else (lambda msg: None)
         self.stream_callback = stream_callback
+        self.progress_callback = progress_callback or (lambda message: None)
+        self.progress_callback("正在识别项目结构并加载项目说明…")
         self.harness_verifier = Verifier(
             session.workspace,
             config,
@@ -103,6 +106,7 @@ class Harness:
             project_instructions=self.project_instructions,
         )
         self.history: list[Message] = self._restore_history()
+        self.progress_callback("项目环境已就绪，正在准备任务上下文…")
         self.invalid_decisions = 0
         self.turns = 0
         self._started = time.monotonic()
@@ -214,6 +218,7 @@ class Harness:
         self.session.emit("step.started", {"step_index": state.step_index + 1, "phase": state.phase}, self.turn_id, self.step_id)
         self._advance_phase()
 
+        self.progress_callback("正在分析需求并整理相关项目上下文…")
         bundle = self.context_builder.build(state, self.history, state.request)
         self.history = list(bundle.history_kept)
         self._tool_event("context.built", bundle.to_event_payload())
@@ -230,6 +235,7 @@ class Harness:
 
         request = self._build_request(bundle.messages)
         self._tool_event("model.requested", {"request_id": request.request_id, "model": self.config.model.model})
+        self.progress_callback("正在请求模型分析，稍后会显示实时回复…")
         try:
             if self.stream_callback:
                 # Start a fresh visible response for this model turn.
@@ -292,6 +298,7 @@ class Harness:
         completion: dict[str, Any] | None = None
         user_input: dict[str, Any] | None = None
         for call in calls:
+            self.progress_callback(f"正在执行工具：{call.name}")
             dispatch = self.dispatcher.execute(call, self.turn_id, self.step_id)
             result = dispatch.result
             if result.ok:
@@ -394,6 +401,25 @@ class Harness:
         self.harness_verifier.run_ladder(levels)
 
     def _handle_text_only(self, response: Any) -> str:
+        answer = str(getattr(response, "text", "") or "").strip()
+        # Read-only investigations and ordinary engineering questions do not
+        # need a propose_completion ceremony. Once the model has answered and
+        # no workspace mutation occurred, persist that answer as the terminal
+        # session summary so the Workbench cannot keep calling tools afterward.
+        if answer and not self.state.written_files and not self.state.deleted_files:
+            self.session.emit(
+                "session.completed",
+                {
+                    "result": "completed",
+                    "summary": answer[:20_000],
+                    "report_artifact_id": None,
+                    "warnings": ["Answered without modifying workspace files."],
+                    "evidence": [],
+                },
+            )
+            self.progress_callback("已生成最终答复")
+            return "terminal"
+
         self.invalid_decisions += 1
         if self.invalid_decisions >= 3:
             self._tool_event(
@@ -422,7 +448,9 @@ class Harness:
 
     def _check_loop_guards(self) -> None:
         state = self.state
-        max_failures = int(self.config.runtime.get("max_consecutive_tool_failures", 5))
+        # Fail closed sooner: a repeated broken tool sequence should not
+        # generate a long stream of identical model/tool events.
+        max_failures = min(3, int(self.config.runtime.get("max_consecutive_tool_failures", 5)))
         max_sig = int(self.config.runtime.get("max_tool_signature_repeats", 3))
         reason = ""
         kind = ""
@@ -442,7 +470,7 @@ class Harness:
                 ),
             )
         )
-        if state.loop_events >= 3:
+        if state.loop_events >= 2:
             self._fail(AgentError("LOOP_DETECTED", reason, source="runtime"))
             return
         # reset counters so the next two rounds are fresh
