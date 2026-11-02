@@ -253,3 +253,73 @@ raise SystemExit("crash hook was not reached")
     assert trash.list_rescue(tmp_path)["rescued"][0]["path"] == rescue.name
     assert quarantine.read_bytes() == PAYLOAD
     assert os.stat(rescue).st_ino != os.stat(quarantine).st_ino
+
+
+@pytest.mark.parametrize(("crash_point", "exit_code"), [("partial", 95), ("after-fsync", 96)])
+def test_real_child_process_crash_during_audit_append_has_explicit_recovery_semantics(tmp_path, crash_point, exit_code):
+    worker = r'''
+import os
+import sys
+from pathlib import Path
+import jinlin_agent.trash as trash
+workspace = Path(sys.argv[1])
+point = sys.argv[2]
+audit_fd = None
+real_open = os.open
+real_write = os.write
+real_fsync = os.fsync
+def hooked_open(path, flags, *args, **kwargs):
+    global audit_fd
+    fd = real_open(path, flags, *args, **kwargs)
+    if Path(path).name == "rescue-audit.jsonl":
+        audit_fd = fd
+    return fd
+def hooked_write(fd, data):
+    if fd == audit_fd and point == "partial":
+        real_write(fd, data[:max(1, len(data) // 2)])
+        os._exit(95)
+    return real_write(fd, data)
+def hooked_fsync(fd):
+    real_fsync(fd)
+    if fd == audit_fd and point == "after-fsync":
+        os._exit(96)
+os.open = hooked_open
+os.write = hooked_write
+os.fsync = hooked_fsync
+trash._append_audit_event(
+    workspace, "restore", "restored", txid="a" * 32,
+    rescue=".audit-crash.py.jinlin-rescue-c0ffee03",
+    target="audit-crash.py", sha256="b" * 64,
+)
+raise SystemExit("crash hook was not reached")
+'''
+    completed = subprocess.run(
+        [sys.executable, "-c", worker, str(tmp_path), crash_point],
+        cwd=Path(__file__).resolve().parents[1],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == exit_code, (
+        f"audit child did not stop at {crash_point}; rc={completed.returncode}\n"
+        f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    )
+
+    audit = trash._read_audit(tmp_path)
+    if crash_point == "partial":
+        assert audit["events"] == []
+        assert audit["issues"]
+        ok, warning = trash._append_audit_event(tmp_path, "recover", "already-published", txid="a" * 32)
+        assert not ok and "integrity issues" in warning
+    else:
+        assert audit["issues"] == []
+        assert len(audit["events"]) == 1
+        assert audit["events"][0]["seq"] == 1
+        assert audit["events"][0]["txid"] == "a" * 32
+        ok, warning = trash._append_audit_event(tmp_path, "recover", "already-published", txid="a" * 32)
+        assert ok and warning is None
+        retried = trash._read_audit(tmp_path)
+        assert retried["issues"] == []
+        assert [event["seq"] for event in retried["events"]] == [1, 2]
