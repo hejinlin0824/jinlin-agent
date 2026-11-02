@@ -410,3 +410,10 @@ jinlin-agent clean --workspace "E:\codebase\your-project" --apply
 - [技术报告与产品手册](REPORT-AND-HANDBOOK.md)
 - [项目交接手册（AI 接手必读）](../AGENT.md)
 - [配置示例](../config.example.toml)
+
+
+### 对话完成与实时进度
+
+只读分析、项目解释和普通工程问答在证据充分后可以直接以 Markdown 答复结束，不再为了结束对话而反复要求模型调用 `propose_completion`。如果任务修改了工作区文件，仍必须经过完成门禁和验证；被截断的模型回复不会被误判为最终答复。
+
+工作台会分别显示环境初始化、项目识别、上下文整理、模型分析和工具执行等阶段。聊天区域支持常见 Markdown（标题、列表、代码块、引用、粗体、斜体和链接），并以安全的 DOM 节点渲染，不执行模型输出中的原始 HTML。
