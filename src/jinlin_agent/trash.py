@@ -155,11 +155,13 @@ def _append_audit_event(workspace: Path, action: str, status: str, **fields: Any
         if audit["issues"]:
             return False, "audit log has integrity issues; refusing to append"
         txid = fields.pop("txid", None)
-        if not isinstance(txid, str) or not re.fullmatch(r"[0-9a-f]{24,32}", txid):
+        if txid in (None, ""):
             # Compatibility path for callers and old manifest entries that
             # predate persistent transaction identifiers.
             identity = "|".join(str(fields.get(key, "")) for key in ("rescue", "target", "sha256"))
             txid = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+        elif not isinstance(txid, str) or not re.fullmatch(r"[0-9a-f]{24,32}", txid):
+            return False, "transaction id is malformed; refusing to append an uncorrelatable event"
         body = {
             "version": 2, "seq": len(audit["events"]) + 1, "event_id": uuid.uuid4().hex,
             "ts": utcnow_iso(), "txid": txid,
