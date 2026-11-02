@@ -1205,6 +1205,9 @@ def _quarantine_recover_one_locked(workspace: Path, item: dict[str, Any], manife
         published, published_identity, published_error = _read_verified_regular(candidate, digest)
         if published_error or published is None or published_identity is None:
             return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict", "detail": published_error or "candidate does not match"}
+        if published_identity == source_identity:
+            return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict",
+                    "detail": "candidate shares the quarantine inode; independent evidence cannot be guaranteed"}
         if candidate_kind == "rescue":
             recorded_candidate = entry.get("identity") if isinstance(entry, dict) else None
             recorded_matches = (
@@ -1225,9 +1228,6 @@ def _quarantine_recover_one_locked(workspace: Path, item: dict[str, Any], manife
             if not recorded_matches and not stage_matches:
                 return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict",
                         "detail": "occupied candidate has no matching manifest or recovery-stage identity"}
-            if published_identity == source_identity:
-                return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict",
-                        "detail": "candidate shares the quarantine inode; independent evidence cannot be guaranteed"}
             updated = dict(entry)
             updated["quarantine_identity"] = {
                 "dev": source_identity[0], "ino": source_identity[1], "size": source_identity[2],
