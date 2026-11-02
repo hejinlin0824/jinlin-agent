@@ -174,8 +174,19 @@ def _append_audit_event(workspace: Path, action: str, status: str, **fields: Any
         encoded = (json.dumps(body, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
         path = _audit_path(workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o600)
+        created = False
+        flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
+            fd = os.open(path, flags)
+        except FileNotFoundError:
+            try:
+                fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+                created = True
+            except FileExistsError:
+                fd = os.open(path, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError("audit log is not a regular file")
             view = memoryview(encoded)
             while view:
                 count = os.write(fd, view)
@@ -185,6 +196,10 @@ def _append_audit_event(workspace: Path, action: str, status: str, **fields: Any
             os.fsync(fd)
         finally:
             os.close(fd)
+        if created:
+            directory_sync = _fsync_directory(path.parent)
+            if directory_sync["supported"] and not directory_sync["synced"]:
+                return False, "audit file was appended and fsynced but its directory entry could not be synced: " + directory_sync["detail"]
         return True, None
     except OSError as exc:
         return False, f"audit append failed: {exc}"
@@ -330,46 +345,62 @@ def link_no_clobber(source: Path, dest: Path) -> bool:
 
 
 def record_trash(workspace: Path, trash_path: Path, orig_rel: str, kind: str) -> bool:
-    """Append a manifest entry for a trash/backup file this harness created.
-
-    The entry binds the file's **workspace-relative path** (not just its
-    basename) plus its creation fingerprint, so same-named files in different
-    directories never share a proof and replacements at the same path are
-    detectable. Best effort by design: the manifest is an ownership aid, and
-    its failure must never break the transaction that produced the trash — the
-    file then degrades to "unrecognized" (report-only) during cleanup and the
-    caller is expected to surface the returned False.
-    """
+    """Append a durable ownership record; never append behind a torn manifest."""
     rel = _relative_posix(trash_path, workspace)
     try:
-        st = os.stat(trash_path)
+        st = os.stat(trash_path, follow_symlinks=False)
+        if not stat.S_ISREG(st.st_mode):
+            return False
         identity = {"dev": st.st_dev, "ino": st.st_ino, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
         if kind == "rescue":
             identity["sha256"] = hashlib.sha256(Path(trash_path).read_bytes()).hexdigest()
-    except OSError:
-        identity = None  # no proof captured — the file degrades to report-only
-    try:
         path = _manifest_path(workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(
-                json.dumps(
-                    {
-                        "path": rel,
-                        "name": trash_path.name,
-                        "orig": orig_rel,
-                        "kind": kind,
-                        "identity": identity,
-                        "transaction_id": uuid.uuid4().hex,
-                        "ts": utcnow_iso(),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-            fh.flush()
+        try:
+            existing = path.read_bytes()
+        except FileNotFoundError:
+            existing = b""
+        if existing and not existing.endswith(b"\\n"):
+            return False
+        for line in existing.splitlines():
+            if not line.strip():
+                continue
+            parsed = json.loads(line.decode("utf-8"))
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("path"), str):
+                return False
+        record = {
+            "path": rel, "name": trash_path.name, "orig": orig_rel, "kind": kind,
+            "identity": identity, "transaction_id": uuid.uuid4().hex, "ts": utcnow_iso(),
+        }
+        encoded = (json.dumps(record, ensure_ascii=False) + "\\n").encode("utf-8")
+        created = False
+        flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags)
+        except FileNotFoundError:
+            try:
+                fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+                created = True
+            except FileExistsError:
+                fd = os.open(path, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError("manifest is not a regular file")
+            view = memoryview(encoded)
+            while view:
+                count = os.write(fd, view)
+                if count <= 0:
+                    raise OSError("manifest append made no forward progress")
+                view = view[count:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        if created:
+            directory_sync = _fsync_directory(path.parent)
+            if directory_sync["supported"] and not directory_sync["synced"]:
+                return False
         return True
-    except OSError:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return False
 
 
@@ -395,26 +426,58 @@ def _load_manifest(workspace: Path) -> dict[str, dict[str, Any]]:
 
 
 def _write_manifest_atomic(workspace: Path, entries: dict[str, dict[str, Any]]) -> bool:
-    """Rewrite the whole manifest atomically; a failure leaves the previous
-    file (and therefore all ownership records) untouched. The directory-entry
-    rename is not fsynced — power-loss durability of the rename itself is not
-    claimed (see the module docstring)."""
+    """Durably replace the manifest without discarding damaged ownership rows."""
     path = _manifest_path(workspace)
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with tmp.open("w", encoding="utf-8") as fh:
-            for entry in entries.values():
-                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-        return True
+        existing = path.read_bytes()
+    except FileNotFoundError:
+        existing = b""
     except OSError:
+        return False
+    if existing:
+        if not existing.endswith(b"\\n"):
+            return False
+        try:
+            for line in existing.splitlines():
+                if not line.strip():
+                    continue
+                parsed = json.loads(line.decode("utf-8"))
+                if not isinstance(parsed, dict) or not isinstance(parsed.get("path"), str):
+                    return False
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return False
+
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    fd = None
+    try:
+        fd = os.open(
+            tmp,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        for entry in entries.values():
+            view = memoryview((json.dumps(entry, ensure_ascii=False) + "\\n").encode("utf-8"))
+            while view:
+                count = os.write(fd, view)
+                if count <= 0:
+                    raise OSError("manifest write made no forward progress")
+                view = view[count:]
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        os.replace(tmp, path)
+        directory_sync = _fsync_directory(path.parent)
+        return not directory_sync["supported"] or directory_sync["synced"]
+    except OSError:
+        return False
+    finally:
+        if fd is not None:
+            os.close(fd)
         try:
             tmp.unlink()
         except OSError:
             pass
-        return False
 
 
 def forget_trash(workspace: Path, trash_path: Path) -> bool:
