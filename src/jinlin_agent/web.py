@@ -7,6 +7,7 @@ executes tools or writes workspace files directly.
 from __future__ import annotations
 
 import hmac
+from http.cookies import CookieError, SimpleCookie
 import ipaddress
 import json
 import secrets
@@ -68,7 +69,7 @@ def create_server(workspace, host: str = "127.0.0.1", port: int = 8765, token: s
         def _html(self):
             page = Path(__file__).resolve().parent / "static" / "index.html"
             try:
-                body = page.read_bytes().replace(b"__JINLIN_WORKBENCH_TOKEN__", bearer.encode("ascii"))
+                body = page.read_bytes()
             except OSError:
                 self._json(404, {"error": {"code": "UI_NOT_FOUND", "message": "Workbench UI is not installed"}})
                 return
@@ -77,6 +78,11 @@ def create_server(workspace, host: str = "127.0.0.1", port: int = 8765, token: s
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
+                # JavaScript never reads or stores the per-process credential.
+                self.send_header(
+                    "Set-Cookie",
+                    f"jinlin_workbench_session={bearer}; HttpOnly; SameSite=Strict; Path=/api/v1",
+                )
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Referrer-Policy", "no-referrer")
                 self.send_header("X-Frame-Options", "DENY")
@@ -106,7 +112,16 @@ def create_server(workspace, host: str = "127.0.0.1", port: int = 8765, token: s
         def _authorized(self) -> bool:
             supplied = self.headers.get("Authorization", "")
             expected = "Bearer " + bearer
-            return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+            if hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+                return True
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie", ""))
+                morsel = cookie.get("jinlin_workbench_session")
+                cookie_value = morsel.value if morsel else ""
+            except (CookieError, TypeError, ValueError):
+                cookie_value = ""
+            return hmac.compare_digest(cookie_value.encode("utf-8"), bearer.encode("utf-8"))
 
         def _mutation_guard(self) -> bool:
             if not self._origin_and_host_ok():
