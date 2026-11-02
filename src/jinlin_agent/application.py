@@ -145,6 +145,7 @@ class ApplicationService:
             ],
             "changed_files": state.diff_paths(),
             "report_available": bool(state.report_artifact_id and (directory / "report.md").is_file()),
+            "completion_summary": str((state.completion or {}).get("summary", ""))[:20_000],
             "event_count": len(events),
         }
 
