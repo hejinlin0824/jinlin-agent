@@ -94,7 +94,8 @@ async function refreshTask(c){
  const t=await api("/api/v1/tasks/"+encodeURIComponent(c.taskId));
  c.status=t.status;c.sessionId=t.session_id||c.sessionId;c.approval=t.pending_approval;c.error=t.error;
  if(!c.sessionId){
-  updateAssistant(c,t.stream_text||"正在启动本地 Agent……",statusText(t.status));
+  const startupText=t.error?("任务启动失败："+t.error.message+"（"+t.error.code+"）"):(t.stream_text||"正在启动本地 Agent……");
+  updateAssistant(c,startupText,statusText(t.status));
  }
  if(c.sessionId){
   const s=await loadSession(c);
@@ -179,7 +180,7 @@ async function loadSessionsList(){
 function newChat(){
  const c=addConversation("");
  $("messages").replaceChildren();$("welcome").style.display="block";$("task").focus();
- $("approval").classList.remove("show");$("sessionMeta").textContent="新对话";$("taskStatus").textContent="暂无任务";
+ $("approval").classList.remove("show");$("timeline").replaceChildren(node("div","empty","暂无开发者事件"));$("sessionId").textContent="—";$("phase").textContent="—";$("step").textContent="—";$("eventCount").textContent="—";$("sessionMeta").textContent="新对话";$("taskStatus").textContent="暂无任务";
  return c;
 }
 async function send(){
