@@ -221,9 +221,9 @@ class ApplicationService:
             raise AgentError("CONFIG_INVALID", f"no API key configured ({self.config.model.api_key_env})", source="application")
         sandbox = create_sandbox(self.workspace, self.config)
         session = SessionManager.create(self.config, self.workspace, task.strip(), sandbox)
-        if on_session:
-            on_session(session, sandbox)
         try:
+            if on_session:
+                on_session(session, sandbox)
             from .loop import Harness
             from .model import create_provider
 
@@ -253,6 +253,7 @@ class ApplicationService:
         mock_script: str | None = None,
         log: Callable[[str], None] | None = None,
         stream_callback: Callable[[str], None] | None = None,
+        on_session: Callable[[Any, Any], None] | None = None,
     ) -> tuple[Any, str]:
         directory = self._session_dir(session_id)
         events = list(read_events(directory))
@@ -264,6 +265,8 @@ class ApplicationService:
         if answer:
             session.emit("session.user_input", {"text": answer})
         try:
+            if on_session:
+                on_session(session, sandbox)
             from .loop import Harness
             from .model import create_provider
 
