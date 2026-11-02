@@ -1206,6 +1206,25 @@ def _quarantine_recover_one_locked(workspace: Path, item: dict[str, Any], manife
         if published_error or published is None or published_identity is None:
             return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict", "detail": published_error or "candidate does not match"}
         if candidate_kind == "rescue":
+            recorded_candidate = entry.get("identity") if isinstance(entry, dict) else None
+            recorded_matches = (
+                isinstance(recorded_candidate, dict)
+                and published_identity == (
+                    recorded_candidate.get("dev"), recorded_candidate.get("ino"),
+                    recorded_candidate.get("size"), recorded_candidate.get("mtime_ns")
+                )
+            )
+            stage_matches = False
+            if stage.exists() and not stage.is_symlink():
+                try:
+                    stage_st = os.stat(stage, follow_symlinks=False)
+                    candidate_st = os.stat(candidate, follow_symlinks=False)
+                    stage_matches = _same_file_identity(stage_st, candidate_st)
+                except OSError:
+                    stage_matches = False
+            if not recorded_matches and not stage_matches:
+                return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict",
+                        "detail": "occupied candidate has no matching manifest or recovery-stage identity"}
             if published_identity == source_identity:
                 return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict",
                         "detail": "candidate shares the quarantine inode; independent evidence cannot be guaranteed"}
