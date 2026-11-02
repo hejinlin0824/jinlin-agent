@@ -5,6 +5,7 @@
 > 一个**事件溯源、可验证、可恢复、带沙箱**的代码工程 Agent Harness。
 > CLI 直接可用，不是演示脚本：每条"完成"都有可复查的证据。
 
+📘 **面向实际使用者的完整使用指南**：[`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) — 安装、配置、任务执行、会话审计、Rescue 恢复，以及 Web 工作台产品化路线图
 📄 完整技术报告 + 产品手册（含评分建议与 DSH/ZCode 基线对比）：[`docs/REPORT-AND-HANDBOOK.md`](docs/REPORT-AND-HANDBOOK.md)
 🤖 **项目交接手册（接手 AI 必读）**：[`AGENT.md`](AGENT.md) — 背景、当前状态、三轮评审、架构细节、操作手册、待修 P1、踩坑清单
 🛠 独立评审响应与整改记录：[`docs/REVIEW-RESPONSE.md`](docs/REVIEW-RESPONSE.md)
