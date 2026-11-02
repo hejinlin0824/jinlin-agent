@@ -596,11 +596,14 @@ def _inspect_clean_quarantines(workspace: Path, manifest: dict[str, dict[str, An
                 "sha256": digest,
                 "identity": entry.get("quarantine_identity", identity),
                 "candidate_identity": identity,
+                "transaction_id": entry.get("transaction_id"),
             }
             target, error = _safe_rescue_target(workspace, str(entry.get("orig", "")))
             if not error and target is not None:
                 stage = _restore_stage_path(target, digest)
-                stage_expected[_relative_posix(stage, workspace)] = {"sha256": digest, "rescue": rescue_rel}
+                stage_expected[_relative_posix(stage, workspace)] = {
+                    "sha256": digest, "rescue": rescue_rel, "transaction_id": entry.get("transaction_id")
+                }
         else:
             rescue_expected[rescue_rel] = {"sha256": None, "identity": identity}
 
@@ -625,6 +628,8 @@ def _inspect_clean_quarantines(workspace: Path, manifest: dict[str, dict[str, An
                 expected = stage_expected.get(candidate_rel)
                 candidate_kind = "stage"
             item["candidate_kind"] = candidate_kind if expected is not None else "unknown"
+            if expected is not None:
+                item["transaction_id"] = expected.get("transaction_id")
             if expected is None:
                 item["classification"] = "unrecognized"
                 item["reason"] = "no manifest-backed Rescue or deterministic restore stage matches the former path"
@@ -1133,7 +1138,8 @@ def _clean_rescue_impl(workspace: Path, apply: bool = False) -> dict[str, Any]:
                                                if stage_exists else None),
                              "rescue_identity": ((ident.get("dev"), ident.get("ino"), ident.get("size"), ident.get("mtime_ns"))
                                                  if isinstance((ident := entry.get("identity")), dict) else None),
-                             "sha256": rescue["sha256"]})
+                             "sha256": rescue["sha256"],
+                             "transaction_id": entry.get("transaction_id")})
         report["eligible"] = eligible
         if not apply:
             return report
@@ -1451,7 +1457,7 @@ def recover_clean_quarantines(workspace: Path, apply: bool = False) -> dict[str,
                     result = _quarantine_recover_one_locked(workspace, item, manifest)
             (report["recovered"] if result["status"] in ("restored", "already-restored") else report["blocked"]).append(result)
             _audit_result(workspace, "quarantine-recover", result, rescue=item.get("path"),
-                          target=candidate, sha256=item.get("sha256"))
+                          target=candidate, sha256=item.get("sha256"), txid=item.get("transaction_id"))
         if report["blocked"]:
             report["status"] = "attention-required"
         return report
@@ -1483,13 +1489,16 @@ def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
     eligible_by_rescue = {item.get("rescue"): item for item in result.get("eligible", [])}
     for path in result.get("removed", []):
         item = eligible_by_rescue.get(path, {})
-        _audit_result(workspace, "clean", {"status": "removed"}, rescue=path,
-                      target=item.get("target"), stage=item.get("stage"), sha256=item.get("sha256"))
+        _audit_result(workspace, "clean", {"status": "removed", "txid": item.get("transaction_id")}, rescue=path,
+                      target=item.get("target"), stage=item.get("stage"), sha256=item.get("sha256"),
+                      txid=item.get("transaction_id"))
     for item in result.get("failed", []):
         eligible = eligible_by_rescue.get(item.get("rescue"), {})
-        _audit_result(workspace, "clean", {"status": "cleanup-blocked", "detail": item.get("reason")},
+        _audit_result(workspace, "clean", {"status": "cleanup-blocked", "detail": item.get("reason"),
+                          "txid": eligible.get("transaction_id")},
                       rescue=item.get("rescue"), target=eligible.get("target"),
-                      stage=eligible.get("stage"), sha256=eligible.get("sha256"))
+                      stage=eligible.get("stage"), sha256=eligible.get("sha256"),
+                      txid=eligible.get("transaction_id"))
     return result
 
 
