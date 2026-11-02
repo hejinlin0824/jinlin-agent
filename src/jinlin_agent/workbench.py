@@ -43,7 +43,7 @@ class WorkbenchTask:
 
 
 class WorkbenchTaskManager:
-    """Coordinates one background task and fail-closed approval decisions."""
+    """Coordinates independent background tasks and fail-closed approvals."""
 
     def __init__(self, service: Any) -> None:
         self.service = service
@@ -63,8 +63,6 @@ class WorkbenchTaskManager:
             read_only=read_only,
         )
         with self._condition:
-            if any(item.status in _ACTIVE for item in self._tasks.values()):
-                raise AgentError("TASK_BUSY", "another Workbench task is active; wait for it to finish", source="workbench")
             self._tasks[task.task_id] = task
             thread = threading.Thread(
                 target=self._run,
