@@ -320,3 +320,21 @@ Only manifest-backed quarantine files whose SHA-256 and, for Rescue files, recor
 The original quarantine remains as an independent evidence file. When a Rescue file is copied back, its manifest records the restored file identity separately from the retained quarantine identity. A stage quarantine is restored to its deterministic restore-stage pathname; run `jinlin-agent rescue recover --workspace .` afterward to complete the normal Rescue publication to the original target. Recovery is idempotent when the candidate already contains the verified bytes.
 
 This protects against accidental clobbering and detects many path substitutions, but it is not a defense against a hostile same-privilege process racing path operations. Directory-entry power-loss durability remains platform-dependent (Windows portable Python does not expose the same directory-fsync guarantee). A quarantine is never automatically deleted by this command.
+
+
+## Test runner identity and release metadata
+
+The Windows one-click entry point is `test-all.bat` (or `./scripts/test-all.ps1`). The authoritative test-suite identity lives in the repository-root `test-suite.json`; do not duplicate the package name/version in wrapper scripts.
+
+Every run prints the task-package ID/name, package version, suite version, runner contract, current branch/commit, start time, and final result. The same identity is repeated in the completion/failure summary and transcript log. The runner validates the metadata schema and contract before running tests.
+
+**Stale-script detection:** `scripts/test-all.ps1` embeds the runner contract version it understands and compares it with `test-suite.json`. Whenever the runner/metadata contract changes, update both and increment `runner_contract_version`; an old script then stops with `STALE TEST RUNNER` rather than silently running an obsolete checklist. The contract is covered by `tests/test_test_runner_metadata.py` and exercised by the Windows CI PowerShell-runner step.
+
+Run locally:
+
+```powershell
+git fetch origin
+git switch review/followup-fixes
+git pull --ff-only origin review/followup-fixes
+.\\test-all.bat
+```
