@@ -78,7 +78,46 @@ git_push = "deny"
 - 用户级配置位于 `~/.jinlin-agent/config.toml`；项目级配置位于目标仓库的 `.jinlin/config.toml`。
 - 项目级配置只能收紧安全策略，不能覆盖放宽用户级限制。
 
-## 4. 第一次使用：推荐工作流
+## 4. 本地 Web API（WP-1）
+
+WP-1 已提供一个**仅绑定本机回环地址、只读**的 HTTP API 基座。它目前用于验证服务层、会话查询和本地访问保护；完整任务提交、审批交互和前端界面属于 WP-2/WP-3，尚未在此版本开放。
+
+启动：
+
+```powershell
+jinlin-agent serve --workspace "E:\codebase\your-project"
+```
+
+默认监听 `127.0.0.1:8765`。启动时终端会生成并显示一次性 Bearer Token。将它视为本机访问凭据，不要粘贴到截图、Issue、聊天记录或项目配置中。按 `Ctrl+C` 停止服务。
+
+当前 API（所有路径均以 `/api/v1` 开头）：
+
+| 方法 | 路径 | 认证 | 用途 |
+|---|---|---|---|
+| GET | `/health` | 无 | 健康检查和 API 版本 |
+| GET | `/doctor` | Bearer | 环境、沙箱和项目诊断 |
+| GET | `/sessions` | Bearer | 当前工作区的会话列表 |
+| GET | `/sessions/{session_id}` | Bearer | 会话状态摘要 |
+| GET | `/sessions/{session_id}/events?tail=100` | Bearer | 最近事件的脱敏摘要，tail 最大 1000 |
+| GET | `/sessions/{session_id}/stats` | Bearer | 会话统计信息 |
+
+请求示例：
+
+```powershell
+$headers = @{ Authorization = "Bearer <终端显示的一次性 Token>" }
+Invoke-RestMethod -Headers $headers -Uri "http://127.0.0.1:8765/api/v1/doctor"
+Invoke-RestMethod -Headers $headers -Uri "http://127.0.0.1:8765/api/v1/sessions"
+```
+
+安全约束：
+- WP-1 只允许绑定 `127.0.0.1`、`::1` 或 `localhost`；不支持局域网/公网监听。
+- 除健康检查外，API 必须提供 Bearer Token；不启用 CORS，并校验 Host/Origin。
+- 服务实例固定绑定启动时指定的一个已存在工作区；浏览器请求不能传入另一个工作区路径。
+- 会话 ID 必须符合内部格式，并且事件文件必须真实位于 Jinlin sessions 目录内；不读取符号链接指向目录之外的会话文件。
+- API 只返回事件摘要，不返回原始工具参数、工具输出或任意原始事件 payload。
+- WP-1 的 HTTP API 是只读的；POST/PUT/DELETE 不会执行任务或修改文件。
+
+## 5. 第一次使用：推荐工作流
 
 建议第一次不要直接让 Agent 大规模改代码。按以下步骤逐渐增加权限：
 
