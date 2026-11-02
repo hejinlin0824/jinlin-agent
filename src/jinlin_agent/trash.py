@@ -523,7 +523,7 @@ def _inspect_clean_quarantines(workspace: Path, manifest: dict[str, dict[str, An
             continue
         digest = identity.get("sha256")
         if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest):
-            rescue_expected[rescue_rel] = {"sha256": digest, "identity": identity}
+            rescue_expected[rescue_rel] = {"sha256": digest, "identity": entry.get("quarantine_identity", identity)}
             target, error = _safe_rescue_target(workspace, str(entry.get("orig", "")))
             if not error and target is not None:
                 stage = _restore_stage_path(target, digest)
@@ -585,16 +585,29 @@ def _inspect_clean_quarantines(workspace: Path, manifest: dict[str, dict[str, An
                     item["reason"] = f"quarantine cannot be read and verified: {exc}"
             if candidate.exists() or candidate.is_symlink():
                 if item["classification"] == "safe-to-restore":
-                    item["classification"] = "target-conflict"
-                    item["reason"] = "former pathname is occupied; no-clobber restoration is not possible"
+                    if not candidate.is_symlink():
+                        try:
+                            candidate_st = os.stat(candidate, follow_symlinks=False)
+                            if stat.S_ISREG(candidate_st.st_mode) and hashlib.sha256(candidate.read_bytes()).hexdigest() == expected.get("sha256"):
+                                item["classification"] = "already-restored"
+                                item["reason"] = "former pathname already contains the verified bytes; recovery can reconcile metadata"
+                            else:
+                                item["classification"] = "target-conflict"
+                                item["reason"] = "former pathname is occupied by different content"
+                        except OSError as exc:
+                            item["classification"] = "target-conflict"
+                            item["reason"] = f"former pathname is occupied and cannot be verified: {exc}"
+                    else:
+                        item["classification"] = "target-conflict"
+                        item["reason"] = "former pathname is a symlink; no-clobber restoration is not possible"
             by_candidate.setdefault(candidate_rel, []).append(item)
             items.append(item)
     for claims in by_candidate.values():
         if len(claims) > 1:
             for item in claims:
-                if item["classification"] == "safe-to-restore":
+                if item["classification"] in ("safe-to-restore", "already-restored"):
                     item["classification"] = "ambiguous"
-                    item["reason"] = "multiple verified quarantine objects claim the same former pathname"
+                    item["reason"] = "multiple quarantine objects claim the same former pathname; automatic recovery is disabled"
     items.sort(key=lambda item: item["path"])
     return items
 
@@ -1061,6 +1074,221 @@ def _clean_rescue_impl(workspace: Path, apply: bool = False) -> dict[str, Any]:
         return report
     finally:
         lock.release()
+
+
+
+def _quarantine_restore_stage_path(candidate: Path, digest: str) -> Path:
+    """Deterministic private staging name for an interrupted quarantine recovery."""
+    return candidate.with_name(f".{candidate.name}.jinlin-quarantine-restore-{digest[:16]}")
+
+
+def _read_verified_regular(path: Path, digest: str, expected_identity: tuple[int, int, int, int] | None = None) -> tuple[bytes | None, tuple[int, int, int, int] | None, str | None]:
+    """Read one stable, non-symlink regular file and verify its bytes and identity."""
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = None
+    try:
+        fd = os.open(path, flags)
+        before = os.fstat(fd)
+        identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        if not stat.S_ISREG(before.st_mode):
+            return None, None, "source is not a regular file"
+        if expected_identity is not None and identity != expected_identity:
+            return None, identity, "source identity does not match the manifest"
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(fd)
+        path_after = os.stat(path, follow_symlinks=False)
+        if not _same_file_identity(before, after) or not _same_file_identity(before, path_after):
+            return None, identity, "source changed while being verified"
+        data = b"".join(chunks)
+        if hashlib.sha256(data).hexdigest() != digest:
+            return None, identity, "source SHA-256 does not match the manifest"
+        return data, identity, None
+    except OSError as exc:
+        return None, None, f"source could not be safely opened/read: {exc}"
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _quarantine_recover_one_locked(workspace: Path, item: dict[str, Any], manifest: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Restore one verified quarantine as an independent copy, without clobbering."""
+    quarantine_rel = str(item.get("path", ""))
+    candidate_rel = str(item.get("candidate", ""))
+    digest = str(item.get("sha256", ""))
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return {"path": quarantine_rel, "candidate": candidate_rel, "status": "rejected", "detail": "missing or invalid SHA-256"}
+    rel = PurePosixPath(quarantine_rel)
+    candidate_pure = PurePosixPath(candidate_rel)
+    if (rel.is_absolute() or candidate_pure.is_absolute()
+            or any(part in ("", ".", "..") for part in rel.parts + candidate_pure.parts)
+            or chr(92) in quarantine_rel or chr(92) in candidate_rel):
+        return {"path": quarantine_rel, "candidate": candidate_rel, "status": "rejected", "detail": "workspace-relative path is invalid"}
+    source = workspace.joinpath(*rel.parts)
+    candidate = workspace.joinpath(*candidate_pure.parts)
+    try:
+        candidate.parent.resolve(strict=True).relative_to(workspace)
+    except (OSError, ValueError):
+        return {"path": quarantine_rel, "candidate": candidate_rel, "status": "rejected", "detail": "candidate parent is missing or outside the workspace"}
+    candidate_kind = item.get("candidate_kind")
+    entry = manifest.get(candidate_rel) if candidate_kind == "rescue" else None
+    original_identity = None
+    if candidate_kind == "rescue":
+        if not isinstance(entry, dict) or entry.get("kind") != "rescue":
+            return {"path": quarantine_rel, "candidate": candidate_rel, "status": "rejected", "detail": "Rescue manifest entry is missing"}
+        ident = entry.get("quarantine_identity", entry.get("identity"))
+        if isinstance(ident, dict) and all(isinstance(ident.get(k), int) for k in ("dev", "ino", "size", "mtime_ns")):
+            original_identity = (ident["dev"], ident["ino"], ident["size"], ident["mtime_ns"])
+    data, source_identity, error = _read_verified_regular(source, digest, original_identity)
+    if error or data is None or source_identity is None:
+        return {"path": quarantine_rel, "candidate": candidate_rel, "status": "rejected", "detail": error or "quarantine verification failed"}
+    stage = _quarantine_restore_stage_path(candidate, digest)
+
+    def reconcile_published() -> dict[str, Any]:
+        if candidate.is_symlink():
+            return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict", "detail": "candidate is a symlink"}
+        published, published_identity, published_error = _read_verified_regular(candidate, digest)
+        if published_error or published is None or published_identity is None:
+            return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict", "detail": published_error or "candidate does not match"}
+        if candidate_kind == "rescue":
+            updated = dict(entry)
+            updated["quarantine_identity"] = {
+                "dev": source_identity[0], "ino": source_identity[1], "size": source_identity[2],
+                "mtime_ns": source_identity[3], "sha256": digest,
+            }
+            updated["identity"] = {
+                "dev": published_identity[0], "ino": published_identity[1], "size": published_identity[2],
+                "mtime_ns": published_identity[3], "sha256": digest,
+            }
+            new_manifest = dict(manifest)
+            new_manifest[candidate_rel] = updated
+            if not _write_manifest_atomic(workspace, new_manifest):
+                return {"path": quarantine_rel, "candidate": candidate_rel, "status": "uncertain",
+                        "detail": "candidate is published but manifest identity update failed; quarantine retained for retry"}
+            manifest.clear()
+            manifest.update(new_manifest)
+        # A leftover stage is removed only when it is the same inode as the
+        # published candidate. A different object is retained for inspection.
+        try:
+            if stage.exists() or stage.is_symlink():
+                stage_st = os.stat(stage, follow_symlinks=False)
+                candidate_st = os.stat(candidate, follow_symlinks=False)
+                if _same_file_identity(stage_st, candidate_st):
+                    os.unlink(stage)
+                    _fsync_directory(candidate.parent)
+        except OSError:
+            pass
+        return {"path": quarantine_rel, "candidate": candidate_rel, "candidate_kind": candidate_kind,
+                "status": "already-restored", "sha256": digest, "detail": "verified candidate exists; quarantine evidence retained"}
+
+    if candidate.exists() or candidate.is_symlink():
+        return reconcile_published()
+
+    if stage.is_symlink():
+        return {"path": quarantine_rel, "candidate": candidate_rel, "status": "rejected", "detail": "recovery stage is a symlink"}
+    if stage.exists():
+        staged, stage_identity, stage_error = _read_verified_regular(stage, digest)
+        if stage_error or staged is None or stage_identity is None:
+            return {"path": quarantine_rel, "candidate": candidate_rel, "status": "rejected", "stage": _relative_posix(stage, workspace),
+                    "detail": f"existing recovery stage is not valid: {stage_error}"}
+    else:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        try:
+            fd = os.open(stage, flags, 0o600)
+        except FileExistsError:
+            return {"path": quarantine_rel, "candidate": candidate_rel, "status": "uncertain",
+                    "detail": "another recovery attempt created the deterministic stage; retry inspection"}
+        try:
+            view = memoryview(data)
+            while view:
+                count = os.write(fd, view)
+                if count <= 0:
+                    raise OSError("stage write made no forward progress")
+                view = view[count:]
+            os.fsync(fd)
+        except OSError as exc:
+            return {"path": quarantine_rel, "candidate": candidate_rel, "status": "incomplete",
+                    "stage": _relative_posix(stage, workspace), "detail": f"stage write/fsync failed: {exc}; stage and quarantine retained"}
+        finally:
+            os.close(fd)
+        staged, stage_identity, stage_error = _read_verified_regular(stage, digest)
+        if stage_error or staged is None or stage_identity is None:
+            return {"path": quarantine_rel, "candidate": candidate_rel, "status": "incomplete",
+                    "stage": _relative_posix(stage, workspace), "detail": stage_error or "stage verification failed"}
+        sync = _fsync_directory(stage.parent)
+        if sync["supported"] and not sync["synced"]:
+            return {"path": quarantine_rel, "candidate": candidate_rel, "status": "incomplete",
+                    "stage": _relative_posix(stage, workspace), "detail": sync["detail"] + "; stage and quarantine retained"}
+
+    try:
+        os.link(stage, candidate)
+    except FileExistsError:
+        return reconcile_published()
+    except OSError as exc:
+        return {"path": quarantine_rel, "candidate": candidate_rel, "status": "staged",
+                "stage": _relative_posix(stage, workspace), "detail": f"no-clobber publication failed: {exc}; retry is safe"}
+    result = reconcile_published()
+    if result["status"] in ("already-restored", "uncertain"):
+        result["stage"] = _relative_posix(stage, workspace)
+    return result
+
+
+def recover_clean_quarantines(workspace: Path, apply: bool = False) -> dict[str, Any]:
+    """Preview or safely recover manifest-backed Rescue cleanup quarantines.
+
+    Dry-run performs no writes. Apply reclassifies all evidence while holding
+    the workspace lock, rejects ambiguous/modified/legacy evidence, copies
+    through a deterministic fsynced stage, and publishes with atomic no-clobber
+    hard-link semantics. The original quarantine remains as independent evidence.
+    """
+    workspace = Path(workspace).resolve()
+    report: dict[str, Any] = {"status": "dry-run", "items": [], "recovered": [], "blocked": []}
+    if not apply:
+        inspected = inspect_rescue(workspace)
+        if inspected.get("status") == "locked":
+            return {"status": "locked", "items": [], "recovered": [], "blocked": []}
+        report["items"] = inspected.get("quarantined", [])
+        report["blocked"] = [x for x in report["items"] if x.get("classification") not in ("safe-to-restore", "already-restored")]
+        return report
+    lock = SessionLock(workspace / ".jinlin" / "write.lock")
+    try:
+        lock.acquire()
+    except SessionLockedError:
+        report["status"] = "locked"
+        return report
+    try:
+        manifest = _load_manifest(workspace)
+        items = _inspect_clean_quarantines(workspace, manifest)
+        report["status"] = "applied"
+        report["items"] = items
+        claimed: set[str] = set()
+        for item in items:
+            classification = item.get("classification")
+            candidate = str(item.get("candidate", ""))
+            if candidate in claimed:
+                result = {"path": item["path"], "candidate": candidate, "status": "ambiguous",
+                          "detail": "another quarantine item already claims this candidate"}
+            else:
+                claimed.add(candidate)
+                if classification not in ("safe-to-restore", "already-restored"):
+                    result = {"path": item["path"], "candidate": candidate, "status": "blocked",
+                              "classification": classification, "detail": item.get("reason", "not eligible for automatic recovery")}
+                else:
+                    result = _quarantine_recover_one_locked(workspace, item, manifest)
+            report["items"][-1 if False else 0:0] = []
+            (report["recovered"] if result["status"] in ("already-restored",) else report["blocked"]).append(result)
+            _audit_result(workspace, "quarantine-recover", result, rescue=item.get("path"),
+                          target=candidate, sha256=item.get("sha256"))
+        if report["blocked"]:
+            report["status"] = "attention-required"
+        return report
+    finally:
+        lock.release()
+
 
 def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
     result = _restore_rescue_impl(workspace, rescue_rel)
