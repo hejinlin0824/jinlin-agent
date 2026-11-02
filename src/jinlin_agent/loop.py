@@ -406,7 +406,12 @@ class Harness:
         # need a propose_completion ceremony. Once the model has answered and
         # no workspace mutation occurred, persist that answer as the terminal
         # session summary so the Workbench cannot keep calling tools afterward.
-        if answer and not self.state.written_files and not self.state.deleted_files:
+        if (
+            answer
+            and getattr(response, "finish_reason", "stop") != "length"
+            and not self.state.written_files
+            and not self.state.deleted_files
+        ):
             self.session.emit(
                 "session.completed",
                 {
