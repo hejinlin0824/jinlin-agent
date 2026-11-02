@@ -48,16 +48,22 @@ def create_server(workspace, host: str = "127.0.0.1", port: int = 8765, token: s
             return
 
         def _json(self, status: int, payload: dict):
+            """Write a JSON response; a disconnected browser is not a server error."""
             body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # The browser may refresh, navigate away, or cancel an in-flight
+                # fetch. There is no peer left to receive a fallback HTTP 500.
+                return
 
         def _html(self):
             page = Path(__file__).resolve().parent / "static" / "index.html"
@@ -66,16 +72,19 @@ def create_server(workspace, host: str = "127.0.0.1", port: int = 8765, token: s
             except OSError:
                 self._json(404, {"error": {"code": "UI_NOT_FOUND", "message": "Workbench UI is not installed"}})
                 return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("X-Frame-Options", "DENY")
-            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("X-Frame-Options", "DENY")
+                self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'")
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                return
 
         def _origin_and_host_ok(self) -> bool:
             host_header = self.headers.get("Host", "")
