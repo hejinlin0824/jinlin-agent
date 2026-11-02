@@ -73,3 +73,10 @@ Approval decisions are `approved_once`, `approved_for_session`, or `denied`. A d
 ## Compatibility
 
 The existing `jinlin-agent run/resume` CLI continues to use the canonical Harness and delegates execution to `ApplicationService`. Existing CLI command syntax remains unchanged. The HTTP API is additive and does not replace the CLI.
+
+
+### Final answer and task lifecycle
+
+Read-only investigations and ordinary engineering questions may finish with a plain-text model answer. The Harness persists that answer as the session completion summary and stops the loop; it does not ask the model to call `propose_completion` just to end a conversation. Tasks that changed workspace files still require the completion gate and verification evidence. Truncated model responses are not treated as final answers.
+
+The task projection includes a user-facing `progress` string for sandbox/session creation, project initialization, context preparation, model requests, and tool execution. `stream_text` is the current model turn's incremental text. The browser renders common Markdown blocks (headings, lists, code fences, quotes, emphasis and links) using DOM text nodes; raw HTML from model output is never interpreted.
