@@ -300,15 +300,32 @@ def _summarize_event(etype: str, payload: dict[str, Any]) -> str:
 
 
 def cmd_stats(args: Any) -> int:
-    from .application import ApplicationService
-
-    service = ApplicationService(Path(args.workspace or ".").resolve())
-    try:
-        payload = service.stats(args.session_id)
-    except AgentError:
-        _print("[error] no events or unknown session", file=sys.stderr)
+    cfg = load_config(Path(args.workspace or ".").resolve())
+    session_dir = cfg.sessions_dir / args.session_id
+    events = list(_iter_events(session_dir))
+    if not events:
+        _print("[error] no events", file=sys.stderr)
         return 4
-    _print(json.dumps(payload, ensure_ascii=False, indent=2))
+    state = recover(events)
+    _print(json.dumps(
+        {
+            "session_id": state.session_id,
+            "status": state.status,
+            "phase": state.phase,
+            "steps": state.step_index,
+            "model_calls": state.model_calls,
+            "tool_calls": state.tool_calls_total,
+            "tokens_in": state.tokens_in,
+            "tokens_out": state.tokens_out,
+            "compactions": state.compactions,
+            "loop_events": state.loop_events,
+            "verification_runs": len(state.verification_runs),
+            "final_result": (state.completion or {}).get("result"),
+            "report_artifact_id": state.report_artifact_id,
+        },
+        ensure_ascii=False,
+        indent=2,
+    ))
     return 0
 
 
