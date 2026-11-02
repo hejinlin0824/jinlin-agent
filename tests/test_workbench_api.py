@@ -102,6 +102,7 @@ def test_service_reads_session_summary_events_and_stats(tmp_path):
     assert summary["session_id"] == sid
     assert summary["request"] == "inspect this project"
     assert summary["status"] == "running"
+    assert summary["completion_summary"] == ""
     assert summary["event_count"] >= 1
     assert service.list_sessions()[0]["session_id"] == sid
     events = service.list_events(sid, tail=10)
