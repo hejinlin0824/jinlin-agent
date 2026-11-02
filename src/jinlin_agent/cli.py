@@ -371,6 +371,9 @@ def cmd_rescue(args: Any) -> int:
         return 0 if report["status"] in ("dry-run", "applied") and not report["failed"] and not report.get("quarantined") else 2
     if args.rescue_action == "inspect":
         report = inspect_rescue(workspace)
+        if args.json:
+            _print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 0 if report["status"] == "ok" else 2
         _print(f"workspace: {workspace}")
         _print(f"status: {report['status']}")
         for key, value in report.get("counts", {}).items():
@@ -506,6 +509,7 @@ def build_parser() -> argparse.ArgumentParser:
     rescue_clean.set_defaults(func=cmd_rescue)
     rescue_inspect = rescue_sub.add_parser("inspect", help="read-only consistency and transaction audit report")
     rescue_inspect.add_argument("--workspace", default=".")
+    rescue_inspect.add_argument("--json", action="store_true", help="emit the complete read-only report as JSON")
     rescue_inspect.set_defaults(func=cmd_rescue)
 
     ev = sub.add_parser("eval", help="run the harness conformance / evaluation suite")
