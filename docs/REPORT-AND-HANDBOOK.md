@@ -679,3 +679,17 @@ jinlin-agent run --workspace /tmp/repo -t "修复失败测试"
 4. OpenAI, *Unrolling the Codex agent loop.* <https://openai.com/index/unrolling-the-codex-agent-loop/>
 5. Claude Code Docs, *Hooks* / *Tools reference.* <https://code.claude.com/docs/en/hooks-guide>
 6. 本项目 README / PLAN / 规格评审：`README.md`、`docs/PLAN.md`、`../docs/review/spec-review-v1.md`
+
+
+## Rescue interrupted-cleanup quarantine classification
+
+`rescue inspect` and `rescue clean` classify quarantine files left by interrupted cleanup. This is read-only and never restores or deletes data:
+
+- `safe-to-restore`: the former path is free and the quarantine matches a manifest-bound Rescue identity plus SHA-256, or a deterministic restore-stage path plus the Rescue SHA-256.
+- `target-conflict`: the former path is occupied; a no-clobber restoration must not overwrite it.
+- `identity-mismatch`: content or recorded Rescue identity does not match.
+- `ambiguous`: multiple verified quarantine objects claim one former path.
+- `legacy-unverified`: an older manifest lacks SHA-256 evidence.
+- `unrecognized`: no manifest-backed Rescue or stage association can be established.
+
+This is evidence classification only. Automatic quarantine restoration is not exposed. The audit log is supporting diagnostic evidence, not the authority for file identity. Any later apply operation must revalidate under the workspace lock and publish with no-clobber semantics; same-privilege path races and platform durability limits remain explicit constraints.
