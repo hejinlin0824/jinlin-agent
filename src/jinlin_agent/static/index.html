@@ -104,7 +104,7 @@ async function refreshTask(c){
   if(t.error)reply="这次任务没有成功完成。\n"+t.error.message+"（"+t.error.code+"）";
   else if(t.status==="completed")reply=s.completion_summary||"任务已完成。";
   else if(t.status==="failed")reply="任务执行失败，请展开开发者详情查看事件记录。";
-  else if(t.status==="waiting_user")reply="我需要你补充一点信息才能继续。";
+  else if(t.status==="waiting_user"){const q=events.slice().reverse().find(e=>e.type==="session.waiting_user");reply=q?.question||"我需要你补充一点信息才能继续。当前工作台暂不支持直接回复，请在终端使用会话恢复命令继续。";}
   else reply=t.stream_text||("我正在处理这个任务。"+(recent?"\n\n"+recent:""));
   updateAssistant(c,reply,statusText(t.status));
  }
