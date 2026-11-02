@@ -69,6 +69,16 @@ elif point == "after-publish":
         return result
     os.link = hooked_link
 
+elif point == "after-clean-quarantine":
+    real_replace = os.replace
+    def hooked_replace(source, destination):
+        result = real_replace(source, destination)
+        if ".jinlin-clean-" in Path(destination).name:
+            exit_now()
+        return result
+    os.replace = hooked_replace
+    trash._clean_rescue_impl(workspace, apply=True)
+
 else:
     raise SystemExit("unknown crash point")
 
@@ -105,16 +115,16 @@ def _crash(workspace: Path, rescue: Path, point: str) -> subprocess.CompletedPro
 
 
 @pytest.mark.parametrize(
-    ("point", "expected_stage"),
+    ("point", "expected_stage", "recovery_status"),
     [
-        ("after-stage-create", b""),
-        ("after-partial-write", PAYLOAD[:7]),
-        ("after-file-fsync", PAYLOAD),
-        ("after-stage-directory-sync", PAYLOAD),
+        ("after-stage-create", b"", "incomplete"),
+        ("after-partial-write", PAYLOAD[:7], "incomplete"),
+        ("after-file-fsync", PAYLOAD, "restored"),
+        ("after-stage-directory-sync", PAYLOAD, "restored"),
     ],
 )
 def test_real_child_process_crash_before_publish_is_reconciled_safely(
-    tmp_path, point, expected_stage
+    tmp_path, point, expected_stage, recovery_status
 ):
     rescue, stage, target = _fixture(tmp_path, point)
     _crash(tmp_path, rescue, point)
@@ -126,14 +136,17 @@ def test_real_child_process_crash_before_publish_is_reconciled_safely(
 
     recovered = trash._recover_rescue_impl(tmp_path)
     assert recovered["items"]
-    assert recovered["items"][0]["status"] == "incomplete"
-    assert not target.exists()
+    assert recovered["items"][0]["status"] == recovery_status
+    if recovery_status == "incomplete":
+        assert not target.exists()
+        inspection = trash.inspect_rescue(tmp_path)
+        assert inspection["status"] == "attention-required"
+    else:
+        assert target.read_bytes() == PAYLOAD
+        inspection = trash.inspect_rescue(tmp_path)
+        assert inspection["counts"]["stages"] == 1
     assert stage.read_bytes() == expected_stage
     assert rescue.read_bytes() == PAYLOAD
-
-    inspection = trash.inspect_rescue(tmp_path)
-    assert inspection["status"] == "attention-required"
-    assert inspection["counts"]["stages"] == 1
 
 
 def test_real_child_process_crash_immediately_after_publish_is_idempotent(tmp_path):
@@ -154,4 +167,27 @@ def test_real_child_process_crash_immediately_after_publish_is_idempotent(tmp_pa
     # Re-running recovery is safe and does not duplicate or overwrite content.
     again = trash._recover_rescue_impl(tmp_path)
     assert again["items"][0]["status"] == "already-published"
+    assert target.read_bytes() == PAYLOAD
+
+
+def test_real_child_process_crash_after_cleanup_quarantine_preserves_evidence(tmp_path):
+    rescue, stage, target = _fixture(tmp_path, "cleanup-crash")
+    restored = trash._restore_rescue_impl(tmp_path, rescue.name)
+    assert restored["status"] == "restored"
+    assert target.read_bytes() == PAYLOAD
+
+    _crash(tmp_path, rescue, "after-clean-quarantine")
+    assert target.read_bytes() == PAYLOAD
+    assert rescue.read_bytes() == PAYLOAD
+
+    inspection = trash.inspect_rescue(tmp_path)
+    assert inspection["status"] == "attention-required"
+    assert inspection["counts"]["quarantined"] == 1
+    quarantine_path = tmp_path / inspection["quarantined"][0]["path"]
+    assert quarantine_path.is_file()
+    assert quarantine_path.read_bytes() == PAYLOAD
+    # The cleaner must not silently remove the interrupted quarantine.
+    cleaned = trash._clean_rescue_impl(tmp_path, apply=True)
+    assert cleaned["quarantined"]
+    assert quarantine_path.exists()
     assert target.read_bytes() == PAYLOAD
