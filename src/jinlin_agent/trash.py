@@ -185,6 +185,11 @@ def _append_audit_event(workspace: Path, action: str, status: str, **fields: Any
         encoded = (json.dumps(body, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
         path = _audit_path(workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
+        # The audit lock may have created .jinlin before the audit file. Sync
+        # its parent as well so the directory entry itself survives a crash.
+        parent_sync = _fsync_directory(path.parent.parent)
+        if parent_sync["supported"] and not parent_sync["synced"]:
+            return False, "audit parent directory could not be synced before append: " + parent_sync["detail"]
         created = False
         flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -367,6 +372,9 @@ def record_trash(workspace: Path, trash_path: Path, orig_rel: str, kind: str) ->
             identity["sha256"] = hashlib.sha256(Path(trash_path).read_bytes()).hexdigest()
         path = _manifest_path(workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
+        parent_sync = _fsync_directory(path.parent.parent)
+        if parent_sync["supported"] and not parent_sync["synced"]:
+            return False
         try:
             existing = path.read_bytes()
         except FileNotFoundError:
@@ -440,6 +448,9 @@ def _write_manifest_atomic(workspace: Path, entries: dict[str, dict[str, Any]]) 
     """Durably replace the manifest without discarding damaged ownership rows."""
     path = _manifest_path(workspace)
     path.parent.mkdir(parents=True, exist_ok=True)
+    parent_sync = _fsync_directory(path.parent.parent)
+    if parent_sync["supported"] and not parent_sync["synced"]:
+        return False
     try:
         existing = path.read_bytes()
     except FileNotFoundError:

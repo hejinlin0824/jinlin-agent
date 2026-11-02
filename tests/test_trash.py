@@ -868,6 +868,27 @@ def test_rescue_audit_hash_chain_and_transaction_state_lifecycle(tmp_path):
     assert report["stages"][0]["integrity"] == "sha256-valid"
 
 
+
+
+def test_rescue_audit_syncs_workspace_entry_before_persisting_audit_file(tmp_path, monkeypatch):
+    import jinlin_agent.trash as trash_mod
+
+    calls = []
+    monkeypatch.setattr(
+        trash_mod, "_fsync_directory",
+        lambda directory: calls.append(Path(directory)) or {
+            "supported": True, "synced": True, "detail": "injected successful directory sync"
+        },
+    )
+
+    ok, warning = trash_mod._append_audit_event(
+        tmp_path, "restore", "restored", txid="a" * 32
+    )
+    assert ok, warning
+    assert calls == [tmp_path, tmp_path / ".jinlin"], (
+        "sync .jinlin in the workspace, then sync the newly created audit entry inside it"
+    )
+
 def test_rescue_audit_refuses_to_append_after_valid_unterminated_record(tmp_path):
     import jinlin_agent.trash as trash_mod
 
@@ -1697,7 +1718,9 @@ def test_record_trash_fsyncs_manifest_file_and_new_directory_entry(tmp_path, mon
     monkeypatch.setattr(trash_mod, "_fsync_directory", track_directory_sync)
     assert record_trash(tmp_path, candidate, "durable.py", "rescue")
     assert fsynced, "manifest bytes must be fsynced before success is reported"
-    assert directory_syncs == [tmp_path / ".jinlin"], "new manifest directory entry must be synced"
+    assert directory_syncs == [tmp_path, tmp_path / ".jinlin"], (
+        "the workspace entry for .jinlin and the new manifest entry must both be synced"
+    )
 
 
 def test_record_trash_refuses_to_append_after_torn_manifest_tail(tmp_path):
@@ -1725,7 +1748,7 @@ def test_manifest_atomic_rewrite_fsyncs_directory_after_replace(tmp_path, monkey
     )
 
     assert trash_mod._write_manifest_atomic(tmp_path, entries)
-    assert calls == [tmp_path / ".jinlin"]
+    assert calls == [tmp_path, tmp_path / ".jinlin"]
     assert trash_mod._load_manifest(tmp_path) == {}
 
 
@@ -1750,7 +1773,11 @@ def test_manifest_directory_fsync_failure_is_reported_after_replace(tmp_path, mo
     entries.pop(candidate.name)
     monkeypatch.setattr(
         trash_mod, "_fsync_directory",
-        lambda _directory: {"supported": True, "synced": False, "detail": "injected directory sync failure"},
+        lambda directory: (
+            {"supported": True, "synced": True, "detail": "workspace entry synced"}
+            if Path(directory) == tmp_path
+            else {"supported": True, "synced": False, "detail": "injected directory sync failure"}
+        ),
     )
 
     assert trash_mod._write_manifest_atomic(tmp_path, entries) is False
