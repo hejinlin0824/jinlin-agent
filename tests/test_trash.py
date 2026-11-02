@@ -931,8 +931,28 @@ def test_restore_and_clean_cannot_reorder_transaction_audit_events(tmp_path, mon
     rescue = _mk_trash(tmp_path, ".ordered.py.jinlin-rescue-10203051", b"ordered payload")
     assert record_trash(tmp_path, rescue, "ordered.py", "rescue")
     real_append = trash_mod._append_audit_event
+    real_lock = trash_mod.SessionLock
     nested_clean = []
     triggered = {"value": False}
+    write_path = tmp_path / ".jinlin" / "write.lock"
+    held = {"value": False}
+
+    class NonReentrantLock:
+        def __init__(self, path):
+            self.path = Path(path)
+            self.inner = real_lock(path)
+
+        def acquire(self, blocking=False):
+            if self.path == write_path and held["value"]:
+                raise trash_mod.SessionLockedError("workspace lock is already held")
+            self.inner.acquire(blocking=blocking)
+            if self.path == write_path:
+                held["value"] = True
+
+        def release(self):
+            if self.path == write_path:
+                held["value"] = False
+            self.inner.release()
 
     def interleave_clean(workspace, action, status, **fields):
         if action == "restore" and not triggered["value"]:
@@ -940,6 +960,7 @@ def test_restore_and_clean_cannot_reorder_transaction_audit_events(tmp_path, mon
             nested_clean.append(trash_mod.clean_rescue(workspace, apply=True))
         return real_append(workspace, action, status, **fields)
 
+    monkeypatch.setattr(trash_mod, "SessionLock", NonReentrantLock)
     monkeypatch.setattr(trash_mod, "_append_audit_event", interleave_clean)
     restored = trash_mod.restore_rescue(tmp_path, rescue.name)
 
