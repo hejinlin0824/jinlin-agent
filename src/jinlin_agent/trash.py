@@ -1175,7 +1175,7 @@ def _quarantine_recover_one_locked(workspace: Path, item: dict[str, Any], manife
         return {"path": quarantine_rel, "candidate": candidate_rel, "status": "rejected", "detail": error or "quarantine verification failed"}
     stage = _quarantine_restore_stage_path(candidate, digest)
 
-    def reconcile_published() -> dict[str, Any]:
+    def reconcile_published(newly_published: bool = False) -> dict[str, Any]:
         if candidate.is_symlink():
             return {"path": quarantine_rel, "candidate": candidate_rel, "status": "conflict", "detail": "candidate is a symlink"}
         published, published_identity, published_error = _read_verified_regular(candidate, digest)
@@ -1210,7 +1210,9 @@ def _quarantine_recover_one_locked(workspace: Path, item: dict[str, Any], manife
         except OSError:
             pass
         return {"path": quarantine_rel, "candidate": candidate_rel, "candidate_kind": candidate_kind,
-                "status": "already-restored", "sha256": digest, "detail": "verified candidate exists; quarantine evidence retained"}
+                "status": "restored" if newly_published else "already-restored", "sha256": digest,
+                "detail": "verified candidate published without clobbering; quarantine evidence retained" if newly_published
+                else "verified candidate already exists; quarantine evidence retained"}
 
     if candidate.exists() or candidate.is_symlink():
         return reconcile_published()
@@ -1284,8 +1286,8 @@ def _quarantine_recover_one_locked(workspace: Path, item: dict[str, Any], manife
     except OSError as exc:
         return {"path": quarantine_rel, "candidate": candidate_rel, "status": "staged",
                 "stage": _relative_posix(stage, workspace), "detail": f"no-clobber publication failed: {exc}; retry is safe"}
-    result = reconcile_published()
-    if result["status"] in ("already-restored", "uncertain"):
+    result = reconcile_published(newly_published=True)
+    if result["status"] in ("restored", "already-restored", "uncertain"):
         result["stage"] = _relative_posix(stage, workspace)
     return result
 
@@ -1332,7 +1334,7 @@ def recover_clean_quarantines(workspace: Path, apply: bool = False) -> dict[str,
                               "classification": classification, "detail": item.get("reason", "not eligible for automatic recovery")}
                 else:
                     result = _quarantine_recover_one_locked(workspace, item, manifest)
-            (report["recovered"] if result["status"] in ("already-restored",) else report["blocked"]).append(result)
+            (report["recovered"] if result["status"] in ("restored", "already-restored") else report["blocked"]).append(result)
             _audit_result(workspace, "quarantine-recover", result, rescue=item.get("path"),
                           target=candidate, sha256=item.get("sha256"))
         if report["blocked"]:
