@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Jinlin Agent · Workbench</title>
+<style>
+:root{font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif;color:#e8edf5;background:#0b1018;font-synthesis:none;text-rendering:optimizeLegibility}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 15% -10%,#1a2a40 0,transparent 38%),#0b1018}
+button,input,textarea{font:inherit}button{cursor:pointer;border:1px solid #34445a;background:#172334;color:#e8edf5;border-radius:9px;padding:9px 13px}button:hover{border-color:#7aa7d8;background:#20334a}button:disabled{opacity:.45;cursor:not-allowed}
+.shell{max-width:1500px;margin:auto;padding:24px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}.brand{display:flex;align-items:center;gap:13px}.mark{width:38px;height:38px;border-radius:12px;background:linear-gradient(145deg,#6aa8ed,#315e9d);display:grid;place-items:center;font-weight:800;color:white}.brand h1{font-size:18px;margin:0}.brand p{font-size:12px;color:#8fa0b7;margin:4px 0 0}.connection{display:flex;align-items:center;gap:8px;color:#9eb0c7;font-size:12px}.dot{width:8px;height:8px;border-radius:50%;background:#65748a}.dot.on{background:#50d6a1;box-shadow:0 0 12px #50d6a1}
+.grid{display:grid;grid-template-columns:280px minmax(0,1fr);gap:18px;align-items:start}.panel{background:rgba(17,26,39,.92);border:1px solid #263548;border-radius:15px;box-shadow:0 16px 50px #0003}.side{padding:17px;position:sticky;top:18px}.main{display:grid;gap:18px}.section-title{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#8294ac;margin:0 0 13px}.workspace{padding:12px;background:#111d2b;border:1px solid #2a3b50;border-radius:10px;font-size:12px;overflow-wrap:anywhere;color:#c5d4e6}.muted{color:#8293a9}.sessions{display:grid;gap:7px;margin-top:17px}.session{width:100%;text-align:left;background:transparent;border-color:transparent;padding:10px}.session.active{background:#1b2b40;border-color:#385473}.session strong{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.session small{display:block;color:#8da0b8;margin-top:5px;font-size:10px}
+.card{padding:20px}.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:15px}.card-head h2{font-size:16px;margin:0}.tag{font-size:11px;color:#a9c8ec;background:#1b3048;border:1px solid #345272;border-radius:99px;padding:4px 9px}.taskbox{width:100%;min-height:118px;resize:vertical;border:1px solid #34465c;border-radius:11px;background:#0d1622;color:#e8edf5;padding:14px;outline:none}.taskbox:focus{border-color:#70a7e7;box-shadow:0 0 0 3px #70a7e71c}.actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}.check{display:flex;align-items:center;gap:8px;font-size:12px;color:#a8b7ca}.primary{background:#376fae;border-color:#4d8bce;font-weight:650}.primary:hover{background:#4384c9}.statusline{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.status{font-size:12px;padding:5px 9px;border-radius:7px;background:#1a2a3d;color:#c6d8ee}.status.running,.status.queued{color:#9ecbff}.status.completed{color:#75e0b4}.status.failed,.status.denied{color:#ff9e9e}.status.waiting_approval{color:#ffd58c;background:#392d19}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}.kpi{padding:12px;background:#0d1622;border:1px solid #263548;border-radius:10px}.kpi small{display:block;color:#8395ad;font-size:10px}.kpi strong{display:block;margin-top:6px;font-size:15px;overflow-wrap:anywhere}
+.approval{display:none;border:1px solid #775c2d;background:#241e14;border-radius:12px;padding:16px;margin-top:15px}.approval.show{display:block}.approval h3{margin:0 0 10px;color:#ffd58c;font-size:14px}.approval p{font-size:12px;line-height:1.6;color:#d8c7a6;margin:5px 0}.approval-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.deny{border-color:#764747;color:#ffb0b0}.timeline{display:grid;gap:8px;max-height:420px;overflow:auto}.event{display:grid;grid-template-columns:65px 1fr;gap:12px;padding:10px;border-bottom:1px solid #233144;font-size:12px}.event:last-child{border-bottom:0}.event time{color:#778ba5;font-variant-numeric:tabular-nums}.event strong{color:#c9d9ec;font-weight:600}.event p{margin:4px 0 0;color:#91a3ba;overflow-wrap:anywhere}.error{display:none;padding:10px 12px;border-radius:9px;background:#351e24;border:1px solid #69323d;color:#ffb2bc;font-size:12px;margin-bottom:12px}.error.show{display:block}.tokenrow{display:flex;gap:7px;margin-top:12px}.tokenrow input{min-width:0;flex:1;background:#0d1622;border:1px solid #34465c;border-radius:8px;color:#dce7f4;padding:9px;font-size:11px}.empty{color:#71839b;font-size:12px;text-align:center;padding:25px 10px}
+@media(max-width:850px){.grid{grid-template-columns:1fr}.side{position:static}.sessions{grid-template-columns:repeat(2,minmax(0,1fr))}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:520px){.shell{padding:14px}.top{align-items:flex-start}.connection{font-size:10px}.card{padding:15px}.sessions{grid-template-columns:1fr}.actions{align-items:flex-start}.actions button{width:100%}}
+</style>
+</head>
+<body>
+<div class="shell">
+<header class="top">
+  <div class="brand"><div class="mark">J</div><div><h1>Jinlin Agent</h1><p>LOCAL ENGINEERING WORKBENCH</p></div></div>
+  <div class="connection"><span id="dot" class="dot"></span><span id="connectionText">尚未连接</span></div>
+</header>
+<div id="error" class="error" role="alert"></div>
+<div class="grid">
+  <aside class="panel side">
+    <h2 class="section-title">Workspace</h2>
+    <div id="workspace" class="workspace">连接后读取当前服务绑定的工作区</div>
+    <div class="tokenrow"><input id="token" type="password" autocomplete="off" placeholder="粘贴终端显示的 Bearer Token"><button id="connect">连接</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:23px"><h2 class="section-title" style="margin:0">Recent sessions</h2><button id="reload" style="padding:5px 8px;font-size:11px">刷新</button></div>
+    <div id="sessions" class="sessions"><div class="empty">连接服务后显示会话</div></div>
+  </aside>
+  <main class="main">
+    <section class="panel card">
+      <div class="card-head"><h2>发起新任务</h2><span class="tag">同一 Agent 内核</span></div>
+      <textarea id="task" class="taskbox" placeholder="描述你希望 Agent 完成的工程任务。建议从范围明确的只读分析开始……"></textarea>
+      <div class="actions"><label class="check"><input id="readOnly" type="checkbox" checked> 只读模式（推荐）</label><button id="submit" class="primary" disabled>提交任务 ↗</button></div>
+    </section>
+    <section class="panel card">
+      <div class="card-head"><h2>执行状态</h2><span id="taskStatus" class="status">暂无活动任务</span></div>
+      <div id="taskPrompt" class="muted" style="font-size:12px">提交任务后，这里会显示任务状态与当前会话。</div>
+      <div class="kpis">
+        <div class="kpi"><small>SESSION</small><strong id="sessionId">—</strong></div>
+        <div class="kpi"><small>PHASE</small><strong id="phase">—</strong></div>
+        <div class="kpi"><small>STEP</small><strong id="step">—</strong></div>
+        <div class="kpi"><small>EVENTS</small><strong id="eventCount">—</strong></div>
+      </div>
+      <div id="approval" class="approval">
+        <h3>需要你的审批</h3><p id="approvalSummary"></p><p id="approvalReason"></p><p id="approvalImpact"></p>
+        <div class="approval-actions">
+          <button id="approveOnce" class="primary">仅批准本次</button>
+          <button id="approveSession">本会话批准同类操作</button>
+          <button id="deny" class="deny">拒绝</button>
+        </div>
+      </div>
+    </section>
+    <section class="panel card">
+      <div class="card-head"><h2>执行时间线</h2><span class="tag">事件日志</span></div>
+      <div id="timeline" class="timeline"><div class="empty">选择一个会话或提交任务以查看事件</div></div>
+    </section>
+  </main>
+</div>
+</div>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let token = sessionStorage.getItem("jinlin.workbench.token") || "";
+  let activeTask = null;
+  let selectedSession = null;
+  let timer = null;
+  $("token").value = token;
+
+  function showError(message) { $("error").textContent = message; $("error").classList.toggle("show", !!message); }
+  function setConnected(ok, message) { $("dot").classList.toggle("on", ok); $("connectionText").textContent = message; $("submit").disabled = !ok; }
+  async function api(path, options={}) {
+    const headers = Object.assign({"Authorization": "Bearer " + token}, options.headers || {});
+    const response = await fetch(path, Object.assign({}, options, {headers}));
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error?.message || data.error?.code || ("HTTP " + response.status));
+    return data.data ?? data;
+  }
+  function node(tag, className, text) { const el=document.createElement(tag); if(className)el.className=className; if(text!==undefined)el.textContent=text; return el; }
+  async function connect() {
+    token = $("token").value.trim();
+    if (!token) { showError("请先粘贴启动服务时终端显示的 Token。"); return; }
+    sessionStorage.setItem("jinlin.workbench.token", token);
+    try {
+      const doctor = await api("/api/v1/doctor");
+      $("workspace").textContent = doctor.workspace || "已连接";
+      setConnected(true, "本机服务已连接");
+      showError("");
+      await loadSessions();
+      await loadTasks();
+      if (timer) clearInterval(timer);
+      timer = setInterval(() => { loadTasks().catch(e=>showError(e.message)); loadSessions().catch(()=>{}); }, 1800);
+    } catch (error) { setConnected(false, "连接失败"); showError(error.message); }
+  }
+  async function loadSessions() {
+    const rows = await api("/api/v1/sessions");
+    const host = $("sessions"); host.replaceChildren();
+    if (!rows.length) { host.append(node("div","empty","暂无历史会话")); return; }
+    rows.slice(0,30).forEach(row => {
+      const b=node("button","session"+(selectedSession===row.session_id?" active":""));
+      b.append(node("strong","",row.request || row.session_id));
+      b.append(node("small","",row.status+" · "+row.phase));
+      b.addEventListener("click",()=>selectSession(row.session_id));
+      host.append(b);
+    });
+  }
+  async function selectSession(id) {
+    selectedSession=id; activeTask=null; $("approval").classList.remove("show");
+    try { await renderSession(id); await loadSessions(); } catch(e){showError(e.message);}
+  }
+  async function renderSession(id) {
+    const [session,events]=await Promise.all([api("/api/v1/sessions/"+encodeURIComponent(id)),api("/api/v1/sessions/"+encodeURIComponent(id)+"/events?tail=100")]);
+    $("sessionId").textContent=session.session_id;
+    $("phase").textContent=session.phase || "—";
+    $("step").textContent=String(session.step_index ?? 0);
+    $("eventCount").textContent=String(session.event_count ?? events.length);
+    $("taskStatus").textContent=session.status;
+    $("taskStatus").className="status "+session.status;
+    $("taskPrompt").textContent=session.request || "";
+    renderEvents(events);
+  }
+  function renderEvents(events) {
+    const host=$("timeline"); host.replaceChildren();
+    if(!events.length){host.append(node("div","empty","暂无事件"));return;}
+    events.slice().reverse().forEach(evt=>{
+      const item=node("div","event"), time=node("time","",String(evt.timestamp||"").slice(11,19)||"—"), body=node("div","");
+      body.append(node("strong","",evt.type||"event"));
+      const detail=evt.request||evt.tool||evt.status||evt.error_code||evt.level||"";
+      if(detail)body.append(node("p","",String(detail)));
+      item.append(time,body);host.append(item);
+    });
+  }
+  async function loadTasks() {
+    const tasks=await api("/api/v1/tasks");
+    if(!activeTask && tasks.length) activeTask=tasks[0].task_id;
+    if(!activeTask) return;
+    const task=await api("/api/v1/tasks/"+encodeURIComponent(activeTask));
+    $("taskStatus").textContent=task.status;
+    $("taskStatus").className="status "+task.status;
+    $("taskPrompt").textContent=task.request || "";
+    if(task.session_id) {
+      selectedSession=task.session_id;
+      await renderSession(task.session_id);
+    }
+    const approval=task.pending_approval;
+    $("approval").classList.toggle("show",!!approval);
+    if(approval) {
+      $("approvalSummary").textContent=approval.tool+" · "+approval.risk+" · "+approval.summary;
+      $("approvalReason").textContent=approval.reason||"";
+      $("approvalImpact").textContent=(approval.impact||[]).join(" · ");
+    }
+    await loadSessions();
+  }
+  async function decide(decision) {
+    if(!activeTask) return;
+    const task=await api("/api/v1/tasks/"+encodeURIComponent(activeTask));
+    const approval=task.pending_approval;
+    if(!approval) { $("approval").classList.remove("show"); return; }
+    await api("/api/v1/tasks/"+encodeURIComponent(activeTask)+"/approvals/decision",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({approval_id:approval.approval_id,decision})
+    });
+    $("approval").classList.remove("show");
+    await loadTasks();
+  }
+  $("connect").addEventListener("click",connect);
+  $("reload").addEventListener("click",()=>{loadSessions().catch(e=>showError(e.message));loadTasks().catch(e=>showError(e.message));});
+  $("submit").addEventListener("click",async()=>{
+    const task=$("task").value.trim(); if(!task)return;
+    $("submit").disabled=true;showError("");
+    try {
+      const created=await api("/api/v1/tasks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({task,read_only:$("readOnly").checked})});
+      activeTask=created.task_id;selectedSession=null;$("task").value="";await loadTasks();
+    } catch(e){showError(e.message);} finally {$("submit").disabled=false;}
+  });
+  $("approveOnce").addEventListener("click",()=>decide("approved_once").catch(e=>showError(e.message)));
+  $("approveSession").addEventListener("click",()=>decide("approved_for_session").catch(e=>showError(e.message)));
+  $("deny").addEventListener("click",()=>decide("denied").catch(e=>showError(e.message)));
+  if(token) connect();
+})();
+</script>
+</body>
+</html>
