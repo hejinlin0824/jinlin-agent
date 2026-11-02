@@ -343,6 +343,43 @@ def cmd_rescue(args: Any) -> int:
     from .trash import clean_rescue, inspect_rescue, list_rescue, recover_rescue, restore_rescue
 
     workspace = Path(args.workspace or ".").expanduser().resolve()
+    if args.rescue_action == "quarantine":
+        from .trash import recover_clean_quarantines
+        if args.quarantine_action == "inspect":
+            report = inspect_rescue(workspace)
+            items = report.get("quarantined", [])
+            payload = {"status": report.get("status"), "counts": {
+                "quarantined": len(items),
+                "safe_to_restore": sum(x.get("classification") == "safe-to-restore" for x in items),
+                "already_restored": sum(x.get("classification") == "already-restored" for x in items),
+                "blocked": sum(x.get("classification") not in ("safe-to-restore", "already-restored") for x in items),
+            }, "items": items}
+            if args.json:
+                _print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                _print(f"workspace: {workspace}")
+                _print(f"status: {payload['status']}")
+                for key, value in payload["counts"].items():
+                    _print(f"  {key}: {value}")
+                for item in items:
+                    _print(f"  {item['classification']}: {item['path']} -> {item['candidate']} "
+                           f"[{item.get('candidate_kind', 'unknown')}] ({item.get('reason', '')})")
+            return 0 if payload["status"] == "ok" and not payload["counts"]["blocked"] else 2
+        report = recover_clean_quarantines(workspace, apply=bool(args.apply))
+        if args.json:
+            _print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            _print(f"workspace: {workspace}")
+            _print(f"status: {report['status']}")
+            for item in report.get("items", []):
+                _print(f"  {item.get('classification', 'classified')}: {item.get('path')} -> {item.get('candidate')}")
+            for item in report.get("recovered", []):
+                _print(f"  {item['status']}: {item['path']} -> {item['candidate']} ({item.get('detail', '')})")
+            for item in report.get("blocked", []):
+                _print(f"  blocked: {item.get('path')} -> {item.get('candidate')} ({item.get('detail', '')})")
+            if report["status"] == "dry-run":
+                _print("dry run only — pass --apply to restore verified quarantine evidence")
+        return 0 if report["status"] in ("dry-run", "applied") and not report.get("blocked") else 2
     if args.rescue_action == "recover":
         report = recover_rescue(workspace)
         _print(f"workspace: {workspace}")
@@ -511,6 +548,19 @@ def build_parser() -> argparse.ArgumentParser:
     rescue_inspect.add_argument("--workspace", default=".")
     rescue_inspect.add_argument("--json", action="store_true", help="emit the complete read-only report as JSON")
     rescue_inspect.set_defaults(func=cmd_rescue)
+    rescue_quarantine = rescue_sub.add_parser("quarantine", help="inspect or recover interrupted cleanup quarantine evidence")
+    quarantine_sub = rescue_quarantine.add_subparsers(dest="quarantine_action", required=True)
+    quarantine_inspect = quarantine_sub.add_parser("inspect", help="read-only classification of interrupted cleanup evidence")
+    quarantine_inspect.add_argument("--workspace", default=".")
+    quarantine_inspect.add_argument("--json", action="store_true", help="emit machine-readable quarantine inspection")
+    quarantine_inspect.set_defaults(func=cmd_rescue)
+    quarantine_recover = quarantine_sub.add_parser("recover", help="restore verified quarantine evidence without overwriting")
+    quarantine_recover.add_argument("--workspace", default=".")
+    quarantine_mode = quarantine_recover.add_mutually_exclusive_group()
+    quarantine_mode.add_argument("--dry-run", action="store_true", help="preview recovery (default)")
+    quarantine_mode.add_argument("--apply", action="store_true", help="perform verified no-clobber recovery")
+    quarantine_recover.add_argument("--json", action="store_true", help="emit machine-readable recovery report")
+    quarantine_recover.set_defaults(func=cmd_rescue)
 
     ev = sub.add_parser("eval", help="run the harness conformance / evaluation suite")
     ev.add_argument("--suite", default="all", choices=["all", "hcs", "e1e8"])
