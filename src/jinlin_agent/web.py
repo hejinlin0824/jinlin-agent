@@ -113,15 +113,24 @@ def create_server(workspace, host: str = "127.0.0.1", port: int = 8765, token: s
                 return
             parsed = urlsplit(self.path)
             parts = [p for p in parsed.path.split("/") if p]
+            is_task_submit = parts == ["api", "v1", "tasks"]
+            is_approval_decision = (
+                len(parts) == 6
+                and parts[:3] == ["api", "v1", "tasks"]
+                and parts[4:] == ["approvals", "decision"]
+            )
+            if not is_task_submit and not is_approval_decision:
+                self._json(405, {"error": {"code": "METHOD_NOT_ALLOWED", "message": "POST is not supported for this route"}})
+                return
             try:
                 body = self._read_json()
-                if parts == ["api", "v1", "tasks"]:
+                if is_task_submit:
                     if set(body) - {"task", "read_only"}:
                         raise AgentError("REQUEST_INVALID", "only task and read_only fields are accepted", source="http")
                     result = tasks.submit(body.get("task"), read_only=body.get("read_only", True))
                     self._json(202, {"data": result})
                     return
-                if len(parts) == 6 and parts[:3] == ["api", "v1", "tasks"] and parts[4:] == ["approvals", "decision"]:
+                if is_approval_decision:
                     if set(body) != {"approval_id", "decision"}:
                         raise AgentError("REQUEST_INVALID", "approval_id and decision are required", source="http")
                     result = tasks.approve(parts[3], body["approval_id"], body["decision"])
