@@ -1092,7 +1092,7 @@ def test_quarantine_recovery_restores_independent_rescue_and_preserves_evidence(
 
     assert report["status"] == "applied"
     assert report["blocked"] == []
-    assert report["recovered"][0]["status"] == "already-restored"
+    assert report["recovered"][0]["status"] == "restored"
     assert rescue.read_bytes() == payload
     assert quarantine.read_bytes() == payload
     assert os.stat(rescue).st_ino != os.stat(quarantine).st_ino
