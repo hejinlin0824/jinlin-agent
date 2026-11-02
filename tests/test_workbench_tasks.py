@@ -243,3 +243,25 @@ def test_unexpected_agent_exception_marks_persisted_session_failed(tmp_path, mon
     assert sessions[0]["status"] == "failed"
     events = service.list_events(sessions[0]["session_id"])
     assert any(event["type"] == "session.failed" for event in events)
+
+
+
+def test_task_snapshot_exposes_first_request_tool_token_and_total_timings():
+    from jinlin_agent.workbench import WorkbenchTask
+
+    task = WorkbenchTask(task_id="task_timing", request="inspect", read_only=True)
+    task.session_created_ms = 12
+    task.first_model_request_ms = 25
+    task.first_tool_ms = 31
+    task.first_token_ms = 84
+    task.finished_ms = 120
+
+    snapshot = WorkbenchTaskManager._snapshot(task)
+
+    assert snapshot["timings"] == {
+        "session_created_ms": 12,
+        "first_model_request_ms": 25,
+        "first_tool_ms": 31,
+        "first_token_ms": 84,
+        "total_ms": 120,
+    }

@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import secrets
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -41,6 +42,12 @@ class WorkbenchTask:
     pending_approval: dict[str, Any] | None = None
     stream_text: str = ""
     progress: str = "正在排队…"
+    submitted_monotonic: float = field(default_factory=time.monotonic, repr=False)
+    session_created_ms: int | None = None
+    first_model_request_ms: int | None = None
+    first_tool_ms: int | None = None
+    first_token_ms: int | None = None
+    finished_ms: int | None = None
     created_thread: threading.Thread | None = field(default=None, repr=False)
 
 
@@ -77,6 +84,9 @@ class WorkbenchTaskManager:
         return self.get(task.task_id)
 
     def _run(self, task: WorkbenchTask) -> None:
+        def elapsed_ms() -> int:
+            return max(0, int((time.monotonic() - task.submitted_monotonic) * 1000))
+
         with self._condition:
             task.status = "running"
             task.progress = "正在启动本地 Agent…"
@@ -85,6 +95,8 @@ class WorkbenchTaskManager:
         def on_session(session: Any, _sandbox: Any) -> None:
             with self._condition:
                 task.session_id = session.id
+                if task.session_created_ms is None:
+                    task.session_created_ms = elapsed_ms()
                 task.progress = (
                     "会话已创建，正在准备只读上下文…"
                     if task.read_only
@@ -94,7 +106,12 @@ class WorkbenchTaskManager:
 
         def on_progress(message: str) -> None:
             with self._condition:
-                task.progress = str(message or "")[:500]
+                progress = str(message or "")
+                if progress.startswith("正在请求模型分析") and task.first_model_request_ms is None:
+                    task.first_model_request_ms = elapsed_ms()
+                if progress.startswith("正在执行工具") and task.first_tool_ms is None:
+                    task.first_tool_ms = elapsed_ms()
+                task.progress = progress[:500]
                 self._condition.notify_all()
 
         def on_text_delta(delta: str) -> None:
@@ -102,6 +119,8 @@ class WorkbenchTaskManager:
                 if not delta:
                     task.stream_text = ""
                 else:
+                    if task.first_token_ms is None:
+                        task.first_token_ms = elapsed_ms()
                     task.stream_text = (task.stream_text + str(delta))[-20_000:]
                 self._condition.notify_all()
 
@@ -152,6 +171,8 @@ class WorkbenchTaskManager:
         finally:
             with self._condition:
                 task.pending_approval = None
+                if task.finished_ms is None:
+                    task.finished_ms = elapsed_ms()
                 self._condition.notify_all()
 
     def approve(self, task_id: str, approval_id: str, decision: str) -> dict[str, Any]:
@@ -195,5 +216,16 @@ class WorkbenchTaskManager:
             "error": task.error,
             "stream_text": task.stream_text,
             "progress": task.progress,
+            "timings": {
+                "session_created_ms": task.session_created_ms,
+                "first_model_request_ms": task.first_model_request_ms,
+                "first_tool_ms": task.first_tool_ms,
+                "first_token_ms": task.first_token_ms,
+                "total_ms": (
+                    task.finished_ms
+                    if task.finished_ms is not None
+                    else max(0, int((time.monotonic() - task.submitted_monotonic) * 1000))
+                ),
+            },
             "pending_approval": dict(task.pending_approval) if task.pending_approval else None,
         }
