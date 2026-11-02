@@ -15,10 +15,10 @@ from typing import Any
 from .errors import AgentError
 
 _ACTIVE = {"queued", "running", "waiting_approval"}
-_SECRET_FLAG = re.compile(r"(?i)(--?(?:api[-_]?key|access[-_]?token|token|password|secret|authorization))(?:=|\\s+)([^\\s]+)")
-_SECRET_ASSIGNMENT = re.compile(r"(?i)\\b(api[-_]?key|access[-_]?token|password|secret|authorization)\\s*[:=]\\s*([^\\s,;]+)")
-_BEARER_VALUE = re.compile(r"(?i)\\bBearer\\s+[A-Za-z0-9._~+/=-]{8,}")
-_URL_SECRET = re.compile(r"(?i)([?&](?:api_key|access_token|token|password|secret)=)[^&\\s]+")
+_SECRET_FLAG = re.compile(r"(?i)(--?(?:api[-_]?key|access[-_]?token|token|password|secret|authorization))(?:=|\s+)([^\s]+)")
+_SECRET_ASSIGNMENT = re.compile(r"(?i)\b(api[-_]?key|access[-_]?token|password|secret|authorization)\s*[:=]\s*([^\s,;]+)")
+_BEARER_VALUE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
+_URL_SECRET = re.compile(r"(?i)([?&](?:api_key|access_token|token|password|secret)=)[^&\s]+")
 
 
 def _safe_approval_summary(value: Any) -> str:
