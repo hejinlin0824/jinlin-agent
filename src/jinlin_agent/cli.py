@@ -500,7 +500,7 @@ def cmd_serve(args: Any) -> int:
     host, port = server.server_address[:2]
     _print("Jinlin Agent local workbench API")
     _print(f"workspace: {Path(args.workspace or '.').expanduser().resolve()}")
-    _print(f"listening: http://{host}:{port}")
+    _print(f"listening: http://[{host}]:{port}" if ":" in str(host) else f"listening: http://{host}:{port}")
     _print("API: /api/v1/health, /api/v1/doctor, /api/v1/sessions")
     _print("Authorization: Bearer <token> (token shown once below)")
     _print(f"token: {token}")
