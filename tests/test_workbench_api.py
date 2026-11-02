@@ -34,6 +34,16 @@ def test_application_service_rejects_invalid_session_ids(tmp_path):
     assert exc.value.code == "SESSION_NOT_FOUND"
 
 
+def test_waiting_user_event_exposes_only_the_question_text():
+    event = {
+        "seq": 8, "ts": "2026-01-01T00:00:00Z", "type": "session.waiting_user",
+        "payload": {"question": "Which implementation should I use?", "private": "must-not-leak"},
+    }
+    result = ApplicationService._event_summary(event)
+    assert result["question"] == "Which implementation should I use?"
+    assert "private" not in result
+
+
 def test_event_projection_does_not_expose_raw_tool_arguments_or_output():
     event = {
         "seq": 7, "ts": "2026-01-01T00:00:00Z", "type": "tool.intent",
