@@ -597,12 +597,15 @@ def _inspect_clean_quarantines(workspace: Path, manifest: dict[str, dict[str, An
                 "identity": entry.get("quarantine_identity", identity),
                 "candidate_identity": identity,
                 "transaction_id": entry.get("transaction_id"),
+                "rescue": rescue_rel,
+                "target": entry.get("orig"),
             }
             target, error = _safe_rescue_target(workspace, str(entry.get("orig", "")))
             if not error and target is not None:
                 stage = _restore_stage_path(target, digest)
                 stage_expected[_relative_posix(stage, workspace)] = {
-                    "sha256": digest, "rescue": rescue_rel, "transaction_id": entry.get("transaction_id")
+                    "sha256": digest, "rescue": rescue_rel, "target": entry.get("orig"),
+                    "transaction_id": entry.get("transaction_id")
                 }
         else:
             rescue_expected[rescue_rel] = {"sha256": None, "identity": identity}
@@ -630,6 +633,8 @@ def _inspect_clean_quarantines(workspace: Path, manifest: dict[str, dict[str, An
             item["candidate_kind"] = candidate_kind if expected is not None else "unknown"
             if expected is not None:
                 item["transaction_id"] = expected.get("transaction_id")
+                item["rescue"] = expected.get("rescue", candidate_rel if candidate_kind == "rescue" else None)
+                item["target"] = expected.get("target")
             if expected is None:
                 item["classification"] = "unrecognized"
                 item["reason"] = "no manifest-backed Rescue or deterministic restore stage matches the former path"
@@ -1456,8 +1461,9 @@ def recover_clean_quarantines(workspace: Path, apply: bool = False) -> dict[str,
                 else:
                     result = _quarantine_recover_one_locked(workspace, item, manifest)
             (report["recovered"] if result["status"] in ("restored", "already-restored") else report["blocked"]).append(result)
-            _audit_result(workspace, "quarantine-recover", result, rescue=item.get("path"),
-                          target=candidate, sha256=item.get("sha256"), txid=item.get("transaction_id"))
+            _audit_result(workspace, "quarantine-recover", result, rescue=item.get("rescue"),
+                          target=item.get("target"), quarantine=item.get("path"), candidate=candidate,
+                          sha256=item.get("sha256"), txid=item.get("transaction_id"))
         if report["blocked"]:
             report["status"] = "attention-required"
         return report
