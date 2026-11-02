@@ -279,6 +279,8 @@ class PolicyEngine:
     # ------------------------------------------------------------------ tool
 
     def evaluate(self, tool_name: str, side_effect: str, args: dict[str, Any], tool_call_id: str = "") -> PolicyDecision:
+        if self.read_only and side_effect != SideEffect.READ.value and tool_name != "request_user_input":
+            return PolicyDecision(allowed=False, risk=RiskLevel.HIGH.value, reason="task contract is read-only", error=AgentError(COMMAND_DENIED, "task contract is read-only", source="policy"))
         if self.read_only and not (
             side_effect == SideEffect.READ.value or tool_name == "request_user_input"
         ):

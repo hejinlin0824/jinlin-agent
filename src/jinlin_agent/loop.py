@@ -36,6 +36,7 @@ from .tools.base import ToolContext
 from .tools.registry import build_default_registry
 from .policy import PolicyEngine
 from .verify import CompletionGate, Verifier
+from .task_contract import TaskContract
 
 
 class Harness:
@@ -47,6 +48,7 @@ class Harness:
         approval_handler: Callable[[Any], tuple[str, str]] | None = None,
         auto_approve: bool = False,
         read_only: bool = False,
+        task_contract: TaskContract | None = None,
         stream_callback: Callable[[str], None] | None = None,
         progress_callback: Callable[[str], None] | None = None,
         log: Callable[[str], None] = lambda msg: None,
@@ -60,7 +62,8 @@ class Harness:
         self.log = log if callable(log) else (lambda msg: None)
         self.stream_callback = stream_callback
         self.progress_callback = progress_callback or (lambda message: None)
-        self.read_only = bool(read_only)
+        self.task_contract = task_contract or TaskContract.legacy(read_only=read_only)
+        self.read_only = self.task_contract.read_only
         self.progress_callback("正在加载项目说明和可用工具…" if self.read_only else "正在识别项目结构并加载项目说明…")
         # Read-only turns do not run the verification ladder or project test
         # discovery. That work is deferred to a write-capable task.
@@ -71,6 +74,7 @@ class Harness:
             session.artifacts,
             emit=lambda t, p: session.emit(t, p),
             state=self.state,
+            task_contract=self.task_contract,
         )
         self.project = self.harness_verifier.project if self.harness_verifier else None
         self.project_instructions = load_project_instructions(
@@ -82,7 +86,8 @@ class Harness:
             session.workspace,
             approval_handler=approval_handler,
             auto_approve=auto_approve,
-            read_only=read_only,
+            read_only=self.read_only,
+            task_contract=self.task_contract,
         )
         self.ctx = ToolContext(
             workspace=session.workspace,
@@ -421,18 +426,13 @@ class Harness:
         )
         if not changed and not mentions_tests:
             return
-        levels = list(self.config.verification.get("levels", ["L0", "L1", "L2", "L3", "L5"]))
-        if changed and not self.config.verification.get("require_for_code_changes", True):
-            return
-        allowed = {"L0", "L1", "L2", "L3", "L5"}
-        levels = [lvl for lvl in levels if lvl in allowed]
-        # always run the deterministic core for code changes; tests whenever claims mention them
-        core = [lvl for lvl in ("L0", "L1") if lvl not in levels]
-        levels = core + levels
-        if not self.harness_verifier.project.test_commands:
-            levels = [lvl for lvl in levels if lvl not in ("L3", "L5")]
-        if not changed:
-            levels = [lvl for lvl in levels if lvl in ("L3", "L5")]
+        plan = self.harness_verifier.plan_for_changes(mentions_tests=mentions_tests)
+        configured = set(self.config.verification.get("levels", ["L0", "L1", "L2", "L3", "L5"]))
+        levels = list(plan.required_levels)
+        for level in plan.optional_levels:
+            if level in configured and level not in levels:
+                levels.append(level)
+        self.session.emit("verification.plan", {"plan": plan.to_dict(), "selected_levels": levels})
         self.harness_verifier.run_ladder(levels)
 
     def _handle_text_only(self, response: Any) -> str:

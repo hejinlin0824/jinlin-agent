@@ -16,6 +16,7 @@ from .sandbox.null import NullSandbox
 from .session import SessionManager, workspace_snapshot
 from .state import recover
 from .events import read_events
+from .task_contract import TaskContract
 
 _SESSION_ID = re.compile(r"^sess_\d{8}_\d{6}_[0-9a-f]{6}$")
 
@@ -226,10 +227,16 @@ class ApplicationService:
         stream_callback: Callable[[str], None] | None = None,
         progress_callback: Callable[[str], None] | None = None,
         on_session: Callable[[Any, Any], None] | None = None,
+        task_contract: TaskContract | None = None,
     ) -> tuple[Any, str]:
         """Run a task through the canonical Harness; caller owns presentation."""
         if not isinstance(task, str) or not task.strip():
             raise AgentError("REQUEST_INVALID", "task must be a non-empty string", source="application")
+        if task_contract is None:
+            task_contract = TaskContract.legacy(read_only=read_only)
+        elif read_only and not task_contract.read_only:
+            raise AgentError("REQUEST_INVALID", "read_only conflicts with a write-capable task contract", source="application")
+        read_only = task_contract.read_only
         if not self.config.api_key() and not mock_script:
             raise AgentError("CONFIG_INVALID", f"no API key configured ({self.config.model.api_key_env})", source="application")
         if progress_callback:
@@ -254,6 +261,7 @@ class ApplicationService:
                 approval_handler=approval_handler,
                 auto_approve=bool(auto_approve),
                 read_only=bool(read_only),
+                task_contract=task_contract,
                 stream_callback=stream_callback,
                 progress_callback=progress_callback,
                 log=log,

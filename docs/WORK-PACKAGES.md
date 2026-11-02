@@ -91,3 +91,22 @@
 - 指定解释器：./scripts/test-all.ps1 -PythonPath C:\path\to\python.exe
 - 输出 reports/local 下的 transcript、JUnit XML 和 JSON 报告。
 - “ALL CHECKS PASSED”只代表脚本列出的自动化检查通过；浏览器人工验收和真实模型质量另行记录。
+
+
+## 8. WP-2.1 / WP-2.5 implementation contract (initial slice)
+
+The initial implementation introduces `jinlin_agent.task_contract.TaskContract`:
+- Immutable and JSON-serializable; includes task kind, capability set, verification profile, pinned workspace scope, and schema version.
+- The existing `read_only` argument remains a compatibility adapter through `TaskContract.legacy()`; callers do not need a flag-day migration.
+- PolicyEngine receives the contract and enforces the legacy read-only boundary at execution time. Prompt/tool-catalog filtering remains defense in depth.
+- The contract is supplied by the application boundary; it is not inferred from user prompt text.
+
+The initial verification planner is deterministic over the recorded changed-file set and detected project commands:
+- Documentation-only: L0 + L1; no unrelated project test suite.
+- Code/mixed changes: L0 + L1, and L3 when a project test command exists; configured L2 and baseline L5 are optional.
+- Test-only changes: L0 + L1 + L3 when available; baseline comparison is optional.
+- Configuration changes: L0 + L1; configured static/test checks are optional.
+- A claim that tests passed promotes L3 to required whenever a test command exists, even without a recorded diff.
+- If an optional check is actually run and fails, the completion gate does not ignore that failure.
+
+This is an incremental compatibility layer, not the final persisted TaskContract API. Workbench request validation, durable contract snapshots, approval scopes and resume semantics remain follow-up work under WP-2.2/WP-2.3.

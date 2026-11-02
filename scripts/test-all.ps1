@@ -163,6 +163,7 @@ try {
             "tests/test_smoke.py",
             "tests/test_read_only_workflow.py",
             "tests/test_loop_final_answer.py",
+            "tests/test_task_contracts.py",
             "tests/test_workbench_tasks.py",
             "tests/test_test_runner_metadata.py"
         )

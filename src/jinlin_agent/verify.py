@@ -20,6 +20,7 @@ from typing import Any, Callable
 from .domain import CompletionResult, VerificationLevel, VerificationRun, new_id, utcnow_iso
 from .errors import AgentError
 from .sandbox.base import process_env
+from .task_contract import TaskContract, VerificationPlan, plan_verification
 
 
 # --------------------------------------------------------------------------- detection
@@ -215,6 +216,7 @@ class Verifier:
         artifacts: Any,
         emit: Callable[[str, dict[str, Any]], dict[str, Any]],
         state: Any,
+        task_contract: TaskContract | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.config = config
@@ -222,8 +224,18 @@ class Verifier:
         self.artifacts = artifacts
         self.emit = emit
         self.state = state
+        self.task_contract = task_contract or TaskContract.legacy(read_only=False)
         self.project = detect_project(self.workspace, config)
         self.baseline: dict[str, Any] | None = None
+
+    def plan_for_changes(self, *, mentions_tests: bool = False) -> VerificationPlan:
+        changed = set(getattr(self.state, "written_files", {})) | set(getattr(self.state, "deleted_files", []))
+        return plan_verification(
+            changed,
+            has_test_command=bool(self.project.test_commands),
+            has_static_command=bool(self.project.lint_commands),
+            mentions_tests=mentions_tests,
+        )
 
     # ------------------------------------------------------------------ baseline
 
@@ -618,10 +630,14 @@ class CompletionGate:
                     reasons.append("project has tests but they were never run")
                 elif by_level["L3"].status != "passed":
                     reasons.append(f"tests (L3) did not pass (status={by_level['L3'].status})")
+            if "L2" in by_level and by_level["L2"].status == "failed":
+                reasons.append("static analysis (L2) ran and failed")
+            if "L3" in by_level and by_level["L3"].status == "failed":
+                reasons.append("test verification (L3) ran and failed")
             if "L5" in by_level and by_level["L5"].status == "failed":
                 reasons.append("regression check (L5) found new failures vs baseline")
-            if "L5" not in by_level and has_tests:
-                warnings.append("regression baseline (L5) was not run")
+            if verification_plan and "L5" in verification_plan.optional_levels and "L5" not in by_level:
+                warnings.append("optional regression comparison (L5) was not run")
             baseline_info = getattr(s, "baseline", None) or {}
             if has_tests and baseline_info.get("status") in ("error", "skipped"):
                 detail = baseline_info.get("error") or baseline_info.get("reason") or "unavailable"
