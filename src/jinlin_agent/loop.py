@@ -54,7 +54,9 @@ class Harness:
         self.config = config
         self.provider = provider
         self.state = session.state
-        self.log = log
+        # ApplicationService adapters may pass None for an optional logger.
+        # Normalize once so both Harness and ToolContext always receive a callable.
+        self.log = log if callable(log) else (lambda msg: None)
         self.stream_callback = stream_callback
         self.harness_verifier = Verifier(
             session.workspace,
@@ -83,7 +85,7 @@ class Harness:
             artifacts=session.artifacts,
             state=self.state,
             session_dir=session.dir,
-            log=log,
+            log=self.log,
         )
         self.dispatcher = ToolDispatcher(
             registry=self.registry,
