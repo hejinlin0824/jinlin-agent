@@ -39,6 +39,7 @@ class WorkbenchTask:
     session_id: str = ""
     error: dict[str, str] | None = None
     pending_approval: dict[str, Any] | None = None
+    stream_text: str = ""
     created_thread: threading.Thread | None = field(default=None, repr=False)
 
 
@@ -84,6 +85,14 @@ class WorkbenchTaskManager:
                 task.session_id = session.id
                 self._condition.notify_all()
 
+        def on_text_delta(delta: str) -> None:
+            with self._condition:
+                if not delta:
+                    task.stream_text = ""
+                else:
+                    task.stream_text = (task.stream_text + str(delta))[-20_000:]
+                self._condition.notify_all()
+
         def approve(request: Any) -> tuple[str, str]:
             safe_request = {
                 "approval_id": str(getattr(request, "approval_id", "")),
@@ -112,6 +121,7 @@ class WorkbenchTaskManager:
                 auto_approve=False,
                 approval_handler=approve,
                 on_session=on_session,
+                stream_callback=on_text_delta,
             )
             with self._condition:
                 task.status = "waiting_user" if status == "waiting_user" else status
@@ -167,5 +177,6 @@ class WorkbenchTaskManager:
             "status": task.status,
             "session_id": task.session_id or None,
             "error": task.error,
+            "stream_text": task.stream_text,
             "pending_approval": dict(task.pending_approval) if task.pending_approval else None,
         }
