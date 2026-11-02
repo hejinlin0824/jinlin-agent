@@ -36,7 +36,7 @@ function renderSidebar(){
  });
 }
 function renderMessages(){
- const c=current();$("messages").replaceChildren();$("approval").classList.remove("show");
+ const c=current();$("messages").replaceChildren();
  if(!c||!c.messages.length){$("welcome").style.display="block";$("sessionMeta").textContent="新对话";$("taskStatus").textContent="暂无任务";return}
  $("welcome").style.display="none";
  c.messages.forEach(m=>{
@@ -77,8 +77,10 @@ async function api(path,options={}){
 async function loadSession(c){
  const [s,events]=await Promise.all([api("/api/v1/sessions/"+encodeURIComponent(c.sessionId)),api("/api/v1/sessions/"+encodeURIComponent(c.sessionId)+"/events?tail=120")]);
  c.status=s.status;c.events=events;c.lastEventCount=events.length;c.phase=s.phase;
- $("sessionId").textContent=s.session_id;$("phase").textContent=s.phase||"—";$("step").textContent=String(s.step_index??0);$("eventCount").textContent=String(s.event_count??events.length);
- renderDeveloper(c,events);
+ if(c.id===state.activeId){
+  $("sessionId").textContent=s.session_id;$("phase").textContent=s.phase||"—";$("step").textContent=String(s.step_index??0);$("eventCount").textContent=String(s.event_count??events.length);
+  renderDeveloper(c,events);
+ }
  return s;
 }
 function updateAssistant(c,text,meta){
@@ -118,7 +120,7 @@ async function refreshTask(c){
  }
 }
 async function selectConversation(id){
- state.activeId=id;const c=current();if(!c)return;
+ state.activeId=id;const c=current();if(!c)return;$("approval").classList.remove("show");
  if(c.sessionId&&!c.taskId){
   try{const s=await loadSession(c);c.request=s.request||c.request;c.messages=[{role:"user",text:c.request||"历史任务"},{role:"assistant",text:s.completion_summary||(s.status==="failed"?"任务执行失败。展开开发者详情查看事件记录。":"历史会话已载入。"),meta:statusText(s.status)}]}
   catch(e){error("无法载入这条对话："+e.message)}
