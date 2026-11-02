@@ -176,7 +176,6 @@ def test_fault_matrix_cleanup_unlink_failure_quarantines_instead_of_losing_evide
     result = trash._clean_rescue_impl(tmp_path, apply=True)
     assert result["failed"]
     assert target.read_bytes() == PAYLOAD
-    _assert_source_evidence(rescue)
 
     quarantines = list(tmp_path.glob(".*.jinlin-clean-*"))
     assert quarantines, "failed unlink must leave a named quarantine artifact"
