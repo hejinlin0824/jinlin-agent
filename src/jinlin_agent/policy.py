@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .domain import ApprovalDecision, RiskLevel, SideEffect
+from .task_contract import TaskContract, Capability
 from .paths import resolve_in_workspace, within as path_within
 from .errors import (
     APPROVAL_DENIED,
@@ -269,22 +270,33 @@ class PolicyEngine:
         approval_handler: ApprovalHandler | None = None,
         auto_approve: bool = False,
         read_only: bool = False,
+        task_contract: TaskContract | None = None,
     ) -> None:
         self.config = config
         self.paths = PathPolicy(workspace, follow_symlinks=bool(config.workspace.get("follow_symlinks", False)))
         self.approvals = ApprovalManager(config, approval_handler, auto_approve)
-        self.read_only = read_only
+        self.task_contract = task_contract or TaskContract.legacy(read_only=read_only)
+        self.read_only = self.task_contract.read_only
         self.workspace = workspace
 
     # ------------------------------------------------------------------ tool
 
     def evaluate(self, tool_name: str, side_effect: str, args: dict[str, Any], tool_call_id: str = "") -> PolicyDecision:
-        if self.read_only and side_effect not in (SideEffect.READ.value, SideEffect.NONE.value):
+        required = {
+            SideEffect.READ.value: Capability.READ,
+            SideEffect.WRITE.value: Capability.WRITE,
+            SideEffect.EXECUTE.value: Capability.EXECUTE,
+        }.get(side_effect)
+        if tool_name == "request_user_input":
+            required = Capability.USER_INPUT
+        elif side_effect == SideEffect.NONE.value:
+            required = Capability.WORKFLOW
+        if required is not None and not self.task_contract.allows(required):
             return PolicyDecision(
                 allowed=False,
                 risk=RiskLevel.HIGH.value,
-                reason="read-only session",
-                error=AgentError(COMMAND_DENIED, "session is read-only; this operation needs write access", source="policy"),
+                reason=f"task contract does not grant {required.value}",
+                error=AgentError(COMMAND_DENIED, f"task contract does not grant {required.value}", source="policy"),
             )
         if side_effect in (SideEffect.READ.value, SideEffect.NONE.value):
             return self._check_reads(tool_name, args)

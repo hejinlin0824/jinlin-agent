@@ -34,6 +34,16 @@ def test_application_service_rejects_invalid_session_ids(tmp_path):
     assert exc.value.code == "SESSION_NOT_FOUND"
 
 
+def test_waiting_user_event_exposes_only_the_question_text():
+    event = {
+        "seq": 8, "ts": "2026-01-01T00:00:00Z", "type": "session.waiting_user",
+        "payload": {"question": "Which implementation should I use?", "private": "must-not-leak"},
+    }
+    result = ApplicationService._event_summary(event)
+    assert result["question"] == "Which implementation should I use?"
+    assert "private" not in result
+
+
 def test_event_projection_does_not_expose_raw_tool_arguments_or_output():
     event = {
         "seq": 7, "ts": "2026-01-01T00:00:00Z", "type": "tool.intent",
@@ -102,6 +112,7 @@ def test_service_reads_session_summary_events_and_stats(tmp_path):
     assert summary["session_id"] == sid
     assert summary["request"] == "inspect this project"
     assert summary["status"] == "running"
+    assert summary["completion_summary"] == ""
     assert summary["event_count"] >= 1
     assert service.list_sessions()[0]["session_id"] == sid
     events = service.list_events(sid, tail=10)
@@ -155,3 +166,86 @@ def test_service_rejects_session_folder_identity_mismatch(tmp_path):
         service.get_session(forged_id)
     assert exc.value.code == "SESSION_NOT_FOUND"
     assert service.list_sessions() == []
+
+
+
+@pytest.mark.parametrize("disconnect_error", [
+    BrokenPipeError("peer closed"),
+    ConnectionResetError("peer reset"),
+    ConnectionAbortedError("peer aborted"),
+])
+def test_json_response_tolerates_client_disconnect(tmp_path, disconnect_error):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    server, _service, _token = create_server(root, port=0, token="test-token")
+    handler = object.__new__(server.RequestHandlerClass)
+    calls = []
+    handler.send_response = lambda status: calls.append(("status", status))
+    handler.send_header = lambda name, value: calls.append(("header", name, value))
+    handler.end_headers = lambda: calls.append(("end_headers",))
+    
+    class DisconnectedWriter:
+        def write(self, _body):
+            raise disconnect_error
+
+    handler.wfile = DisconnectedWriter()
+    try:
+        # A disconnected client is a normal transport lifecycle event. The
+        # response helper must not raise or attempt a second response.
+        assert handler._json(200, {"data": {"ok": True}}) is None
+        assert ("status", 200) in calls
+        assert calls.count(("end_headers",)) == 1
+    finally:
+        server.server_close()
+
+
+def test_html_response_tolerates_client_disconnect(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    server, _service, _token = create_server(root, port=0, token="test-token")
+    handler = object.__new__(server.RequestHandlerClass)
+    calls = []
+    handler.send_response = lambda status: calls.append(("status", status))
+    handler.send_header = lambda name, value: calls.append(("header", name, value))
+    handler.end_headers = lambda: calls.append(("end_headers",))
+
+    class DisconnectedWriter:
+        def write(self, _body):
+            raise ConnectionAbortedError("browser navigated away")
+
+    handler.wfile = DisconnectedWriter()
+    try:
+        handler._html()
+        assert ("status", 200) in calls
+        assert calls.count(("end_headers",)) == 1
+    finally:
+        server.server_close()
+
+
+
+def test_workbench_ui_sets_httponly_cookie_and_cookie_authenticates_api(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    server, _service, token = create_server(root, port=0, token="cookie-secret")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = "http://127.0.0.1:%d" % server.server_address[1]
+    try:
+        with urllib.request.urlopen(base + "/", timeout=3) as response:
+            page = response.read().decode("utf-8")
+            cookie = response.headers.get("Set-Cookie", "")
+            assert "HttpOnly" in cookie
+            assert "SameSite=Strict" in cookie
+            assert "Path=/api/v1" in cookie
+            assert token not in page
+            assert "__JINLIN_WORKBENCH_TOKEN__" not in page
+
+        status, payload = _request(
+            base + "/api/v1/sessions",
+            headers={"Cookie": "jinlin_workbench_session=cookie-secret"},
+        )
+        assert status == 200 and payload["data"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)

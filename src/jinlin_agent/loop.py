@@ -35,7 +35,8 @@ from .tokens import estimate_messages_tokens
 from .tools.base import ToolContext
 from .tools.registry import build_default_registry
 from .policy import PolicyEngine
-from .verify import CompletionGate, Verifier, detect_project
+from .verify import CompletionGate, Verifier
+from .task_contract import TaskContract
 
 
 class Harness:
@@ -47,24 +48,35 @@ class Harness:
         approval_handler: Callable[[Any], tuple[str, str]] | None = None,
         auto_approve: bool = False,
         read_only: bool = False,
+        task_contract: TaskContract | None = None,
         stream_callback: Callable[[str], None] | None = None,
+        progress_callback: Callable[[str], None] | None = None,
         log: Callable[[str], None] = lambda msg: None,
     ) -> None:
         self.session = session
         self.config = config
         self.provider = provider
         self.state = session.state
-        self.log = log
+        # ApplicationService adapters may pass None for an optional logger.
+        # Normalize once so both Harness and ToolContext always receive a callable.
+        self.log = log if callable(log) else (lambda msg: None)
         self.stream_callback = stream_callback
-        self.harness_verifier = Verifier(
+        self.progress_callback = progress_callback or (lambda message: None)
+        self.task_contract = task_contract or TaskContract.legacy(read_only=read_only)
+        self.read_only = self.task_contract.read_only
+        self.progress_callback("正在加载项目说明和可用工具…" if self.read_only else "正在识别项目结构并加载项目说明…")
+        # Read-only turns do not run the verification ladder or project test
+        # discovery. That work is deferred to a write-capable task.
+        self.harness_verifier = None if self.read_only else Verifier(
             session.workspace,
             config,
             session.sandbox,
             session.artifacts,
             emit=lambda t, p: session.emit(t, p),
             state=self.state,
+            task_contract=self.task_contract,
         )
-        self.project = detect_project(session.workspace, config)
+        self.project = self.harness_verifier.project if self.harness_verifier else None
         self.project_instructions = load_project_instructions(
             session.workspace, config.project.get("instruction_files", [])
         )
@@ -74,7 +86,8 @@ class Harness:
             session.workspace,
             approval_handler=approval_handler,
             auto_approve=auto_approve,
-            read_only=read_only,
+            read_only=self.read_only,
+            task_contract=self.task_contract,
         )
         self.ctx = ToolContext(
             workspace=session.workspace,
@@ -83,7 +96,7 @@ class Harness:
             artifacts=session.artifacts,
             state=self.state,
             session_dir=session.dir,
-            log=log,
+            log=self.log,
         )
         self.dispatcher = ToolDispatcher(
             registry=self.registry,
@@ -99,8 +112,14 @@ class Harness:
             artifacts=session.artifacts,
             sandbox=session.sandbox,
             project_instructions=self.project_instructions,
+            read_only=self.read_only,
         )
         self.history: list[Message] = self._restore_history()
+        self.progress_callback(
+            "只读会话已就绪，正在准备首次请求…"
+            if self.read_only
+            else "项目环境已就绪，正在准备任务上下文…"
+        )
         self.invalid_decisions = 0
         self.turns = 0
         self._started = time.monotonic()
@@ -212,6 +231,7 @@ class Harness:
         self.session.emit("step.started", {"step_index": state.step_index + 1, "phase": state.phase}, self.turn_id, self.step_id)
         self._advance_phase()
 
+        self.progress_callback("正在分析需求并整理相关项目上下文…")
         bundle = self.context_builder.build(state, self.history, state.request)
         self.history = list(bundle.history_kept)
         self._tool_event("context.built", bundle.to_event_payload())
@@ -228,7 +248,11 @@ class Harness:
 
         request = self._build_request(bundle.messages)
         self._tool_event("model.requested", {"request_id": request.request_id, "model": self.config.model.model})
+        self.progress_callback("正在请求模型分析，稍后会显示实时回复…")
         try:
+            if self.stream_callback:
+                # Start a fresh visible response for this model turn.
+                self.stream_callback("")
             response = self.provider.complete(request, on_text_delta=self.stream_callback)
         except AgentError as exc:
             self._tool_event("model.attempt", {"error_code": exc.code, "error_message": exc.message, "retriable": exc.retriable})
@@ -274,7 +298,7 @@ class Harness:
         return ModelRequest(
             request_id=new_id("req"),
             messages=messages,
-            tools=self.registry.definitions(),
+            tools=self.registry.definitions(read_only=getattr(self, "read_only", False)),
             temperature=float(self.config.model.temperature),
             max_output_tokens=int(self.config.model.max_output_tokens),
             stream=True,
@@ -287,6 +311,7 @@ class Harness:
         completion: dict[str, Any] | None = None
         user_input: dict[str, Any] | None = None
         for call in calls:
+            self.progress_callback(f"正在执行工具：{call.name}")
             dispatch = self.dispatcher.execute(call, self.turn_id, self.step_id)
             result = dispatch.result
             if result.ok:
@@ -313,6 +338,31 @@ class Harness:
 
     def _handle_completion(self, completion: dict[str, Any]) -> str:
         state = self.state
+        if getattr(self, "read_only", False):
+            # A read-only turn is complete when the model has answered. Running
+            # the code-change gate here caused false rejections (plan/evidence
+            # requirements) and could launch L3/L5 test commands that policy
+            # correctly denies. Treat any observed mutation as an invariant breach.
+            if state.written_files or state.deleted_files:
+                self._fail(AgentError(
+                    "READ_ONLY_INVARIANT_VIOLATION",
+                    "read-only task recorded workspace mutations; refusing completion",
+                    source="runtime",
+                ))
+                return "terminal"
+            summary = str(completion.get("summary", "") or "").strip()
+            self.session.emit(
+                "session.completed",
+                {
+                    "result": "completed",
+                    "summary": summary,
+                    "report_artifact_id": None,
+                    "warnings": ["Read-only analysis completed; no verification commands were run."],
+                    "evidence": {"mode": "read-only"},
+                },
+            )
+            self.progress_callback("只读分析已完成")
+            return "terminal"
         state.claims = [Claim.from_dict(c) for c in completion.get("claims", [])]
         # the harness verifies; the model's own claims are only inputs
         self._run_harness_verification(state.claims)
@@ -365,6 +415,8 @@ class Harness:
         return "continue"
 
     def _run_harness_verification(self, claims: list[Any] | None = None) -> None:
+        if getattr(self, "harness_verifier", None) is None:
+            return
         state = self.state
         changed = bool(state.written_files or state.deleted_files)
         claims = claims or []
@@ -374,21 +426,40 @@ class Harness:
         )
         if not changed and not mentions_tests:
             return
-        levels = list(self.config.verification.get("levels", ["L0", "L1", "L2", "L3", "L5"]))
-        if changed and not self.config.verification.get("require_for_code_changes", True):
-            return
-        allowed = {"L0", "L1", "L2", "L3", "L5"}
-        levels = [lvl for lvl in levels if lvl in allowed]
-        # always run the deterministic core for code changes; tests whenever claims mention them
-        core = [lvl for lvl in ("L0", "L1") if lvl not in levels]
-        levels = core + levels
-        if not self.harness_verifier.project.test_commands:
-            levels = [lvl for lvl in levels if lvl not in ("L3", "L5")]
-        if not changed:
-            levels = [lvl for lvl in levels if lvl in ("L3", "L5")]
+        plan = self.harness_verifier.plan_for_changes(mentions_tests=mentions_tests)
+        configured = set(self.config.verification.get("levels", ["L0", "L1", "L2", "L3", "L5"]))
+        levels = list(plan.required_levels)
+        for level in plan.optional_levels:
+            if level in configured and level not in levels:
+                levels.append(level)
+        self.session.emit("verification.plan", {"plan": plan.to_dict(), "selected_levels": levels})
         self.harness_verifier.run_ladder(levels)
 
     def _handle_text_only(self, response: Any) -> str:
+        answer = str(getattr(response, "text", "") or "").strip()
+        # Read-only investigations and ordinary engineering questions do not
+        # need a propose_completion ceremony. Once the model has answered and
+        # no workspace mutation occurred, persist that answer as the terminal
+        # session summary so the Workbench cannot keep calling tools afterward.
+        if (
+            answer
+            and getattr(response, "finish_reason", "stop") != "length"
+            and not self.state.written_files
+            and not self.state.deleted_files
+        ):
+            self.session.emit(
+                "session.completed",
+                {
+                    "result": "completed",
+                    "summary": answer[:20_000],
+                    "report_artifact_id": None,
+                    "warnings": ["Answered without modifying workspace files."],
+                    "evidence": [],
+                },
+            )
+            self.progress_callback("已生成最终答复")
+            return "terminal"
+
         self.invalid_decisions += 1
         if self.invalid_decisions >= 3:
             self._tool_event(
@@ -417,7 +488,9 @@ class Harness:
 
     def _check_loop_guards(self) -> None:
         state = self.state
-        max_failures = int(self.config.runtime.get("max_consecutive_tool_failures", 5))
+        # Fail closed sooner: a repeated broken tool sequence should not
+        # generate a long stream of identical model/tool events.
+        max_failures = min(3, int(self.config.runtime.get("max_consecutive_tool_failures", 5)))
         max_sig = int(self.config.runtime.get("max_tool_signature_repeats", 3))
         reason = ""
         kind = ""
@@ -437,7 +510,7 @@ class Harness:
                 ),
             )
         )
-        if state.loop_events >= 3:
+        if state.loop_events >= 2:
             self._fail(AgentError("LOOP_DETECTED", reason, source="runtime"))
             return
         # reset counters so the next two rounds are fresh

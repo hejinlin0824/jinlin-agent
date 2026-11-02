@@ -12,9 +12,11 @@ from typing import Any, Callable
 from .config import Config, load_config
 from .errors import AgentError
 from .sandbox import create_sandbox
+from .sandbox.null import NullSandbox
 from .session import SessionManager, workspace_snapshot
 from .state import recover
 from .events import read_events
+from .task_contract import TaskContract
 
 _SESSION_ID = re.compile(r"^sess_\d{8}_\d{6}_[0-9a-f]{6}$")
 
@@ -145,6 +147,7 @@ class ApplicationService:
             ],
             "changed_files": state.diff_paths(),
             "report_available": bool(state.report_artifact_id and (directory / "report.md").is_file()),
+            "completion_summary": str((state.completion or {}).get("summary", ""))[:20_000],
             "event_count": len(events),
         }
 
@@ -178,6 +181,12 @@ class ApplicationService:
                 "level": verification.get("level"),
                 "status": verification.get("status"),
             })
+        elif etype == "session.waiting_user":
+            question = payload.get("question")
+            if isinstance(question, str):
+                result["question"] = question[:2000]
+            elif isinstance(question, dict):
+                result["question"] = str(question.get("question") or question.get("text") or "")[:2000]
         elif etype in ("session.failed", "session.cancelled"):
             result["error_code"] = (payload.get("error") or {}).get("code")
         return result
@@ -216,15 +225,29 @@ class ApplicationService:
         mock_script: str | None = None,
         log: Callable[[str], None] | None = None,
         stream_callback: Callable[[str], None] | None = None,
+        progress_callback: Callable[[str], None] | None = None,
         on_session: Callable[[Any, Any], None] | None = None,
+        task_contract: TaskContract | None = None,
     ) -> tuple[Any, str]:
         """Run a task through the canonical Harness; caller owns presentation."""
         if not isinstance(task, str) or not task.strip():
             raise AgentError("REQUEST_INVALID", "task must be a non-empty string", source="application")
+        if task_contract is None:
+            task_contract = TaskContract.legacy(read_only=read_only)
+        elif read_only and not task_contract.read_only:
+            raise AgentError("REQUEST_INVALID", "read_only conflicts with a write-capable task contract", source="application")
+        read_only = task_contract.read_only
         if not self.config.api_key() and not mock_script:
             raise AgentError("CONFIG_INVALID", f"no API key configured ({self.config.model.api_key_env})", source="application")
-        sandbox = create_sandbox(self.workspace, self.config)
-        session = SessionManager.create(self.config, self.workspace, task.strip(), sandbox)
+        if progress_callback:
+            progress_callback("正在创建只读会话…" if read_only else "正在创建隔离环境和会话…")
+        # Read-only turns never execute arbitrary commands, so constructing the
+        # Windows restricted-token sandbox (ACL probes + token setup) is wasted
+        # startup work. PolicyEngine still rejects every non-read side effect.
+        sandbox = NullSandbox(str(self.workspace)) if read_only else create_sandbox(self.workspace, self.config)
+        session = SessionManager.create(
+            self.config, self.workspace, task.strip(), sandbox, read_only=read_only, task_contract=task_contract
+        )
         try:
             if on_session:
                 on_session(session, sandbox)
@@ -238,11 +261,29 @@ class ApplicationService:
                 approval_handler=approval_handler,
                 auto_approve=bool(auto_approve),
                 read_only=bool(read_only),
+                task_contract=task_contract,
                 stream_callback=stream_callback,
+                progress_callback=progress_callback,
                 log=log,
             )
             status = harness.run()
             return session, status
+        except AgentError as exc:
+            # A failure escaping the Harness must still leave a terminal event.
+            # Otherwise the task registry says "failed" while recovered session
+            # state remains "running" forever.
+            if not session.state.is_terminal():
+                session.emit("session.failed", {"error": exc.to_dict()})
+            raise
+        except Exception as exc:
+            failure = AgentError(
+                "INTERNAL_ERROR",
+                f"unexpected {type(exc).__name__} during agent execution: {str(exc)[:500]}",
+                source="application",
+            )
+            if not session.state.is_terminal():
+                session.emit("session.failed", {"error": failure.to_dict()})
+            raise failure from exc
         finally:
             session.close()
 
@@ -264,7 +305,9 @@ class ApplicationService:
         previous = recover(events)
         if str(Path(previous.workspace or "").resolve()) != str(self.workspace):
             raise AgentError("SESSION_NOT_FOUND", "session does not belong to this workspace", source="application")
-        sandbox = create_sandbox(self.workspace, self.config)
+        task_contract = TaskContract.from_dict(previous.task_contract) if previous.task_contract else TaskContract.legacy(read_only=read_only)
+        read_only = task_contract.read_only
+        sandbox = NullSandbox(str(self.workspace)) if read_only else create_sandbox(self.workspace, self.config)
         session = SessionManager.open(self.config, session_id, sandbox)
         try:
             if answer:
@@ -281,6 +324,7 @@ class ApplicationService:
                 approval_handler=approval_handler,
                 auto_approve=bool(auto_approve),
                 read_only=bool(read_only),
+                task_contract=task_contract,
                 stream_callback=stream_callback,
                 log=log,
             )

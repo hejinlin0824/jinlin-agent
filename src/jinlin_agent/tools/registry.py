@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..domain import SideEffect
 from .base import ToolContext, ToolResult, ToolSpec
 
 
@@ -25,10 +26,19 @@ class ToolRegistry:
     def all(self) -> list[ToolSpec]:
         return [self._tools[n] for n in self.names()]
 
-    def definitions(self) -> list[dict[str, Any]]:
-        """OpenAI function-tool definitions."""
+    def definitions(self, *, read_only: bool = False) -> list[dict[str, Any]]:
+        """OpenAI function-tool definitions, scoped to the current task mode."""
         out = []
-        for spec in self.all():
+        specs = self.all()
+        if read_only:
+            # Expose only observational tools. Session-state workflow tools
+            # (plan/facts/completion) create needless turns for simple analysis;
+            # write and execute tools must not be advertised at all.
+            specs = [
+                spec for spec in specs
+                if spec.side_effect == SideEffect.READ.value or spec.name == "request_user_input"
+            ]
+        for spec in specs:
             out.append(
                 {
                     "type": "function",

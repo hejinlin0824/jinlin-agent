@@ -14,6 +14,7 @@ from .domain import Status, utcnow_iso
 from .errors import SESSION_CORRUPTED, AgentError
 from .events import EventLog, new_session_id, read_events
 from .state import SessionState, recover
+from .task_contract import TaskContract
 from .verify import detect_project
 
 
@@ -65,7 +66,12 @@ class SessionManager:
         request: str,
         sandbox: Any,
         session_id: str | None = None,
+        *,
+        read_only: bool = False,
+        task_contract: TaskContract | None = None,
     ) -> Session:
+        task_contract = task_contract or TaskContract.legacy(read_only=read_only)
+        read_only = task_contract.read_only
         workspace = Path(os.path.abspath(workspace))
         sid = session_id or new_session_id()
         session_dir = config.sessions_dir / sid
@@ -92,15 +98,34 @@ class SessionManager:
                 "config_hash": config.effective_hash(),
                 "started_at": utcnow_iso(),
                 "sandbox_level": getattr(sandbox, "level", "L0"),
+                "read_only": bool(read_only),
+                "task_contract": task_contract.to_dict(),
                 "source_configs": config.sources,
             },
         )
         for violation in config.violations:
             session.emit("config.escalation_blocked", violation)
         session.emit("sandbox.mode", sandbox.describe())
-        snapshot = workspace_snapshot(workspace, config, sandbox)
+        # Read-only questions must not pay for project-wide verification
+        # discovery, git subprocess probes, or baseline tests before the first
+        # model request. The model inspects the workspace through read tools.
+        snapshot = workspace_snapshot(
+            workspace, config, sandbox,
+            include_project=not read_only,
+            include_git=not read_only,
+        )
         session.emit("workspace.snapshot", {"snapshot": snapshot})
-        SessionManager._capture_baseline(session)
+        if read_only:
+            session.emit(
+                "verification.baseline",
+                {"baseline": {
+                    "status": "skipped",
+                    "reason": "read-only session: baseline commands are not executed",
+                    "command": None,
+                }},
+            )
+        else:
+            SessionManager._capture_baseline(session)
         return session
 
     @staticmethod
@@ -229,32 +254,40 @@ class SessionManager:
         return out
 
 
-def workspace_snapshot(workspace: Path, config: Config, sandbox: Any) -> dict[str, Any]:
+def workspace_snapshot(
+    workspace: Path,
+    config: Config,
+    sandbox: Any,
+    *,
+    include_project: bool = True,
+    include_git: bool = True,
+) -> dict[str, Any]:
     workspace = Path(workspace)
-    project = detect_project(workspace, config)
+    project = detect_project(workspace, config) if include_project else None
     snapshot: dict[str, Any] = {
         "workspace_root": str(workspace),
         "created_at": utcnow_iso(),
-        "project_types": project.types,
-        "test_commands": [" ".join(c) for c in project.test_commands],
-        "lint_commands": [" ".join(c) for c in project.lint_commands],
-        "instruction_files": project.instruction_files,
+        "project_types": project.types if project else [],
+        "test_commands": [" ".join(c) for c in project.test_commands] if project else [],
+        "lint_commands": [" ".join(c) for c in project.lint_commands] if project else [],
+        "instruction_files": project.instruction_files if project else [],
         "git_repo": False,
         "branch": "",
         "head": "",
         "dirty_files": [],
         "status_lines": [],
     }
-    res = sandbox.run(["git", "status", "--porcelain=v1", "-b"], str(workspace), timeout=30)
-    if res.exit_code == 0:
-        lines = [l for l in (res.stdout or "").splitlines() if l.strip()]
-        snapshot["git_repo"] = True
-        if lines and lines[0].startswith("##"):
-            snapshot["branch"] = lines[0].lstrip("# ").strip()
-            lines = lines[1:]
-        snapshot["status_lines"] = lines[:200]
-        snapshot["dirty_files"] = [l[3:].strip().strip('"') for l in lines if len(l) > 3]
-        head = sandbox.run(["git", "rev-parse", "--short", "HEAD"], str(workspace), timeout=30)
-        if head.exit_code == 0:
-            snapshot["head"] = (head.stdout or "").strip()
+    if include_git:
+        res = sandbox.run(["git", "status", "--porcelain=v1", "-b"], str(workspace), timeout=30)
+        if res.exit_code == 0:
+            lines = [l for l in (res.stdout or "").splitlines() if l.strip()]
+            snapshot["git_repo"] = True
+            if lines and lines[0].startswith("##"):
+                snapshot["branch"] = lines[0].lstrip("# ").strip()
+                lines = lines[1:]
+            snapshot["status_lines"] = lines[:200]
+            snapshot["dirty_files"] = [l[3:].strip().strip('"') for l in lines if len(l) > 3]
+            head = sandbox.run(["git", "rev-parse", "--short", "HEAD"], str(workspace), timeout=30)
+            if head.exit_code == 0:
+                snapshot["head"] = (head.stdout or "").strip()
     return snapshot

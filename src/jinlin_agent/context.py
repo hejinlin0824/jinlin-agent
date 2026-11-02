@@ -83,12 +83,14 @@ class ContextBuilder:
         artifacts: Any,
         sandbox: Any,
         project_instructions: str = "",
+        read_only: bool = False,
     ) -> None:
         self.config = config
         self.capabilities = capabilities
         self.artifacts = artifacts
         self.sandbox = sandbox
         self.project_instructions = project_instructions
+        self.read_only = bool(read_only)
         self.ctx_cfg = config.context
 
     # ------------------------------------------------------------------ api
@@ -169,7 +171,9 @@ class ContextBuilder:
     def _system_text(self, state: Any) -> str:
         from .prompt import build_system_prompt
 
-        return build_system_prompt(self.config, state, self.project_instructions)
+        return build_system_prompt(
+            self.config, state, self.project_instructions, read_only=self.read_only
+        )
 
     # ------------------------------------------------------------------ frame
 
@@ -450,14 +454,24 @@ class ContextBuilder:
 
     def _render_frame(self, blocks: list[ContextBlock], state: Any) -> str:
         parts = [b.content for b in blocks if b.source in ("task", "status")]
-        plan = [b.content for b in blocks if b.source == "plan"]
+        plan = [] if self.read_only else [b.content for b in blocks if b.source == "plan"]
         rest = [b for b in blocks if b.source not in ("task", "status", "plan")]
         out = ["# Working context", "", *parts, "", *plan, ""]
         for block in sorted(rest, key=lambda b: -b.priority):
             out.append(block.content)
             out.append("")
-        out.append(
-            "Decide the next action. If the task is complete, call propose_completion with claims "
-            "that cite evidence; otherwise call exactly the tools you need next."
-        )
+        if self.read_only:
+            out.append(
+                "This is a READ-ONLY investigation. Use only the read tools available to you. "
+                "For a broad project overview, start with get_project_summary and inspect only "
+                "the most relevant README and manifest/config files. Avoid reading many files "
+                "individually when one summary or directory listing is sufficient. Do not call "
+                "update_plan or propose_completion. When you have enough evidence, answer the "
+                "user directly in Markdown and stop; do not make extra tool calls for ceremony."
+            )
+        else:
+            out.append(
+                "Decide the next action. If the task is complete, call propose_completion with claims "
+                "that cite evidence; otherwise call exactly the tools you need next."
+            )
         return "\n".join(out)

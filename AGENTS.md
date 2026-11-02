@@ -36,9 +36,12 @@ sourcing, deterministic control, verification), not in the number of tools.
 12. The Workbench HTTP server is loopback-only, uses a random bearer token,
     validates Host/Origin, and is bound to one fixed workspace per process.
     Never accept a workspace path from an HTTP request.
-13. HTTP read models must be narrow projections: do not expose raw tool args,
-    tool output, secrets, or arbitrary event payloads. Keep the WP-1 API read-only.
-14. Keep the runtime dependency set empty; use the Python standard library for
+13. API read models and approval prompts must be narrow projections: do not expose
+    raw tool arguments, raw tool output, credentials, or arbitrary event payloads.
+14. Workbench mutation routes are limited to task submission and decisions for a
+    currently pending approval. The backend must validate the active task and
+    approval ID; browser input never directly executes tools or writes files.
+15. Keep the runtime dependency set empty; use the Python standard library for
     the local HTTP server unless a future ADR explicitly approves otherwise.
 
 ## Testing

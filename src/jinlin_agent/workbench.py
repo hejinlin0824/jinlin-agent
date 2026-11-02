@@ -1,0 +1,232 @@
+"""In-process lifecycle manager for local Workbench tasks.
+
+Tasks execute through ApplicationService; this module owns background thread
+coordination, streamed text snapshots and browser approval rendezvous. Each task
+is independent; the registry is process-local and no second agent loop is created.
+"""
+from __future__ import annotations
+
+import re
+import secrets
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from .errors import AgentError
+from .task_contract import transition_task_status
+
+_ACTIVE = {"queued", "running", "waiting_approval", "waiting_user"}
+_SECRET_FLAG = re.compile(r"(?i)(--?(?:api[-_]?key|access[-_]?token|token|password|secret|authorization))(?:=|\s+)([^\s]+)")
+_SECRET_ASSIGNMENT = re.compile(r"(?i)\b(api[-_]?key|access[-_]?token|password|secret|authorization)\s*[:=]\s*([^\s,;]+)")
+_BEARER_VALUE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
+_URL_SECRET = re.compile(r"(?i)([?&](?:api_key|access_token|token|password|secret)=)[^&\s]+")
+
+
+def _safe_approval_summary(value: Any) -> str:
+    summary = str(value or "")[:1000]
+    summary = _SECRET_FLAG.sub(lambda match: match.group(1) + "=[REDACTED]", summary)
+    summary = _SECRET_ASSIGNMENT.sub(lambda match: match.group(1) + "=[REDACTED]", summary)
+    summary = _BEARER_VALUE.sub("Bearer [REDACTED]", summary)
+    return _URL_SECRET.sub(lambda match: match.group(1) + "[REDACTED]", summary)
+
+
+
+@dataclass
+class WorkbenchTask:
+    task_id: str
+    request: str
+    read_only: bool
+    status: str = "queued"
+    session_id: str = ""
+    error: dict[str, str] | None = None
+    pending_approval: dict[str, Any] | None = None
+    stream_text: str = ""
+    progress: str = "正在排队…"
+    submitted_monotonic: float = field(default_factory=time.monotonic, repr=False)
+    session_created_ms: int | None = None
+    first_model_request_ms: int | None = None
+    first_tool_ms: int | None = None
+    first_token_ms: int | None = None
+    finished_ms: int | None = None
+    created_thread: threading.Thread | None = field(default=None, repr=False)
+
+
+class WorkbenchTaskManager:
+    """Coordinates independent background tasks and fail-closed approvals."""
+
+    def __init__(self, service: Any) -> None:
+        self.service = service
+        self._condition = threading.Condition(threading.RLock())
+        self._tasks: dict[str, WorkbenchTask] = {}
+
+    def submit(self, request: str, *, read_only: bool = True) -> dict[str, Any]:
+        if not isinstance(request, str) or not request.strip():
+            raise AgentError("REQUEST_INVALID", "task must be a non-empty string", source="workbench")
+        if len(request) > 20_000:
+            raise AgentError("REQUEST_INVALID", "task exceeds 20000 characters", source="workbench")
+        if not isinstance(read_only, bool):
+            raise AgentError("REQUEST_INVALID", "read_only must be a boolean", source="workbench")
+        task = WorkbenchTask(
+            task_id="task_" + secrets.token_urlsafe(18),
+            request=request.strip(),
+            read_only=read_only,
+        )
+        with self._condition:
+            self._tasks[task.task_id] = task
+            thread = threading.Thread(
+                target=self._run,
+                args=(task,),
+                name="jinlin-workbench-" + task.task_id[-8:],
+                daemon=True,
+            )
+            task.created_thread = thread
+            thread.start()
+        return self.get(task.task_id)
+
+    def _run(self, task: WorkbenchTask) -> None:
+        def elapsed_ms() -> int:
+            return max(0, int((time.monotonic() - task.submitted_monotonic) * 1000))
+
+        with self._condition:
+            task.status = transition_task_status(task.status, "running")
+            task.progress = "正在启动本地 Agent…"
+            self._condition.notify_all()
+
+        def on_session(session: Any, _sandbox: Any) -> None:
+            with self._condition:
+                task.session_id = session.id
+                if task.session_created_ms is None:
+                    task.session_created_ms = elapsed_ms()
+                task.progress = (
+                    "会话已创建，正在准备只读上下文…"
+                    if task.read_only
+                    else "会话已创建，正在初始化项目环境…"
+                )
+                self._condition.notify_all()
+
+        def on_progress(message: str) -> None:
+            with self._condition:
+                progress = str(message or "")
+                if progress.startswith("正在请求模型分析") and task.first_model_request_ms is None:
+                    task.first_model_request_ms = elapsed_ms()
+                if progress.startswith("正在执行工具") and task.first_tool_ms is None:
+                    task.first_tool_ms = elapsed_ms()
+                task.progress = progress[:500]
+                self._condition.notify_all()
+
+        def on_text_delta(delta: str) -> None:
+            with self._condition:
+                if not delta:
+                    task.stream_text = ""
+                else:
+                    if task.first_token_ms is None:
+                        task.first_token_ms = elapsed_ms()
+                    task.stream_text = (task.stream_text + str(delta))[-20_000:]
+                self._condition.notify_all()
+
+        def approve(request: Any) -> tuple[str, str]:
+            safe_request = {
+                "approval_id": str(getattr(request, "approval_id", "")),
+                "tool": str(getattr(request, "tool", ""))[:80],
+                "risk": str(getattr(request, "risk", "unknown"))[:32],
+                "summary": _safe_approval_summary(getattr(request, "summary", "")),
+                "reason": _safe_approval_summary(getattr(request, "reason", "")),
+                "impact": [_safe_approval_summary(x)[:300] for x in (getattr(request, "impact", []) or [])[:10]],
+            }
+            with self._condition:
+                task.pending_approval = safe_request
+                task.status = transition_task_status(task.status, "waiting_approval")
+                self._condition.notify_all()
+                while task.pending_approval is not None:
+                    self._condition.wait()
+                decision = getattr(task, "_approval_decision", None)
+                note = getattr(task, "_approval_note", "")
+                task._approval_decision = None
+                task._approval_note = ""
+                return (decision or "denied", note or "approval was not provided")
+
+        try:
+            _session, status = self.service.run(
+                task.request,
+                read_only=task.read_only,
+                auto_approve=False,
+                approval_handler=approve,
+                on_session=on_session,
+                stream_callback=on_text_delta,
+                progress_callback=on_progress,
+            )
+            with self._condition:
+                task.status = transition_task_status(task.status, "waiting_user" if status == "waiting_user" else status)
+                task.progress = "任务已结束" if task.status in ("completed", "failed", "waiting_user", "cancelled") else task.progress
+        except AgentError as exc:
+            with self._condition:
+                task.status = transition_task_status(task.status, "failed")
+                task.progress = "任务执行失败"
+                task.error = {"code": exc.code, "message": _safe_approval_summary(exc.message)[:1000]}
+        except Exception:
+            with self._condition:
+                task.status = transition_task_status(task.status, "failed")
+                task.progress = "任务执行失败"
+                task.error = {"code": "INTERNAL_ERROR", "message": "task execution failed; inspect the session event log"}
+        finally:
+            with self._condition:
+                task.pending_approval = None
+                if task.finished_ms is None:
+                    task.finished_ms = elapsed_ms()
+                self._condition.notify_all()
+
+    def approve(self, task_id: str, approval_id: str, decision: str) -> dict[str, Any]:
+        if decision not in ("approved_once", "approved_for_session", "denied"):
+            raise AgentError("REQUEST_INVALID", "decision must be approved_once, approved_for_session, or denied", source="workbench")
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise AgentError("TASK_NOT_FOUND", "task not found", source="workbench")
+            pending = task.pending_approval
+            if task.status != "waiting_approval" or not pending or not secrets.compare_digest(
+                str(pending.get("approval_id", "")), str(approval_id)
+            ):
+                raise AgentError("APPROVAL_STALE", "approval is no longer pending or does not match", source="workbench")
+            task._approval_decision = decision
+            task._approval_note = "approved in local Workbench" if decision != "denied" else "denied in local Workbench"
+            task.pending_approval = None
+            task.status = transition_task_status(task.status, "running")
+            self._condition.notify_all()
+        return self.get(task_id)
+
+    def get(self, task_id: str) -> dict[str, Any]:
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise AgentError("TASK_NOT_FOUND", "task not found", source="workbench")
+            return self._snapshot(task)
+
+    def list(self) -> list[dict[str, Any]]:
+        with self._condition:
+            return [self._snapshot(task) for task in list(reversed(list(self._tasks.values())))[:50]]
+
+    @staticmethod
+    def _snapshot(task: WorkbenchTask) -> dict[str, Any]:
+        return {
+            "task_id": task.task_id,
+            "request": task.request[:240],
+            "read_only": task.read_only,
+            "status": task.status,
+            "session_id": task.session_id or None,
+            "error": task.error,
+            "stream_text": task.stream_text,
+            "progress": task.progress,
+            "timings": {
+                "session_created_ms": task.session_created_ms,
+                "first_model_request_ms": task.first_model_request_ms,
+                "first_tool_ms": task.first_tool_ms,
+                "first_token_ms": task.first_token_ms,
+                "total_ms": (
+                    task.finished_ms
+                    if task.finished_ms is not None
+                    else max(0, int((time.monotonic() - task.submitted_monotonic) * 1000))
+                ),
+            },
+            "pending_approval": dict(task.pending_approval) if task.pending_approval else None,
+        }
