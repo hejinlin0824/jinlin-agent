@@ -297,7 +297,7 @@ class ApplicationService:
         previous = recover(events)
         if str(Path(previous.workspace or "").resolve()) != str(self.workspace):
             raise AgentError("SESSION_NOT_FOUND", "session does not belong to this workspace", source="application")
-        sandbox = create_sandbox(self.workspace, self.config)
+        sandbox = NullSandbox(str(self.workspace)) if read_only else create_sandbox(self.workspace, self.config)
         session = SessionManager.open(self.config, session_id, sandbox)
         try:
             if answer:

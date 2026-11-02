@@ -66,3 +66,46 @@ def test_read_only_workspace_snapshot_does_not_scan_project_or_spawn_git(tmp_pat
     assert snapshot["project_types"] == []
     assert snapshot["test_commands"] == []
     assert snapshot["git_repo"] is False
+
+
+def test_read_only_session_creation_skips_baseline_capture(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import jinlin_agent.session as session_module
+    from jinlin_agent.session import SessionManager
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config = SimpleNamespace(
+        sessions_dir=tmp_path / "sessions",
+        model=SimpleNamespace(model="test-model"),
+        sources=[],
+        violations=[],
+        effective_hash=lambda: "config-hash",
+    )
+
+    class Sandbox:
+        level = "L0"
+
+        def describe(self):
+            return {"level": "L0", "engine": "none"}
+
+    monkeypatch.setattr(
+        session_module,
+        "workspace_snapshot",
+        lambda *_args, **_kwargs: {"workspace_root": str(workspace), "dirty_files": []},
+    )
+    monkeypatch.setattr(
+        SessionManager,
+        "_capture_baseline",
+        staticmethod(lambda _session: (_ for _ in ()).throw(AssertionError("baseline must be skipped"))),
+    )
+
+    session = SessionManager.create(
+        config, workspace, "analyze project", Sandbox(), read_only=True
+    )
+    try:
+        assert session.state.baseline["status"] == "skipped"
+        assert "read-only session" in session.state.baseline["reason"]
+    finally:
+        session.close()

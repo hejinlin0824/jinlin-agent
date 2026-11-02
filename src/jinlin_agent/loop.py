@@ -289,7 +289,7 @@ class Harness:
         return ModelRequest(
             request_id=new_id("req"),
             messages=messages,
-            tools=self.registry.definitions(read_only=self.read_only),
+            tools=self.registry.definitions(read_only=getattr(self, "read_only", False)),
             temperature=float(self.config.model.temperature),
             max_output_tokens=int(self.config.model.max_output_tokens),
             stream=True,
@@ -329,7 +329,7 @@ class Harness:
 
     def _handle_completion(self, completion: dict[str, Any]) -> str:
         state = self.state
-        if self.read_only:
+        if getattr(self, "read_only", False):
             # A read-only turn is complete when the model has answered. Running
             # the code-change gate here caused false rejections (plan/evidence
             # requirements) and could launch L3/L5 test commands that policy

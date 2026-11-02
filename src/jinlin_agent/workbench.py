@@ -85,7 +85,11 @@ class WorkbenchTaskManager:
         def on_session(session: Any, _sandbox: Any) -> None:
             with self._condition:
                 task.session_id = session.id
-                task.progress = "会话已创建，正在初始化项目环境…"
+                task.progress = (
+                    "会话已创建，正在准备只读上下文…"
+                    if task.read_only
+                    else "会话已创建，正在初始化项目环境…"
+                )
                 self._condition.notify_all()
 
         def on_progress(message: str) -> None:
