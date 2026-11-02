@@ -9,6 +9,7 @@ manifest proof are reported, never removed.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 from pathlib import Path
