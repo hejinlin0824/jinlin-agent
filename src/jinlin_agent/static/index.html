@@ -2,34 +2,204 @@
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Jinlin Agent</title>
 <style>
 :root{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;color:#ececf1;background:#212121}*{box-sizing:border-box}body{margin:0;background:#212121}button,input,textarea{font:inherit}button{cursor:pointer;color:inherit;border:0}
-.app{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:100vh}.sidebar{background:#171717;padding:14px 12px;display:flex;flex-direction:column;gap:13px;border-right:1px solid #303030;min-height:100vh}.brand{display:flex;align-items:center;gap:10px;padding:8px 7px 14px;font-size:16px;font-weight:650}.logo{width:28px;height:28px;border-radius:9px;background:#eee;color:#171717;display:grid;place-items:center;font-weight:800}.newchat{width:100%;text-align:left;padding:11px 12px;background:#242424;border:1px solid #383838;border-radius:10px;font-size:13px}.newchat:hover,.session:hover{background:#2b2b2b}.side-label{font-size:11px;color:#858585;padding:8px 8px 2px;letter-spacing:.08em}.sessions{display:grid;gap:3px;overflow:auto;max-height:48vh}.session{width:100%;text-align:left;background:transparent;border-radius:8px;padding:10px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.session.active{background:#303030}.side-bottom{margin-top:auto;border-top:1px solid #303030;padding:12px 5px 2px}.workspace{font-size:11px;color:#aaa;line-height:1.5;overflow-wrap:anywhere;margin:7px 2px 10px}.tokenrow{display:flex;gap:6px}.tokenrow input{min-width:0;width:100%;background:#242424;border:1px solid #404040;border-radius:8px;padding:8px;color:#eee;font-size:11px}.tokenrow button{background:#353535;border-radius:8px;padding:7px 10px;font-size:11px}
+.app{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:100vh}.sidebar{background:#171717;padding:14px 12px;display:flex;flex-direction:column;gap:13px;border-right:1px solid #303030;min-height:100vh}.brand{display:flex;align-items:center;gap:10px;padding:8px 7px 14px;font-size:16px;font-weight:650}.logo{width:28px;height:28px;border-radius:9px;background:#eee;color:#171717;display:grid;place-items:center;font-weight:800}.newchat{width:100%;text-align:left;padding:11px 12px;background:#242424;border:1px solid #383838;border-radius:10px;font-size:13px}.newchat:hover,.session:hover{background:#2b2b2b}.side-label{font-size:11px;color:#858585;padding:8px 8px 2px;letter-spacing:.08em}.sessions{display:grid;gap:3px;overflow:auto;max-height:48vh}.session{width:100%;text-align:left;background:transparent;border-radius:8px;padding:10px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.session.active{background:#303030}.side-bottom{margin-top:auto;border-top:1px solid #303030;padding:12px 5px 2px}.workspace{font-size:11px;color:#aaa;line-height:1.5;overflow-wrap:anywhere;margin:7px 2px 10px}
 .main{min-width:0;display:flex;flex-direction:column;min-height:100vh}.topbar{height:58px;border-bottom:1px solid #303030;display:flex;align-items:center;justify-content:space-between;padding:0 26px;position:sticky;top:0;background:#212121ed;z-index:5}.model-name{font-size:14px;font-weight:600}.connection{font-size:11px;color:#999;display:flex;align-items:center;gap:7px}.dot{width:7px;height:7px;background:#666;border-radius:50%}.dot.on{background:#35b77a}.error{display:none;margin:12px auto 0;width:min(850px,calc(100% - 32px));background:#422326;border:1px solid #744047;color:#ffd5d8;padding:11px 14px;border-radius:10px;font-size:12px;white-space:pre-wrap}.error.show{display:block}
 .chat{width:min(850px,calc(100% - 36px));margin:0 auto;flex:1;padding:34px 0 165px}.welcome{text-align:center;margin:17vh auto 0}.welcome h1{font-size:27px;font-weight:550;margin:0 0 12px}.welcome p{font-size:14px;color:#999}.messages{display:grid;gap:27px}.message{display:flex;gap:13px;align-items:flex-start;line-height:1.75;font-size:14px;min-width:0}.avatar{width:29px;height:29px;flex:0 0 29px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700}.user .avatar{background:#3a3a3a}.assistant .avatar{background:#e8e8e8;color:#171717}.bubble{min-width:0;max-width:100%;overflow-wrap:anywhere;padding-top:2px}.bubble p{margin:0 0 10px;white-space:pre-wrap}.bubble pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#171717;border:1px solid #383838;padding:12px;border-radius:9px}.meta{color:#888;font-size:11px;margin-top:8px}.activity{border:1px solid #3a3a3a;background:#262626;border-radius:10px;padding:11px 13px;margin:10px 0;color:#c6c6c6;font-size:12px}.activity summary{cursor:pointer;color:#ddd}.activity-list{margin:10px 0 0;padding-left:18px;color:#aaa}.activity-list li{margin:5px 0}.status{display:inline-flex;align-items:center;gap:6px;color:#aaa;font-size:11px;padding:4px 8px;background:#303030;border-radius:20px}.status.running:before{content:"";width:6px;height:6px;border-radius:50%;background:#e4b65e;animation:pulse 1.3s infinite}.status.completed{color:#8bd5ae}.status.failed{color:#ff9b9b}.status.waiting_approval{color:#f2c879}@keyframes pulse{50%{opacity:.25}}
 .approval{display:none;border:1px solid #796239;background:#30291e;border-radius:11px;padding:14px;margin:15px 0}.approval.show{display:block}.approval strong{font-size:13px;color:#f1d39b}.approval p{font-size:12px;color:#d1c3a8;margin:7px 0}.approval-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.approval-actions button{padding:8px 11px;background:#454034;border-radius:8px;font-size:11px}.approval-actions .primary{background:#366b51}
-.composer-wrap{position:fixed;bottom:0;left:260px;right:0;background:linear-gradient(180deg,transparent,#212121 24%);padding:26px 20px 18px;z-index:4}.composer{width:min(850px,100%);margin:auto;background:#303030;border:1px solid #4a4a4a;border-radius:18px;padding:12px 13px 10px;box-shadow:0 8px 32px #0005}.composer textarea{display:block;width:100%;min-height:54px;max-height:190px;resize:vertical;border:0;outline:0;background:transparent;color:#eee;padding:5px 6px;font-size:14px;line-height:1.5}.composer textarea::placeholder{color:#8a8a8a}.composer-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 2px 0}.check{font-size:11px;color:#aaa;display:flex;align-items:center;gap:6px}.send{width:34px;height:34px;border-radius:50%;background:#eee;color:#171717;font-weight:800;font-size:18px}.send:disabled{opacity:.35;cursor:not-allowed}.hint{font-size:10px;color:#777;text-align:center;margin:8px 0 0}.detailbar{display:flex;align-items:center;justify-content:space-between;color:#858585;font-size:11px;margin:18px 0 8px}.detailbar button{background:transparent;color:#aaa;font-size:11px}.details{display:none;background:#191919;border:1px solid #383838;border-radius:10px;padding:12px;margin-top:10px}.details.show{display:block}.kpis{display:flex;gap:14px;flex-wrap:wrap;color:#888;font-size:10px}.timeline{max-height:260px;overflow:auto;margin-top:10px}.event{display:grid;grid-template-columns:66px minmax(0,1fr);gap:8px;border-bottom:1px solid #303030;padding:8px 0;font-size:11px}.event time{color:#777}.event strong{color:#c5c5c5}.empty{color:#777;font-size:12px;padding:12px}
+.composer-wrap{position:fixed;bottom:0;left:260px;right:0;background:linear-gradient(180deg,transparent,#212121 24%);padding:26px 20px 18px;z-index:4}.composer{width:min(850px,100%);margin:auto;background:#303030;border:1px solid #4a4a4a;border-radius:18px;padding:12px 13px 10px;box-shadow:0 8px 32px #0005}.composer textarea{display:block;width:100%;min-height:54px;max-height:190px;resize:vertical;border:0;outline:0;background:transparent;color:#eee;padding:5px 6px;font-size:14px;line-height:1.5}.composer textarea::placeholder{color:#8a8a8a}.composer-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 2px 0}.check{font-size:11px;color:#aaa;display:flex;align-items:center;gap:6px}.send{width:34px;height:34px;border-radius:50%;background:#eee;color:#171717;font-weight:800;font-size:18px}.send:disabled{opacity:.35;cursor:not-allowed}.hint{font-size:10px;color:#777;text-align:center;margin:8px 0 0}.detailbar{display:flex;align-items:center;justify-content:space-between;color:#858585;font-size:11px;margin:18px 0 8px}.detailbar button{background:#303030;border:1px solid #414141;color:#bdbdbd;font-size:10px;padding:5px 9px;border-radius:14px}.detailbar button:hover{background:#3a3a3a;color:#eee}.details{display:none;background:#191919;border:1px solid #383838;border-radius:10px;padding:12px;margin-top:10px}.details.show{display:block}.kpis{display:flex;gap:14px;flex-wrap:wrap;color:#888;font-size:10px}.timeline{max-height:260px;overflow:auto;margin-top:10px}.event{display:grid;grid-template-columns:66px minmax(0,1fr);gap:8px;border-bottom:1px solid #303030;padding:8px 0;font-size:11px}.event time{color:#777}.event strong{color:#c5c5c5}.empty{color:#777;font-size:12px;padding:12px}
 @media(max-width:760px){.app{grid-template-columns:1fr}.sidebar{min-height:auto;padding:9px 12px}.brand{padding:3px}.newchat{width:auto}.side-label,.sessions,.side-bottom{display:none}.topbar{height:50px;padding:0 15px}.composer-wrap{left:0;padding:15px 12px 12px}.chat{padding-top:25px}.welcome{margin-top:12vh}}
 </style></head><body>
-<div class="app"><aside class="sidebar"><div class="brand"><div class="logo">J</div><span>Jinlin Agent</span></div><button class="newchat" id="newChat">＋　新对话</button><div class="side-label">最近对话</div><div id="sessions" class="sessions"><div class="empty">连接本地服务后显示历史对话</div></div><div class="side-bottom"><div class="side-label">当前工作区</div><div id="workspace" class="workspace">尚未连接</div><div class="tokenrow"><input id="token" type="password" autocomplete="off" placeholder="Bearer Token"><button id="connect">连接</button></div></div></aside>
+<div class="app"><aside class="sidebar"><div class="brand"><div class="logo">J</div><span>Jinlin Agent</span></div><button class="newchat" id="newChat">＋　新对话</button><div class="side-label">最近对话</div><div id="sessions" class="sessions"><div class="empty">连接本地服务后显示历史对话</div></div><div class="side-bottom"><div class="side-label">当前工作区</div><div id="workspace" class="workspace">尚未连接</div><div class="meta">本机服务将自动安全认证</div></div></aside>
 <main class="main"><header class="topbar"><div class="model-name">Agent <span style="color:#888;font-weight:400">⌄</span></div><div class="connection"><span id="dot" class="dot"></span><span id="connectionText">尚未连接</span></div></header><div id="error" class="error" role="alert"></div><section class="chat"><div id="welcome" class="welcome"><h1>今天有什么可以一起完成？</h1><p>描述目标，Agent 将在当前工作区中分析、执行并汇报。</p></div><div id="messages" class="messages"></div>
 <div id="approval" class="approval"><strong>需要你的确认才能继续</strong><p id="approvalSummary"></p><p id="approvalReason"></p><p id="approvalImpact"></p><div class="approval-actions"><button id="approveOnce" class="primary">仅批准本次</button><button id="approveSession">本会话批准同类操作</button><button id="deny">拒绝</button></div></div>
-<div class="detailbar"><span id="sessionMeta">本地 Agent 会话</span><button id="toggleDetails">查看执行详情⌄</button></div><div id="details" class="details"><div class="kpis"><span>SESSION <b id="sessionId">—</b></span><span>PHASE <b id="phase">—</b></span><span>STEP <b id="step">—</b></span><span>EVENTS <b id="eventCount">—</b></span><span id="taskStatus" class="status">暂无任务</span></div><div id="timeline" class="timeline"><div class="empty">暂无事件</div></div></div></section></main></div>
+<div class="detailbar"><span id="sessionMeta">本地 Agent 会话</span><button id="toggleDetails" aria-expanded="false">开发者详情　⌄</button></div><div id="details" class="details"><div class="kpis"><span>SESSION <b id="sessionId">—</b></span><span>PHASE <b id="phase">—</b></span><span>STEP <b id="step">—</b></span><span>EVENTS <b id="eventCount">—</b></span><span id="taskStatus" class="status">暂无任务</span></div><div id="timeline" class="timeline"><div class="empty">暂无事件</div></div></div></section></main></div>
 <div class="composer-wrap"><div class="composer"><textarea id="task" placeholder="向 Jinlin Agent 发送消息…" rows="2"></textarea><div class="composer-foot"><label class="check"><input id="readOnly" type="checkbox" checked> 只读模式</label><button id="submit" class="send" disabled aria-label="发送">↑</button></div></div><div class="hint">Agent 在本机工作区运行；执行文件修改前会根据权限策略请求确认。</div></div>
 <script>
-(()=>{const $=id=>document.getElementById(id);let token=sessionStorage.getItem("jinlin.workbench.token")||"",activeTask=null,selectedSession=null,timer=null,busy=false,lastCount=-1;$("token").value=token;
-function error(m){$("error").textContent=m;$("error").classList.toggle("show",!!m)}function connectState(ok,msg){$("dot").classList.toggle("on",ok);$("connectionText").textContent=msg;$("submit").disabled=!ok}
-async function api(path,options={}){const h=Object.assign({Authorization:"Bearer "+token},options.headers||{}),r=await fetch(path,Object.assign({},options,{headers:h})),d=await r.json();if(!r.ok)throw new Error(d.error?.message||d.error?.code||("HTTP "+r.status));return d.data??d}
-function node(tag,cls,txt){const n=document.createElement(tag);if(cls)n.className=cls;if(txt!==undefined)n.textContent=txt;return n}
-function message(role,text,meta){const row=node("article","message "+role),av=node("div","avatar",role==="user"?"你":"J"),b=node("div","bubble");if(text)b.append(node("p","",text));if(meta)b.append(node("div","meta",meta));row.append(av,b);$("messages").append(row);$("welcome").style.display="none";return b}
-function reset(){ $("messages").replaceChildren();$("welcome").style.display="block";activeTask=null;selectedSession=null;lastCount=-1;$("approval").classList.remove("show");$("details").classList.remove("show");$("sessionMeta").textContent="新对话";loadSessions().catch(()=>{})}
-async function loadSessions(){const rows=await api("/api/v1/sessions"),host=$("sessions");host.replaceChildren();if(!rows.length){host.append(node("div","empty","暂无历史对话"));return}rows.slice(0,40).forEach(s=>{const b=node("button","session"+(selectedSession===s.session_id?" active":""),s.request||s.session_id);b.title=s.session_id;b.onclick=()=>selectSession(s.session_id);host.append(b)})}
-async function connect(){token=$("token").value.trim();if(!token){error("请粘贴启动服务时终端显示的 Token。");return}sessionStorage.setItem("jinlin.workbench.token",token);try{const d=await api("/api/v1/doctor");$("workspace").textContent=d.workspace||"已连接";connectState(true,"本机服务已连接");error("");await loadSessions();if(timer)clearInterval(timer);timer=setInterval(()=>{if(!document.hidden)poll()},1800);const tasks=await api("/api/v1/tasks");if(tasks.length){activeTask=tasks[0].task_id;await loadTask()}else{const rows=await api("/api/v1/sessions");if(rows.length)await selectSession(rows[0].session_id)}}catch(e){connectState(false,"连接失败");error(e.message)}}
-function renderEvents(events){const host=$("timeline");host.replaceChildren();if(!events.length){host.append(node("div","empty","暂无事件"));return}events.forEach(e=>{const row=node("div","event"),tm=node("time","",String(e.timestamp||"").slice(11,19)||"—"),b=node("div","");b.append(node("strong","",e.type||"event"));const d=e.tool||e.error_code||e.level||e.request||"";if(d)b.append(node("div","meta",String(d)));row.append(tm,b);host.append(row)})}
-async function sessionData(id){const [s,events]=await Promise.all([api("/api/v1/sessions/"+encodeURIComponent(id)),api("/api/v1/sessions/"+encodeURIComponent(id)+"/events?tail=100")]);$("sessionId").textContent=s.session_id;$("phase").textContent=s.phase||"—";$("step").textContent=String(s.step_index??0);$("eventCount").textContent=String(s.event_count??events.length);renderEvents(events);return {s,events}}
-async function selectSession(id){selectedSession=id;activeTask=null;$("approval").classList.remove("show");try{const {s}=await sessionData(id);$("messages").replaceChildren();$("welcome").style.display="none";message("user",s.request||"历史任务");message("assistant",s.completion_summary|| (s.status==="failed"?"任务执行失败。展开执行详情查看错误事件。":"历史会话已载入。"),s.status);$("sessionMeta").textContent=s.status+" · "+s.phase;await loadSessions()}catch(e){error(e.message)}}
-async function loadTask(){if(!activeTask)return;const t=await api("/api/v1/tasks/"+encodeURIComponent(activeTask));$("taskStatus").textContent=t.status;$("taskStatus").className="status "+t.status;if(t.session_id){selectedSession=t.session_id;const {s,events}=await sessionData(t.session_id);$("sessionMeta").textContent=t.status+" · "+(s.phase||"处理中");if(events.length!==lastCount){lastCount=events.length;const old=$("messages").querySelector(".assistant");if(old)old.remove();const b=message("assistant",t.error?"执行遇到错误："+t.error.message:t.status==="completed"?(s.completion_summary||"任务已完成。"):t.status==="failed"?"任务执行失败，请查看执行详情。":"我正在处理这个任务。");const details=node("details","activity"),summary=node("summary","", "执行进度 · "+events.length+" 个事件 · "+(s.phase||"处理中")),list=node("ul","activity-list");events.slice(-6).forEach(e=>list.append(node("li","",e.type+(e.tool?" · "+e.tool:""))));details.append(summary,list);b.append(details);if(t.error)b.append(node("pre","",t.error.code+"\n"+t.error.message));if(t.status==="completed"&&s.completion_summary)b.append(node("p","",s.completion_summary))}}
-const a=t.pending_approval;$("approval").classList.toggle("show",!!a);if(a){$("approvalSummary").textContent=a.tool+" · "+a.risk+" · "+a.summary;$("approvalReason").textContent=a.reason||"";$("approvalImpact").textContent=(a.impact||[]).join(" · ")}}
-async function poll(){if(busy)return;busy=true;try{if(activeTask)await loadTask();await loadSessions()}catch(e){error(e.message)}finally{busy=false}}
-async function send(){const value=$("task").value.trim();if(!value)return;if(!token){error("请先连接本机服务。");return}message("user",value);$("task").value="";$("submit").disabled=true;error("");lastCount=-1;try{const t=await api("/api/v1/tasks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({task:value,read_only:$("readOnly").checked})});activeTask=t.task_id;selectedSession=null;$("approval").classList.remove("show");await loadTask();await loadSessions()}catch(e){message("assistant","提交失败："+e.message);error(e.message)}finally{$("submit").disabled=false}}
-async function decide(decision){if(!activeTask)return;const t=await api("/api/v1/tasks/"+encodeURIComponent(activeTask)),a=t.pending_approval;if(!a)return;await api("/api/v1/tasks/"+encodeURIComponent(activeTask)+"/approvals/decision",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({approval_id:a.approval_id,decision})});$("approval").classList.remove("show");await loadTask()}
-window.addEventListener("pagehide",()=>{if(timer){clearInterval(timer);timer=null}});document.addEventListener("visibilitychange",()=>{if(!document.hidden&&token)poll()});$("connect").onclick=connect;$("submit").onclick=send;$("newChat").onclick=reset;$("toggleDetails").onclick=()=>{$("details").classList.toggle("show");$("toggleDetails").textContent=$("details").classList.contains("show")?"收起执行详情⌃":"查看执行详情⌄"};$("task").onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}};$("approveOnce").onclick=()=>decide("approved_once").catch(e=>error(e.message));$("approveSession").onclick=()=>decide("approved_for_session").catch(e=>error(e.message));$("deny").onclick=()=>decide("denied").catch(e=>error(e.message));if(token)connect()})();
+(()=>{
+const $=id=>document.getElementById(id);
+const state={connected:false,conversations:[],activeId:null,timer:null,reconnectTimer:null,polling:false,retry:0,authReloaded:false};
+const activeStatuses=new Set(["queued","running","waiting_approval"]);
+function makeId(){return "local_"+Math.random().toString(36).slice(2)+Date.now().toString(36)}
+function current(){return state.conversations.find(c=>c.id===state.activeId)||null}
+function error(message){$("error").textContent=message||"";$("error").classList.toggle("show",!!message)}
+function connection(ok,label){state.connected=ok;$("dot").classList.toggle("on",ok);$("connectionText").textContent=label;$("submit").disabled=!ok}
+function node(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n}
+function friendlyEvent(e){const map={"context.built":"正在整理项目上下文","context.compacted":"正在优化上下文","model.requested":"正在请求模型分析","model.attempt":"模型已返回结果","model.responded":"已收到模型回复","tool.intent":"准备调用工具","tool.completed":"工具执行完成","tool.failed":"工具执行失败","tool.denied":"操作被权限策略拦截","verification.completed":"验证步骤完成","session.completed":"任务完成","session.failed":"任务失败","session.waiting_user":"等待补充信息","step.started":"进入新的执行步骤"};let label=map[e.type]||"执行进度更新";if(e.tool)label+=" · "+e.tool;if(e.error_code)label+=" · "+e.error_code;return label}
+function statusText(s){return ({queued:"排队中",running:"正在处理",waiting_approval:"等待你的确认",waiting_user:"需要你补充信息",completed:"已完成",failed:"执行失败",cancelled:"已取消"})[s]||s||"准备中"}
+function renderSidebar(){
+ const host=$("sessions");host.replaceChildren();
+ if(!state.conversations.length){host.append(node("div","empty","暂无对话"));return}
+ state.conversations.forEach(c=>{
+  const b=node("button","session"+(c.id===state.activeId?" active":""),c.request||"新对话");
+  b.title=(c.request||"新对话")+" · "+statusText(c.status);
+  b.onclick=()=>selectConversation(c.id);host.append(b);
+ });
+}
+function renderMessages(){
+ const c=current();$("messages").replaceChildren();$("approval").classList.remove("show");
+ if(!c||!c.messages.length){$("welcome").style.display="block";$("sessionMeta").textContent="新对话";$("taskStatus").textContent="暂无任务";return}
+ $("welcome").style.display="none";
+ c.messages.forEach(m=>{
+  const row=node("article","message "+m.role),av=node("div","avatar",m.role==="user"?"你":"J"),bubble=node("div","bubble");
+  bubble.append(node("p","",m.text||""));
+  if(m.meta)bubble.append(node("div","meta",m.meta));
+  row.append(av,bubble);$("messages").append(row);
+ });
+ $("sessionMeta").textContent=statusText(c.status)+(c.sessionId?" · "+c.sessionId.slice(-8):"");
+ $("taskStatus").textContent=statusText(c.status);$("taskStatus").className="status "+(c.status||"");
+}
+function renderDeveloper(c,events=[]){
+ $("timeline").replaceChildren();
+ if(!events.length){$("timeline").append(node("div","empty","暂无开发者事件"));return}
+ events.forEach(e=>{
+  const row=node("div","event"),tm=node("time","",String(e.timestamp||"").slice(11,19)||"—"),body=node("div","");
+  body.append(node("strong","",e.type||"event"));
+  const d=e.tool||e.error_code||e.level||e.request||"";
+  if(d)body.append(node("div","meta",String(d)));
+  row.append(tm,body);$("timeline").append(row);
+ });
+}
+function addConversation(request=""){
+ const c={id:makeId(),taskId:null,sessionId:null,request,status:"queued",messages:[],events:[],error:null,approval:null,lastEventCount:-1};
+ state.conversations.unshift(c);state.activeId=c.id;renderSidebar();renderMessages();return c;
+}
+async function api(path,options={}){
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);
+ try{
+  const response=await fetch(path,{...options,credentials:"same-origin",signal:controller.signal,headers:{...(options.headers||{})}});
+  if(response.status===401){const e=new Error("本机服务认证已更新，正在重新连接…");e.status=401;throw e}
+  const payload=await response.json().catch(()=>({error:{message:"服务返回了无法识别的数据"}}));
+  if(!response.ok){const e=new Error(payload.error?.message||payload.error?.code||("HTTP "+response.status));e.status=response.status;e.code=payload.error?.code;throw e}
+  return payload.data??payload;
+ }catch(e){if(e.name==="AbortError")throw new Error("请求超时（15 秒），正在尝试恢复连接");throw e}
+ finally{clearTimeout(timeout)}
+}
+async function loadSession(c){
+ const [s,events]=await Promise.all([api("/api/v1/sessions/"+encodeURIComponent(c.sessionId)),api("/api/v1/sessions/"+encodeURIComponent(c.sessionId)+"/events?tail=120")]);
+ c.status=s.status;c.events=events;c.lastEventCount=events.length;c.phase=s.phase;
+ $("sessionId").textContent=s.session_id;$("phase").textContent=s.phase||"—";$("step").textContent=String(s.step_index??0);$("eventCount").textContent=String(s.event_count??events.length);
+ renderDeveloper(c,events);
+ return s;
+}
+function updateAssistant(c,text,meta){
+ const last=c.messages[c.messages.length-1];
+ if(last&&last.role==="assistant"){last.text=text;last.meta=meta||""}
+ else c.messages.push({role:"assistant",text,meta:meta||""});
+ if(c.id===state.activeId)renderMessages();
+}
+async function refreshTask(c){
+ if(!c.taskId)return;
+ const t=await api("/api/v1/tasks/"+encodeURIComponent(c.taskId));
+ c.status=t.status;c.sessionId=t.session_id||c.sessionId;c.approval=t.pending_approval;c.error=t.error;
+ if(c.sessionId){
+  const s=await loadSession(c);
+  const events=c.events||[];
+  const recent=events.slice(-3).map(friendlyEvent).join("；");
+  let reply;
+  if(t.error)reply="这次任务没有成功完成。\n"+t.error.message+"（"+t.error.code+"）";
+  else if(t.status==="completed")reply=s.completion_summary||"任务已完成。";
+  else if(t.status==="failed")reply="任务执行失败，请展开开发者详情查看事件记录。";
+  else if(t.status==="waiting_user")reply="我需要你补充一点信息才能继续。";
+  else reply="我正在处理这个任务。"+(recent?"\n\n"+recent:"");
+  updateAssistant(c,reply,statusText(t.status));
+ }
+ if(c.id===state.activeId){
+  $("approval").classList.toggle("show",!!t.pending_approval);
+  if(t.pending_approval){
+   $("approvalSummary").textContent=t.pending_approval.tool+" · "+t.pending_approval.risk+" · "+t.pending_approval.summary;
+   $("approvalReason").textContent=t.pending_approval.reason||"";
+   $("approvalImpact").textContent=(t.pending_approval.impact||[]).join(" · ");
+  }
+  $("taskStatus").textContent=statusText(t.status);$("taskStatus").className="status "+t.status;
+  $("sessionMeta").textContent=statusText(t.status)+(c.sessionId?" · "+c.sessionId.slice(-8):"");
+ }
+}
+async function selectConversation(id){
+ state.activeId=id;const c=current();if(!c)return;
+ if(c.sessionId&&!c.taskId){
+  try{const s=await loadSession(c);c.request=s.request||c.request;c.messages=[{role:"user",text:c.request||"历史任务"},{role:"assistant",text:s.completion_summary||(s.status==="failed"?"任务执行失败。展开开发者详情查看事件记录。":"历史会话已载入。"),meta:statusText(s.status)}]}
+  catch(e){error("无法载入这条对话："+e.message)}
+ }
+ if(c.taskId){try{await refreshTask(c)}catch(e){handleConnectionError(e)}}
+ renderSidebar();renderMessages();
+}
+async function connect(){
+ try{
+  const d=await api("/api/v1/doctor");$("workspace").textContent=d.workspace||"已连接";
+  connection(true,"本机服务已连接");error("");state.retry=0;
+  const [sessions,tasks]=await Promise.all([api("/api/v1/sessions"),api("/api/v1/tasks")]);
+  const taskBySession=new Map();
+  tasks.forEach(t=>{if(t.session_id)taskBySession.set(t.session_id,t)});
+  const known=new Set(state.conversations.map(c=>c.sessionId).filter(Boolean));
+  tasks.slice().reverse().forEach(t=>{
+   let c=state.conversations.find(x=>x.taskId===t.task_id);
+   if(!c){c={id:makeId(),taskId:t.task_id,sessionId:t.session_id,request:t.request,status:t.status,messages:[{role:"user",text:t.request}],events:[],error:t.error,approval:t.pending_approval};state.conversations.unshift(c)}
+   if(t.session_id)known.add(t.session_id);
+  });
+  sessions.forEach(s=>{if(!known.has(s.session_id)){state.conversations.push({id:makeId(),taskId:null,sessionId:s.session_id,request:s.request,status:s.status,messages:[],events:[]});known.add(s.session_id)}});
+  renderSidebar();
+  if(!state.activeId&&state.conversations.length)state.activeId=state.conversations[0].id;
+  if(state.activeId)await selectConversation(state.activeId);
+  if(state.timer)clearInterval(state.timer);
+  state.timer=setInterval(poll,1600);
+ }catch(e){handleConnectionError(e)}
+}
+function handleConnectionError(e){
+ if(e.status===401&&!state.authReloaded){state.authReloaded=true;location.reload();return}
+ connection(false,"连接中断，正在重连");error(e.message||"连接中断，正在重试");
+ if(state.reconnectTimer)clearTimeout(state.reconnectTimer);
+ const delay=Math.min(30000,1000*Math.pow(2,state.retry++));
+ state.reconnectTimer=setTimeout(connect,delay);
+}
+async function poll(){
+ if(state.polling||document.hidden||!state.connected)return;
+ state.polling=true;
+ try{
+  const active=state.conversations.filter(c=>c.taskId&&activeStatuses.has(c.status));
+  for(const c of active){try{await refreshTask(c)}catch(e){if(e.status===401)throw e;error("暂时无法刷新任务状态："+e.message)}}
+  await loadSessionsList();
+  if(state.activeId){const c=current();if(c)renderMessages()}
+ }catch(e){handleConnectionError(e)}
+ finally{state.polling=false}
+}
+async function loadSessionsList(){
+ const rows=await api("/api/v1/sessions");
+ const known=new Set(state.conversations.map(c=>c.sessionId).filter(Boolean));
+ rows.forEach(s=>{if(!known.has(s.session_id)){state.conversations.push({id:makeId(),taskId:null,sessionId:s.session_id,request:s.request,status:s.status,messages:[],events:[]})}});
+ renderSidebar();
+}
+function newChat(){
+ const c=addConversation("");
+ $("messages").replaceChildren();$("welcome").style.display="block";$("task").focus();
+ $("approval").classList.remove("show");$("sessionMeta").textContent="新对话";$("taskStatus").textContent="暂无任务";
+ return c;
+}
+async function send(){
+ const value=$("task").value.trim();if(!value)return;
+ let c=current();if(!c||c.sessionId||c.status==="completed"||c.status==="failed")c=addConversation(value);
+ c.request=value;c.messages.push({role:"user",text:value});c.status="queued";
+ $("task").value="";error("");renderSidebar();renderMessages();$("submit").disabled=true;
+ try{
+  const t=await api("/api/v1/tasks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({task:value,read_only:$("readOnly").checked})});
+  c.taskId=t.task_id;c.status=t.status;await refreshTask(c);renderSidebar();
+ }catch(e){updateAssistant(c,"提交失败："+e.message,"请求未能提交");handleConnectionError(e)}
+ finally{$("submit").disabled=!state.connected}
+}
+async function decide(decision){
+ const c=current();if(!c||!c.taskId)return;
+ const t=await api("/api/v1/tasks/"+encodeURIComponent(c.taskId));
+ const a=t.pending_approval;if(!a)return;
+ await api("/api/v1/tasks/"+encodeURIComponent(c.taskId)+"/approvals/decision",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({approval_id:a.approval_id,decision})});
+ $("approval").classList.remove("show");await refreshTask(c);
+}
+window.addEventListener("pagehide",()=>{if(state.timer)clearInterval(state.timer);if(state.reconnectTimer)clearTimeout(state.reconnectTimer)});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&state.connected)poll()});
+$("submit").onclick=send;$("newChat").onclick=newChat;
+$("toggleDetails").onclick=()=>{const open=$("details").classList.toggle("show");$("toggleDetails").setAttribute("aria-expanded",String(open));$("toggleDetails").textContent=open?"开发者详情　⌃":"开发者详情　⌄"};
+$("task").onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}};
+$("approveOnce").onclick=()=>decide("approved_once").catch(e=>error(e.message));
+$("approveSession").onclick=()=>decide("approved_for_session").catch(e=>error(e.message));
+$("deny").onclick=()=>decide("denied").catch(e=>error(e.message));
+connect();
+})();
 </script></body></html>
