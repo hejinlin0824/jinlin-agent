@@ -8,13 +8,13 @@ Status: **WP-1 read models plus WP-2 task/approval API and first local browser d
 - Start with `jinlin-agent serve --workspace PATH [--host 127.0.0.1] [--port 8765]`.
 - The server is pinned to one existing workspace for its lifetime.
 - Default bind is IPv4 loopback. Explicit IPv6 loopback is supported. Non-loopback addresses are rejected.
-- A fresh random Bearer Token is generated on every start and printed once to the terminal. It is not written to disk.
-- Open `http://127.0.0.1:8765/` for the browser dashboard; enter the one-time token printed by the server.
+- A fresh random Bearer Token is generated on every start and printed once to the terminal. It is not written to disk. The browser UI receives it only through an HttpOnly, SameSite=Strict cookie; JavaScript does not read or store the credential.
+- Open `http://127.0.0.1:8765/` for the browser dashboard; the page authenticates automatically through the HttpOnly cookie. The terminal token remains available for direct API clients.
 - Press Ctrl+C to stop the server.
 
 ## Browser dashboard
 
-The root route serves a packaged, dependency-free HTML dashboard. It shows the pinned workspace, recent sessions, task input, read-only toggle, task status, sanitized event timeline, and pending-approval card. The Bearer Token is entered by the user and kept in the current tab's `sessionStorage`; it is not embedded in the page or written to disk. The page polls the task/session APIs and does not expose a workspace path picker, model-secret editor, arbitrary shell console, or direct file-write control.
+The root route serves a packaged, dependency-free HTML dashboard. It shows the pinned workspace, recent sessions, task input, read-only toggle, task status, sanitized event timeline, and pending-approval card. The UI does not display, embed, or store the Bearer Token in JavaScript or browser storage. The server sets a same-origin HttpOnly cookie when serving the page. The page polls the task/session APIs and does not expose a workspace path picker, model-secret editor, arbitrary shell console, or direct file-write control.
 
 ## Common response envelope
 
@@ -43,7 +43,7 @@ All responses are UTF-8 JSON with `Cache-Control: no-store` and `X-Content-Type-
 | GET | `/api/v1/sessions/{session_id}/events?tail=N` | Bearer | Sanitized event projection; default 100, max 1000 |
 | GET | `/api/v1/sessions/{session_id}/stats` | Bearer | Token/tool/verification counters and final result |
 | GET | `/api/v1/tasks` | Bearer | Recent in-process Workbench task summaries |
-| GET | `/api/v1/tasks/{task_id}` | Bearer | One task's status, session ID and safe pending-approval projection |
+| GET | `/api/v1/tasks/{task_id}` | Cookie or Bearer | One task's status, session ID, streamed assistant text and safe pending-approval projection |
 | POST | `/api/v1/tasks` | Bearer + valid local Origin when supplied | Submit a task; JSON: `{"task":"...","read_only":true}`; defaults to read-only |
 | POST | `/api/v1/tasks/{task_id}/approvals/decision` | Bearer + valid local Origin when supplied | Resolve exactly the currently pending approval; JSON: `{"approval_id":"...","decision":"approved_once"}` |
 
@@ -52,16 +52,16 @@ Approval decisions are `approved_once`, `approved_for_session`, or `denied`. A d
 ## Task lifecycle and current limits
 
 - Task execution runs on a daemon background thread and calls `ApplicationService.run`, which in turn uses the existing Harness, PolicyEngine, ToolDispatcher, Sandbox and CompletionGate.
-- Only one active Workbench task is allowed per server process. A second submission receives `409 TASK_BUSY`.
+- Independent Workbench tasks may run concurrently. Each browser conversation tracks its own task and session; switching conversations does not cancel or replace another task.
 - New tasks default to `read_only=true`. A caller may explicitly request `read_only=false`, but the normal PolicyEngine approval rules still apply. The API never auto-approves.
 - Approval prompts expose only approval ID, tool, risk, summary, reason and impact. Raw tool arguments are deliberately withheld.
 - The task registry is currently in memory. Event logs and sessions remain durable, but after a server restart the in-memory task IDs are gone; inspect/resume durable sessions through the existing session APIs/CLI. Durable task orchestration, cooperative cancellation, resume, user-question replies, and SSE are later WP-2 increments.
-- The first implementation uses polling rather than SSE. Clients can poll `GET /tasks/{task_id}` and `GET /sessions/{session_id}`.
+- The browser uses bounded polling to refresh each active task and session. Model text deltas are exposed as a capped `stream_text` field in the task projection; this is incremental polling, not an SSE transport.
 
 ## Security model
 
 1. The server only binds loopback. It rejects `0.0.0.0`, LAN IPs, and public IPs.
-2. All routes except health require `Authorization: Bearer <token>`; comparison uses constant-time comparison.
+2. All routes except health require the per-process credential, supplied either as `Authorization: Bearer <token>` for API clients or as the HttpOnly cookie for the same-origin browser UI; comparison uses constant-time comparison.
 3. Host must resolve syntactically to loopback/localhost. If Origin is supplied, it must be HTTP loopback and match Host exactly. No CORS headers are emitted.
 4. The workspace is resolved and fixed when the service is constructed. No API parameter can select another workspace.
 5. Session IDs are format-validated. Resolved session directories and event files must remain directly inside the configured sessions root; symlink escapes are rejected.
