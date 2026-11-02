@@ -125,6 +125,23 @@ def _read_audit(workspace: Path) -> dict[str, Any]:
     return {"events": events, "issues": issues, "last_hash": previous}
 
 
+def _read_audit_consistent(workspace: Path) -> dict[str, Any]:
+    """Read an audit snapshot while excluding an in-progress append."""
+    lock = SessionLock(Path(workspace) / AUDIT_LOCK_REL)
+    try:
+        lock.acquire()
+    except SessionLockedError:
+        return {
+            "events": [],
+            "issues": [{"line": 0, "reason": "audit log is locked by another writer; retry inspection"}],
+            "last_hash": "0" * 64,
+        }
+    try:
+        return _read_audit(workspace)
+    finally:
+        lock.release()
+
+
 def _append_audit_event(workspace: Path, action: str, status: str, **fields: Any) -> tuple[bool, str | None]:
     """Append one fsynced event under a dedicated lock; never rewrite damaged logs."""
     workspace = Path(workspace)
@@ -1569,7 +1586,7 @@ def inspect_rescue(workspace: Path) -> dict[str, Any]:
                     quarantined.append({"path": rel, "kind": "symlink" if path.is_symlink() else ("directory" if path.is_dir() else "file"),
                                         "state": "CLEANUP_INTERRUPTED"})
         quarantined = _inspect_clean_quarantines(workspace, manifest)
-        audit = _read_audit(workspace)
+        audit = _read_audit_consistent(workspace)
         states = _transaction_states(audit["events"])
         issues = list(audit["issues"])
         incomplete_stages = [
