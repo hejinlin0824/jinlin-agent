@@ -138,3 +138,20 @@ def test_http_api_exposes_workspace_scoped_session_read_models(tmp_path, monkeyp
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_service_rejects_session_folder_identity_mismatch(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    cfg = load_config(root, home=tmp_path / "jinlin-home")
+    session = SessionManager.create(cfg, root, "identity check", NullSandbox(str(root)))
+    original_id = session.id
+    session.close()
+
+    forged_id = "sess_20990101_000000_abcdef"
+    (cfg.sessions_dir / original_id).rename(cfg.sessions_dir / forged_id)
+    service = ApplicationService(root, config=cfg)
+    with pytest.raises(AgentError) as exc:
+        service.get_session(forged_id)
+    assert exc.value.code == "SESSION_NOT_FOUND"
+    assert service.list_sessions() == []
