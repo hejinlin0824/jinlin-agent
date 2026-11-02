@@ -191,3 +191,65 @@ def test_real_child_process_crash_after_cleanup_quarantine_preserves_evidence(tm
     assert cleaned["quarantined"]
     assert quarantine_path.exists()
     assert target.read_bytes() == PAYLOAD
+
+
+@pytest.mark.parametrize(
+    ("crash_point", "exit_code"),
+    [("after-quarantine-publish", 93), ("after-quarantine-manifest", 94)],
+)
+def test_real_child_process_crash_during_quarantine_recovery_is_idempotent(tmp_path, crash_point, exit_code):
+    rescue = tmp_path / ".quarantine-crash.py.jinlin-rescue-c0ffee02"
+    rescue.write_bytes(PAYLOAD)
+    assert trash.record_trash(tmp_path, rescue, "quarantine-crash.py", "rescue")
+    quarantine = rescue.with_name(f".{rescue.name}.jinlin-clean-c0ffee02")
+    os.replace(rescue, quarantine)
+
+    worker = r'''
+import os
+import sys
+from pathlib import Path
+import jinlin_agent.trash as trash
+workspace = Path(sys.argv[1])
+point = sys.argv[2]
+if point == "after-quarantine-publish":
+    real_link = os.link
+    def hooked_link(source, destination, *args, **kwargs):
+        result = real_link(source, destination, *args, **kwargs)
+        if ".jinlin-quarantine-restore-" in Path(source).name:
+            os._exit(93)
+        return result
+    os.link = hooked_link
+elif point == "after-quarantine-manifest":
+    real_write = trash._write_manifest_atomic
+    def hooked_write(*args, **kwargs):
+        result = real_write(*args, **kwargs)
+        os._exit(94)
+        return result
+    trash._write_manifest_atomic = hooked_write
+trash.recover_clean_quarantines(workspace, apply=True)
+raise SystemExit("crash hook was not reached")
+'''
+    completed = subprocess.run(
+        [sys.executable, "-c", worker, str(tmp_path), crash_point],
+        cwd=Path(__file__).resolve().parents[1],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == exit_code, (
+        f"child did not stop at {crash_point}; rc={completed.returncode}\n"
+        f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    )
+
+    # The quarantine evidence survives both crash boundaries. A fresh process
+    # can reconcile the published candidate and finish metadata/stage cleanup.
+    assert rescue.read_bytes() == PAYLOAD
+    assert quarantine.read_bytes() == PAYLOAD
+    recovered = trash.recover_clean_quarantines(tmp_path, apply=True)
+    assert recovered["status"] == "applied"
+    assert recovered["recovered"][0]["status"] == "already-restored"
+    assert trash.list_rescue(tmp_path)["rescued"][0]["path"] == rescue.name
+    assert quarantine.read_bytes() == PAYLOAD
+    assert os.stat(rescue).st_ino != os.stat(quarantine).st_ino
