@@ -35,13 +35,52 @@ function renderSidebar(){
   b.onclick=()=>selectConversation(c.id);host.append(b);
  });
 }
+function appendInline(parent,text){
+ const pattern=/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g;
+ let cursor=0,match;
+ while((match=pattern.exec(text))!==null){
+  if(match.index>cursor)parent.append(document.createTextNode(text.slice(cursor,match.index)));
+  const token=match[0];let el;
+  if(token.startsWith("`")){el=node("code","",token.slice(1,-1))}
+  else if(token.startsWith("**")){el=node("strong","");appendInline(el,token.slice(2,-2))}
+  else if(token.startsWith("*")){el=node("em","");appendInline(el,token.slice(1,-1))}
+  else{
+   const parts=token.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
+   if(parts){el=node("a","",parts[1]);el.href=parts[2];el.target="_blank";el.rel="noopener noreferrer"}
+  }
+  if(el)parent.append(el);cursor=pattern.lastIndex;
+ }
+ if(cursor<text.length)parent.append(document.createTextNode(text.slice(cursor)));
+}
+function renderMarkdown(parent,source){
+ const lines=String(source||"").replace(/\r\n?/g,"\n").split("\n");
+ let paragraph=[],list=null,code=null,quote=[];
+ const flushParagraph=()=>{if(!paragraph.length)return;const p=node("p","");appendInline(p,paragraph.join(" "));parent.append(p);paragraph=[]};
+ const flushList=()=>{if(!list)return;parent.append(list);list=null};
+ const flushQuote=()=>{if(!quote.length)return;const q=node("blockquote","");const p=node("p","");appendInline(p,quote.join(" "));q.append(p);parent.append(q);quote=[]};
+ for(const line of lines){
+  if(code){if(/^\s*```/.test(line)){const pre=node("pre",""),el=node("code","",code.join("\n"));pre.append(el);parent.append(pre);code=null}else code.push(line);continue}
+  if(/^\s*```/.test(line)){flushParagraph();flushList();flushQuote();code=[];continue}
+  if(!line.trim()){flushParagraph();flushList();flushQuote();continue}
+  const heading=line.match(/^(#{1,6})\s+(.+)$/);
+  if(heading){flushParagraph();flushList();flushQuote();const el=node("h"+heading[1].length,"");appendInline(el,heading[2]);parent.append(el);continue}
+  if(/^\s*(---+|\*\*\*|___)\s*$/.test(line)){flushParagraph();flushList();flushQuote();parent.append(node("hr",""));continue}
+  const q=line.match(/^>\s?(.*)$/);
+  if(q){flushParagraph();flushList();quote.push(q[1]);continue}else flushQuote();
+  const item=line.match(/^\s*([-*+] |\d+\. )(.*)$/);
+  if(item){flushParagraph();const ordered=/^\d/.test(item[1]);if(!list||list.tagName.toLowerCase()!==(ordered?"ol":"ul")){flushList();list=node(ordered?"ol":"ul","")}const li=node("li","");appendInline(li,item[2]);list.append(li);continue}
+  flushList();paragraph.push(line);
+ }
+ if(code){const pre=node("pre",""),el=node("code","",code.join("\n"));pre.append(el);parent.append(pre)}
+ flushParagraph();flushList();flushQuote();
+}
 function renderMessages(){
  const c=current();$("messages").replaceChildren();
  if(!c||!c.messages.length){$("welcome").style.display="block";$("sessionMeta").textContent="新对话";$("taskStatus").textContent="暂无任务";return}
  $("welcome").style.display="none";
  c.messages.forEach(m=>{
   const row=node("article","message "+m.role),av=node("div","avatar",m.role==="user"?"你":"J"),bubble=node("div","bubble");
-  bubble.append(node("p","",m.text||""));
+  renderMarkdown(bubble,m.text||"");
   if(m.meta)bubble.append(node("div","meta",m.meta));
   row.append(av,bubble);$("messages").append(row);
  });
@@ -94,7 +133,7 @@ async function refreshTask(c){
  const t=await api("/api/v1/tasks/"+encodeURIComponent(c.taskId));
  c.status=t.status;c.sessionId=t.session_id||c.sessionId;c.approval=t.pending_approval;c.error=t.error;
  if(!c.sessionId){
-  const startupText=t.error?("任务启动失败："+t.error.message+"（"+t.error.code+"）"):(t.stream_text||"正在启动本地 Agent……");
+  const startupText=t.error?("任务启动失败："+t.error.message+"（"+t.error.code+"）"):(t.stream_text||t.progress||"正在启动本地 Agent……");
   updateAssistant(c,startupText,statusText(t.status));
  }
  if(c.sessionId){
@@ -106,7 +145,7 @@ async function refreshTask(c){
   else if(t.status==="completed")reply=s.completion_summary||"任务已完成。";
   else if(t.status==="failed")reply="任务执行失败，请展开开发者详情查看事件记录。";
   else if(t.status==="waiting_user"){const q=events.slice().reverse().find(e=>e.type==="session.waiting_user");reply=q?.question||"我需要你补充一点信息才能继续。当前工作台暂不支持直接回复，请在终端使用会话恢复命令继续。";}
-  else reply=t.stream_text||("我正在处理这个任务。"+(recent?"\n\n"+recent:""));
+  else reply=t.stream_text||t.progress||("我正在处理这个任务。"+(recent?"\n\n"+recent:""));
   updateAssistant(c,reply,statusText(t.status));
  }
  if(c.id===state.activeId){
