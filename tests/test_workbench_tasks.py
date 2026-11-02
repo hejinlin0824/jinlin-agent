@@ -70,24 +70,26 @@ def test_task_manager_requires_matching_explicit_approval_and_hides_arguments():
     _wait_for(manager, created["task_id"], "completed")
 
 
-def test_task_manager_rejects_concurrent_tasks_and_invalid_approval():
+def test_task_manager_allows_independent_conversations_and_validates_approval():
     service = _FakeService()
     manager = WorkbenchTaskManager(service)
     first = manager.submit("first task", read_only=True)
     service.entered.wait(2)
     _wait_for(manager, first["task_id"], "waiting_approval")
 
-    with pytest.raises(AgentError) as exc:
-        manager.submit("second task")
-    assert exc.value.code == "TASK_BUSY"
+    second = manager.submit("second task", read_only=True)
+    _wait_for(manager, second["task_id"], "waiting_approval")
+    assert first["task_id"] != second["task_id"]
 
     with pytest.raises(AgentError) as exc:
         manager.approve(first["task_id"], "approval-1", "approve_everything")
     assert exc.value.code == "REQUEST_INVALID"
 
     manager.approve(first["task_id"], "approval-1", "denied")
+    manager.approve(second["task_id"], "approval-1", "denied")
     service.release.wait(2)
     _wait_for(manager, first["task_id"], "failed")
+    _wait_for(manager, second["task_id"], "failed")
 
 
 def _http(url, token=None, method="GET", body=None, headers=None):
