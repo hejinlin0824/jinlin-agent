@@ -1,205 +1,35 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="dark">
-<title>Jinlin Agent · Workbench</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Jinlin Agent</title>
 <style>
-:root{font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif;color:#e8edf5;background:#0b1018;font-synthesis:none;text-rendering:optimizeLegibility}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 15% -10%,#1a2a40 0,transparent 38%),#0b1018}
-button,input,textarea{font:inherit}button{cursor:pointer;border:1px solid #34445a;background:#172334;color:#e8edf5;border-radius:9px;padding:9px 13px}button:hover{border-color:#7aa7d8;background:#20334a}button:disabled{opacity:.45;cursor:not-allowed}
-.shell{max-width:1500px;margin:auto;padding:24px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}.brand{display:flex;align-items:center;gap:13px}.mark{width:38px;height:38px;border-radius:12px;background:linear-gradient(145deg,#6aa8ed,#315e9d);display:grid;place-items:center;font-weight:800;color:white}.brand h1{font-size:18px;margin:0}.brand p{font-size:12px;color:#8fa0b7;margin:4px 0 0}.connection{display:flex;align-items:center;gap:8px;color:#9eb0c7;font-size:12px}.dot{width:8px;height:8px;border-radius:50%;background:#65748a}.dot.on{background:#50d6a1;box-shadow:0 0 12px #50d6a1}
-.grid{display:grid;grid-template-columns:280px minmax(0,1fr);gap:18px;align-items:start}.panel{background:rgba(17,26,39,.92);border:1px solid #263548;border-radius:15px;box-shadow:0 16px 50px #0003}.side{padding:17px;position:sticky;top:18px}.main{display:grid;gap:18px}.section-title{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#8294ac;margin:0 0 13px}.workspace{padding:12px;background:#111d2b;border:1px solid #2a3b50;border-radius:10px;font-size:12px;overflow-wrap:anywhere;color:#c5d4e6}.muted{color:#8293a9}.sessions{display:grid;gap:7px;margin-top:17px}.session{width:100%;text-align:left;background:transparent;border-color:transparent;padding:10px}.session.active{background:#1b2b40;border-color:#385473}.session strong{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.session small{display:block;color:#8da0b8;margin-top:5px;font-size:10px}
-.card{padding:20px}.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:15px}.card-head h2{font-size:16px;margin:0}.tag{font-size:11px;color:#a9c8ec;background:#1b3048;border:1px solid #345272;border-radius:99px;padding:4px 9px}.taskbox{width:100%;min-height:118px;resize:vertical;border:1px solid #34465c;border-radius:11px;background:#0d1622;color:#e8edf5;padding:14px;outline:none}.taskbox:focus{border-color:#70a7e7;box-shadow:0 0 0 3px #70a7e71c}.actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}.check{display:flex;align-items:center;gap:8px;font-size:12px;color:#a8b7ca}.primary{background:#376fae;border-color:#4d8bce;font-weight:650}.primary:hover{background:#4384c9}.statusline{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.status{font-size:12px;padding:5px 9px;border-radius:7px;background:#1a2a3d;color:#c6d8ee}.status.running,.status.queued{color:#9ecbff}.status.completed{color:#75e0b4}.status.failed,.status.denied{color:#ff9e9e}.status.waiting_approval{color:#ffd58c;background:#392d19}
-.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}.kpi{padding:12px;background:#0d1622;border:1px solid #263548;border-radius:10px}.kpi small{display:block;color:#8395ad;font-size:10px}.kpi strong{display:block;margin-top:6px;font-size:15px;overflow-wrap:anywhere}
-.approval{display:none;border:1px solid #775c2d;background:#241e14;border-radius:12px;padding:16px;margin-top:15px}.approval.show{display:block}.approval h3{margin:0 0 10px;color:#ffd58c;font-size:14px}.approval p{font-size:12px;line-height:1.6;color:#d8c7a6;margin:5px 0}.approval-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.deny{border-color:#764747;color:#ffb0b0}.timeline{display:grid;gap:8px;max-height:420px;overflow:auto}.event{display:grid;grid-template-columns:65px 1fr;gap:12px;padding:10px;border-bottom:1px solid #233144;font-size:12px}.event:last-child{border-bottom:0}.event time{color:#778ba5;font-variant-numeric:tabular-nums}.event strong{color:#c9d9ec;font-weight:600}.event p{margin:4px 0 0;color:#91a3ba;overflow-wrap:anywhere}.error{display:none;padding:10px 12px;border-radius:9px;background:#351e24;border:1px solid #69323d;color:#ffb2bc;font-size:12px;margin-bottom:12px}.error.show{display:block}.tokenrow{display:flex;gap:7px;margin-top:12px}.tokenrow input{min-width:0;flex:1;background:#0d1622;border:1px solid #34465c;border-radius:8px;color:#dce7f4;padding:9px;font-size:11px}.empty{color:#71839b;font-size:12px;text-align:center;padding:25px 10px}
-@media(max-width:850px){.grid{grid-template-columns:1fr}.side{position:static}.sessions{grid-template-columns:repeat(2,minmax(0,1fr))}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:520px){.shell{padding:14px}.top{align-items:flex-start}.connection{font-size:10px}.card{padding:15px}.sessions{grid-template-columns:1fr}.actions{align-items:flex-start}.actions button{width:100%}}
-</style>
-</head>
-<body>
-<div class="shell">
-<header class="top">
-  <div class="brand"><div class="mark">J</div><div><h1>Jinlin Agent</h1><p>LOCAL ENGINEERING WORKBENCH</p></div></div>
-  <div class="connection"><span id="dot" class="dot"></span><span id="connectionText">尚未连接</span></div>
-</header>
-<div id="error" class="error" role="alert"></div>
-<div class="grid">
-  <aside class="panel side">
-    <h2 class="section-title">Workspace</h2>
-    <div id="workspace" class="workspace">连接后读取当前服务绑定的工作区</div>
-    <div class="tokenrow"><input id="token" type="password" autocomplete="off" placeholder="粘贴终端显示的 Bearer Token"><button id="connect">连接</button></div>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:23px"><h2 class="section-title" style="margin:0">Recent sessions</h2><button id="reload" style="padding:5px 8px;font-size:11px">刷新</button></div>
-    <div id="sessions" class="sessions"><div class="empty">连接服务后显示会话</div></div>
-  </aside>
-  <main class="main">
-    <section class="panel card">
-      <div class="card-head"><h2>发起新任务</h2><span class="tag">同一 Agent 内核</span></div>
-      <textarea id="task" class="taskbox" placeholder="描述你希望 Agent 完成的工程任务。建议从范围明确的只读分析开始……"></textarea>
-      <div class="actions"><label class="check"><input id="readOnly" type="checkbox" checked> 只读模式（推荐）</label><button id="submit" class="primary" disabled>提交任务 ↗</button></div>
-    </section>
-    <section class="panel card">
-      <div class="card-head"><h2>执行状态</h2><span id="taskStatus" class="status">暂无活动任务</span></div>
-      <div id="taskPrompt" class="muted" style="font-size:12px">提交任务后，这里会显示任务状态与当前会话。</div>
-      <div class="kpis">
-        <div class="kpi"><small>SESSION</small><strong id="sessionId">—</strong></div>
-        <div class="kpi"><small>PHASE</small><strong id="phase">—</strong></div>
-        <div class="kpi"><small>STEP</small><strong id="step">—</strong></div>
-        <div class="kpi"><small>EVENTS</small><strong id="eventCount">—</strong></div>
-      </div>
-      <div id="approval" class="approval">
-        <h3>需要你的审批</h3><p id="approvalSummary"></p><p id="approvalReason"></p><p id="approvalImpact"></p>
-        <div class="approval-actions">
-          <button id="approveOnce" class="primary">仅批准本次</button>
-          <button id="approveSession">本会话批准同类操作</button>
-          <button id="deny" class="deny">拒绝</button>
-        </div>
-      </div>
-    </section>
-    <section class="panel card">
-      <div class="card-head"><h2>执行时间线</h2><span class="tag">事件日志</span></div>
-      <div id="timeline" class="timeline"><div class="empty">选择一个会话或提交任务以查看事件</div></div>
-    </section>
-  </main>
-</div>
-</div>
+:root{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;color:#ececf1;background:#212121}*{box-sizing:border-box}body{margin:0;background:#212121}button,input,textarea{font:inherit}button{cursor:pointer;color:inherit;border:0}
+.app{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:100vh}.sidebar{background:#171717;padding:14px 12px;display:flex;flex-direction:column;gap:13px;border-right:1px solid #303030;min-height:100vh}.brand{display:flex;align-items:center;gap:10px;padding:8px 7px 14px;font-size:16px;font-weight:650}.logo{width:28px;height:28px;border-radius:9px;background:#eee;color:#171717;display:grid;place-items:center;font-weight:800}.newchat{width:100%;text-align:left;padding:11px 12px;background:#242424;border:1px solid #383838;border-radius:10px;font-size:13px}.newchat:hover,.session:hover{background:#2b2b2b}.side-label{font-size:11px;color:#858585;padding:8px 8px 2px;letter-spacing:.08em}.sessions{display:grid;gap:3px;overflow:auto;max-height:48vh}.session{width:100%;text-align:left;background:transparent;border-radius:8px;padding:10px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.session.active{background:#303030}.side-bottom{margin-top:auto;border-top:1px solid #303030;padding:12px 5px 2px}.workspace{font-size:11px;color:#aaa;line-height:1.5;overflow-wrap:anywhere;margin:7px 2px 10px}.tokenrow{display:flex;gap:6px}.tokenrow input{min-width:0;width:100%;background:#242424;border:1px solid #404040;border-radius:8px;padding:8px;color:#eee;font-size:11px}.tokenrow button{background:#353535;border-radius:8px;padding:7px 10px;font-size:11px}
+.main{min-width:0;display:flex;flex-direction:column;min-height:100vh}.topbar{height:58px;border-bottom:1px solid #303030;display:flex;align-items:center;justify-content:space-between;padding:0 26px;position:sticky;top:0;background:#212121ed;z-index:5}.model-name{font-size:14px;font-weight:600}.connection{font-size:11px;color:#999;display:flex;align-items:center;gap:7px}.dot{width:7px;height:7px;background:#666;border-radius:50%}.dot.on{background:#35b77a}.error{display:none;margin:12px auto 0;width:min(850px,calc(100% - 32px));background:#422326;border:1px solid #744047;color:#ffd5d8;padding:11px 14px;border-radius:10px;font-size:12px;white-space:pre-wrap}.error.show{display:block}
+.chat{width:min(850px,calc(100% - 36px));margin:0 auto;flex:1;padding:34px 0 165px}.welcome{text-align:center;margin:17vh auto 0}.welcome h1{font-size:27px;font-weight:550;margin:0 0 12px}.welcome p{font-size:14px;color:#999}.messages{display:grid;gap:27px}.message{display:flex;gap:13px;align-items:flex-start;line-height:1.75;font-size:14px;min-width:0}.avatar{width:29px;height:29px;flex:0 0 29px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700}.user .avatar{background:#3a3a3a}.assistant .avatar{background:#e8e8e8;color:#171717}.bubble{min-width:0;max-width:100%;overflow-wrap:anywhere;padding-top:2px}.bubble p{margin:0 0 10px;white-space:pre-wrap}.bubble pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#171717;border:1px solid #383838;padding:12px;border-radius:9px}.meta{color:#888;font-size:11px;margin-top:8px}.activity{border:1px solid #3a3a3a;background:#262626;border-radius:10px;padding:11px 13px;margin:10px 0;color:#c6c6c6;font-size:12px}.activity summary{cursor:pointer;color:#ddd}.activity-list{margin:10px 0 0;padding-left:18px;color:#aaa}.activity-list li{margin:5px 0}.status{display:inline-flex;align-items:center;gap:6px;color:#aaa;font-size:11px;padding:4px 8px;background:#303030;border-radius:20px}.status.running:before{content:"";width:6px;height:6px;border-radius:50%;background:#e4b65e;animation:pulse 1.3s infinite}.status.completed{color:#8bd5ae}.status.failed{color:#ff9b9b}.status.waiting_approval{color:#f2c879}@keyframes pulse{50%{opacity:.25}}
+.approval{display:none;border:1px solid #796239;background:#30291e;border-radius:11px;padding:14px;margin:15px 0}.approval.show{display:block}.approval strong{font-size:13px;color:#f1d39b}.approval p{font-size:12px;color:#d1c3a8;margin:7px 0}.approval-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.approval-actions button{padding:8px 11px;background:#454034;border-radius:8px;font-size:11px}.approval-actions .primary{background:#366b51}
+.composer-wrap{position:fixed;bottom:0;left:260px;right:0;background:linear-gradient(180deg,transparent,#212121 24%);padding:26px 20px 18px;z-index:4}.composer{width:min(850px,100%);margin:auto;background:#303030;border:1px solid #4a4a4a;border-radius:18px;padding:12px 13px 10px;box-shadow:0 8px 32px #0005}.composer textarea{display:block;width:100%;min-height:54px;max-height:190px;resize:vertical;border:0;outline:0;background:transparent;color:#eee;padding:5px 6px;font-size:14px;line-height:1.5}.composer textarea::placeholder{color:#8a8a8a}.composer-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 2px 0}.check{font-size:11px;color:#aaa;display:flex;align-items:center;gap:6px}.send{width:34px;height:34px;border-radius:50%;background:#eee;color:#171717;font-weight:800;font-size:18px}.send:disabled{opacity:.35;cursor:not-allowed}.hint{font-size:10px;color:#777;text-align:center;margin:8px 0 0}.detailbar{display:flex;align-items:center;justify-content:space-between;color:#858585;font-size:11px;margin:18px 0 8px}.detailbar button{background:transparent;color:#aaa;font-size:11px}.details{display:none;background:#191919;border:1px solid #383838;border-radius:10px;padding:12px;margin-top:10px}.details.show{display:block}.kpis{display:flex;gap:14px;flex-wrap:wrap;color:#888;font-size:10px}.timeline{max-height:260px;overflow:auto;margin-top:10px}.event{display:grid;grid-template-columns:66px minmax(0,1fr);gap:8px;border-bottom:1px solid #303030;padding:8px 0;font-size:11px}.event time{color:#777}.event strong{color:#c5c5c5}.empty{color:#777;font-size:12px;padding:12px}
+@media(max-width:760px){.app{grid-template-columns:1fr}.sidebar{min-height:auto;padding:9px 12px}.brand{padding:3px}.newchat{width:auto}.side-label,.sessions,.side-bottom{display:none}.topbar{height:50px;padding:0 15px}.composer-wrap{left:0;padding:15px 12px 12px}.chat{padding-top:25px}.welcome{margin-top:12vh}}
+</style></head><body>
+<div class="app"><aside class="sidebar"><div class="brand"><div class="logo">J</div><span>Jinlin Agent</span></div><button class="newchat" id="newChat">＋　新对话</button><div class="side-label">最近对话</div><div id="sessions" class="sessions"><div class="empty">连接本地服务后显示历史对话</div></div><div class="side-bottom"><div class="side-label">当前工作区</div><div id="workspace" class="workspace">尚未连接</div><div class="tokenrow"><input id="token" type="password" autocomplete="off" placeholder="Bearer Token"><button id="connect">连接</button></div></div></aside>
+<main class="main"><header class="topbar"><div class="model-name">Agent <span style="color:#888;font-weight:400">⌄</span></div><div class="connection"><span id="dot" class="dot"></span><span id="connectionText">尚未连接</span></div></header><div id="error" class="error" role="alert"></div><section class="chat"><div id="welcome" class="welcome"><h1>今天有什么可以一起完成？</h1><p>描述目标，Agent 将在当前工作区中分析、执行并汇报。</p></div><div id="messages" class="messages"></div>
+<div id="approval" class="approval"><strong>需要你的确认才能继续</strong><p id="approvalSummary"></p><p id="approvalReason"></p><p id="approvalImpact"></p><div class="approval-actions"><button id="approveOnce" class="primary">仅批准本次</button><button id="approveSession">本会话批准同类操作</button><button id="deny">拒绝</button></div></div>
+<div class="detailbar"><span id="sessionMeta">本地 Agent 会话</span><button id="toggleDetails">查看执行详情⌄</button></div><div id="details" class="details"><div class="kpis"><span>SESSION <b id="sessionId">—</b></span><span>PHASE <b id="phase">—</b></span><span>STEP <b id="step">—</b></span><span>EVENTS <b id="eventCount">—</b></span><span id="taskStatus" class="status">暂无任务</span></div><div id="timeline" class="timeline"><div class="empty">暂无事件</div></div></div></section></main></div>
+<div class="composer-wrap"><div class="composer"><textarea id="task" placeholder="向 Jinlin Agent 发送消息…" rows="2"></textarea><div class="composer-foot"><label class="check"><input id="readOnly" type="checkbox" checked> 只读模式</label><button id="submit" class="send" disabled aria-label="发送">↑</button></div></div><div class="hint">Agent 在本机工作区运行；执行文件修改前会根据权限策略请求确认。</div></div>
 <script>
-(() => {
-  const $ = id => document.getElementById(id);
-  let token = sessionStorage.getItem("jinlin.workbench.token") || "";
-  let activeTask = null;
-  let selectedSession = null;
-  let timer = null;
-  let pollBusy = false;
-  $("token").value = token;
-
-  function showError(message) { $("error").textContent = message; $("error").classList.toggle("show", !!message); }
-  function setConnected(ok, message) { $("dot").classList.toggle("on", ok); $("connectionText").textContent = message; $("submit").disabled = !ok; }
-  async function api(path, options={}) {
-    const headers = Object.assign({"Authorization": "Bearer " + token}, options.headers || {});
-    const response = await fetch(path, Object.assign({}, options, {headers}));
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error?.message || data.error?.code || ("HTTP " + response.status));
-    return data.data ?? data;
-  }
-  function node(tag, className, text) { const el=document.createElement(tag); if(className)el.className=className; if(text!==undefined)el.textContent=text; return el; }
-  async function connect() {
-    token = $("token").value.trim();
-    if (!token) { showError("请先粘贴启动服务时终端显示的 Token。"); return; }
-    sessionStorage.setItem("jinlin.workbench.token", token);
-    try {
-      const doctor = await api("/api/v1/doctor");
-      $("workspace").textContent = doctor.workspace || "已连接";
-      setConnected(true, "本机服务已连接");
-      showError("");
-      await loadTasks();
-      await loadSessions();
-      if (!activeTask && !selectedSession) {
-        const latest = $("sessions").querySelector("button.session");
-        if (latest) latest.click();
-      }
-      if (timer) clearInterval(timer);
-      timer = setInterval(async () => {
-        if (pollBusy) return;
-        pollBusy = true;
-        try {
-          await loadTasks();
-          await loadSessions();
-        } catch (e) { showError(e.message); }
-        finally { pollBusy = false; }
-      }, 1800);
-    } catch (error) { setConnected(false, "连接失败"); showError(error.message); }
-  }
-  async function loadSessions() {
-    const rows = await api("/api/v1/sessions");
-    const host = $("sessions"); host.replaceChildren();
-    if (!rows.length) { host.append(node("div","empty","暂无历史会话")); return; }
-    rows.slice(0,30).forEach(row => {
-      const b=node("button","session"+(selectedSession===row.session_id?" active":""));
-      b.append(node("strong","",row.request || row.session_id));
-      b.append(node("small","",row.status+" · "+row.phase));
-      b.addEventListener("click",()=>selectSession(row.session_id));
-      host.append(b);
-    });
-  }
-  async function selectSession(id) {
-    selectedSession=id; activeTask=null; $("approval").classList.remove("show");
-    try { await renderSession(id); await loadSessions(); } catch(e){showError(e.message);}
-  }
-  async function renderSession(id) {
-    const [session,events]=await Promise.all([api("/api/v1/sessions/"+encodeURIComponent(id)),api("/api/v1/sessions/"+encodeURIComponent(id)+"/events?tail=100")]);
-    $("sessionId").textContent=session.session_id;
-    $("phase").textContent=session.phase || "—";
-    $("step").textContent=String(session.step_index ?? 0);
-    $("eventCount").textContent=String(session.event_count ?? events.length);
-    // Task lifecycle status is authoritative here; session refresh must not
-    // overwrite it with a possibly stale/recovered session projection.
-    if (!$("taskPrompt").textContent) $("taskPrompt").textContent=session.request || "";
-    renderEvents(events);
-  }
-  function renderEvents(events) {
-    const host=$("timeline"); host.replaceChildren();
-    if(!events.length){host.append(node("div","empty","暂无事件"));return;}
-    events.slice().reverse().forEach(evt=>{
-      const item=node("div","event"), time=node("time","",String(evt.timestamp||"").slice(11,19)||"—"), body=node("div","");
-      body.append(node("strong","",evt.type||"event"));
-      const detail=evt.request||evt.tool||evt.status||evt.error_code||evt.level||"";
-      if(detail)body.append(node("p","",String(detail)));
-      item.append(time,body);host.append(item);
-    });
-  }
-  async function loadTasks() {
-    const tasks=await api("/api/v1/tasks");
-    if(!activeTask && !selectedSession && tasks.length) activeTask=tasks[0].task_id;
-    if(!activeTask) {
-      if (selectedSession) await renderSession(selectedSession);
-      return;
-    }
-    const task=await api("/api/v1/tasks/"+encodeURIComponent(activeTask));
-    $("taskStatus").textContent=task.status;
-    $("taskStatus").className="status "+task.status;
-    const errorText = task.error ? ("\n执行失败 [" + task.error.code + "]：" + task.error.message) : "";
-    $("taskPrompt").textContent=(task.request || "") + errorText;
-    if(task.session_id) {
-      selectedSession=task.session_id;
-      await renderSession(task.session_id);
-    }
-    const approval=task.pending_approval;
-    $("approval").classList.toggle("show",!!approval);
-    if(approval) {
-      $("approvalSummary").textContent=approval.tool+" · "+approval.risk+" · "+approval.summary;
-      $("approvalReason").textContent=approval.reason||"";
-      $("approvalImpact").textContent=(approval.impact||[]).join(" · ");
-    }
-  }
-  async function decide(decision) {
-    if(!activeTask) return;
-    const task=await api("/api/v1/tasks/"+encodeURIComponent(activeTask));
-    const approval=task.pending_approval;
-    if(!approval) { $("approval").classList.remove("show"); return; }
-    await api("/api/v1/tasks/"+encodeURIComponent(activeTask)+"/approvals/decision",{
-      method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({approval_id:approval.approval_id,decision})
-    });
-    $("approval").classList.remove("show");
-    await loadTasks();
-  }
-  $("connect").addEventListener("click",connect);
-  $("reload").addEventListener("click",()=>{loadSessions().catch(e=>showError(e.message));loadTasks().catch(e=>showError(e.message));});
-  $("submit").addEventListener("click",async()=>{
-    const task=$("task").value.trim(); if(!task)return;
-    $("submit").disabled=true;showError("");
-    try {
-      const created=await api("/api/v1/tasks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({task,read_only:$("readOnly").checked})});
-      activeTask=created.task_id;selectedSession=null;$("task").value="";await loadTasks();
-    } catch(e){showError(e.message);} finally {$("submit").disabled=false;}
-  });
-  $("approveOnce").addEventListener("click",()=>decide("approved_once").catch(e=>showError(e.message)));
-  $("approveSession").addEventListener("click",()=>decide("approved_for_session").catch(e=>showError(e.message)));
-  $("deny").addEventListener("click",()=>decide("denied").catch(e=>showError(e.message)));
-  if(token) connect();
-})();
-</script>
-</body>
-</html>
+(()=>{const $=id=>document.getElementById(id);let token=sessionStorage.getItem("jinlin.workbench.token")||"",activeTask=null,selectedSession=null,timer=null,busy=false,lastCount=-1;$("token").value=token;
+function error(m){$("error").textContent=m;$("error").classList.toggle("show",!!m)}function connectState(ok,msg){$("dot").classList.toggle("on",ok);$("connectionText").textContent=msg;$("submit").disabled=!ok}
+async function api(path,options={}){const h=Object.assign({Authorization:"Bearer "+token},options.headers||{}),r=await fetch(path,Object.assign({},options,{headers:h})),d=await r.json();if(!r.ok)throw new Error(d.error?.message||d.error?.code||("HTTP "+r.status));return d.data??d}
+function node(tag,cls,txt){const n=document.createElement(tag);if(cls)n.className=cls;if(txt!==undefined)n.textContent=txt;return n}
+function message(role,text,meta){const row=node("article","message "+role),av=node("div","avatar",role==="user"?"你":"J"),b=node("div","bubble");if(text)b.append(node("p","",text));if(meta)b.append(node("div","meta",meta));row.append(av,b);$("messages").append(row);$("welcome").style.display="none";return b}
+function reset(){ $("messages").replaceChildren();$("welcome").style.display="block";activeTask=null;selectedSession=null;lastCount=-1;$("approval").classList.remove("show");$("details").classList.remove("show");$("sessionMeta").textContent="新对话";loadSessions().catch(()=>{})}
+async function loadSessions(){const rows=await api("/api/v1/sessions"),host=$("sessions");host.replaceChildren();if(!rows.length){host.append(node("div","empty","暂无历史对话"));return}rows.slice(0,40).forEach(s=>{const b=node("button","session"+(selectedSession===s.session_id?" active":""),s.request||s.session_id);b.title=s.session_id;b.onclick=()=>selectSession(s.session_id);host.append(b)})}
+async function connect(){token=$("token").value.trim();if(!token){error("请粘贴启动服务时终端显示的 Token。");return}sessionStorage.setItem("jinlin.workbench.token",token);try{const d=await api("/api/v1/doctor");$("workspace").textContent=d.workspace||"已连接";connectState(true,"本机服务已连接");error("");await loadSessions();if(timer)clearInterval(timer);timer=setInterval(poll,1400);const tasks=await api("/api/v1/tasks");if(tasks.length){activeTask=tasks[0].task_id;await loadTask()}else{const rows=await api("/api/v1/sessions");if(rows.length)await selectSession(rows[0].session_id)}}catch(e){connectState(false,"连接失败");error(e.message)}}
+function renderEvents(events){const host=$("timeline");host.replaceChildren();if(!events.length){host.append(node("div","empty","暂无事件"));return}events.forEach(e=>{const row=node("div","event"),tm=node("time","",String(e.timestamp||"").slice(11,19)||"—"),b=node("div","");b.append(node("strong","",e.type||"event"));const d=e.tool||e.error_code||e.level||e.request||"";if(d)b.append(node("div","meta",String(d)));row.append(tm,b);host.append(row)})}
+async function sessionData(id){const [s,events]=await Promise.all([api("/api/v1/sessions/"+encodeURIComponent(id)),api("/api/v1/sessions/"+encodeURIComponent(id)+"/events?tail=100")]);$("sessionId").textContent=s.session_id;$("phase").textContent=s.phase||"—";$("step").textContent=String(s.step_index??0);$("eventCount").textContent=String(s.event_count??events.length);renderEvents(events);return {s,events}}
+async function selectSession(id){selectedSession=id;activeTask=null;$("approval").classList.remove("show");try{const {s}=await sessionData(id);$("messages").replaceChildren();$("welcome").style.display="none";message("user",s.request||"历史任务");message("assistant",s.completion_summary|| (s.status==="failed"?"任务执行失败。展开执行详情查看错误事件。":"历史会话已载入。"),s.status);$("sessionMeta").textContent=s.status+" · "+s.phase;await loadSessions()}catch(e){error(e.message)}}
+async function loadTask(){if(!activeTask)return;const t=await api("/api/v1/tasks/"+encodeURIComponent(activeTask));$("taskStatus").textContent=t.status;$("taskStatus").className="status "+t.status;if(t.session_id){selectedSession=t.session_id;const {s,events}=await sessionData(t.session_id);$("sessionMeta").textContent=t.status+" · "+(s.phase||"处理中");if(events.length!==lastCount){lastCount=events.length;const old=$("messages").querySelector(".assistant");if(old)old.remove();const b=message("assistant",t.error?"执行遇到错误："+t.error.message:t.status==="completed"?(s.completion_summary||"任务已完成。"):t.status==="failed"?"任务执行失败，请查看执行详情。":"我正在处理这个任务。");const details=node("details","activity"),summary=node("summary","", "执行进度 · "+events.length+" 个事件 · "+(s.phase||"处理中")),list=node("ul","activity-list");events.slice(-6).forEach(e=>list.append(node("li","",e.type+(e.tool?" · "+e.tool:""))));details.append(summary,list);b.append(details);if(t.error)b.append(node("pre","",t.error.code+"\n"+t.error.message));if(t.status==="completed"&&s.completion_summary)b.append(node("p","",s.completion_summary))}}
+const a=t.pending_approval;$("approval").classList.toggle("show",!!a);if(a){$("approvalSummary").textContent=a.tool+" · "+a.risk+" · "+a.summary;$("approvalReason").textContent=a.reason||"";$("approvalImpact").textContent=(a.impact||[]).join(" · ")}}
+async function poll(){if(busy)return;busy=true;try{if(activeTask)await loadTask();await loadSessions()}catch(e){error(e.message)}finally{busy=false}}
+async function send(){const value=$("task").value.trim();if(!value)return;if(!token){error("请先连接本机服务。");return}message("user",value);$("task").value="";$("submit").disabled=true;error("");lastCount=-1;try{const t=await api("/api/v1/tasks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({task:value,read_only:$("readOnly").checked})});activeTask=t.task_id;selectedSession=null;$("approval").classList.remove("show");await loadTask();await loadSessions()}catch(e){message("assistant","提交失败："+e.message);error(e.message)}finally{$("submit").disabled=false}}
+async function decide(decision){if(!activeTask)return;const t=await api("/api/v1/tasks/"+encodeURIComponent(activeTask)),a=t.pending_approval;if(!a)return;await api("/api/v1/tasks/"+encodeURIComponent(activeTask)+"/approvals/decision",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({approval_id:a.approval_id,decision})});$("approval").classList.remove("show");await loadTask()}
+$("connect").onclick=connect;$("submit").onclick=send;$("newChat").onclick=reset;$("toggleDetails").onclick=()=>{$("details").classList.toggle("show");$("toggleDetails").textContent=$("details").classList.contains("show")?"收起执行详情⌃":"查看执行详情⌄"};$("task").onkeydown=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send()}};$("approveOnce").onclick=()=>decide("approved_once").catch(e=>error(e.message));$("approveSession").onclick=()=>decide("approved_for_session").catch(e=>error(e.message));$("deny").onclick=()=>decide("denied").catch(e=>error(e.message));if(token)connect()})();
+</script></body></html>
