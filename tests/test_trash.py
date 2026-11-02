@@ -1071,6 +1071,31 @@ def test_rescue_transaction_projector_detects_resource_identity_reuse_and_ignore
 
 
 
+
+def test_rescue_inspect_reports_busy_audit_writer_without_reading_partial_log(tmp_path, monkeypatch):
+    import jinlin_agent.trash as trash_mod
+    from jinlin_agent.locks import SessionLockedError
+    real_lock = trash_mod.SessionLock
+
+    class SelectiveLock:
+        def __init__(self, path):
+            self.path = Path(path)
+            self.inner = real_lock(path)
+
+        def acquire(self):
+            if self.path == tmp_path / trash_mod.AUDIT_LOCK_REL:
+                raise SessionLockedError("simulated active audit writer")
+            self.inner.acquire()
+
+        def release(self):
+            self.inner.release()
+
+    monkeypatch.setattr(trash_mod, "SessionLock", SelectiveLock)
+    report = trash_mod.inspect_rescue(tmp_path)
+    assert report["status"] == "attention-required"
+    assert report["audit"]["issues"][0]["reason"] == "audit log is locked by another writer; retry inspection"
+
+
 def test_rescue_inspect_reports_transaction_identity_drift_in_counts(tmp_path):
     import jinlin_agent.trash as trash_mod
     txid = "9" * 32
