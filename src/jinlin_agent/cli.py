@@ -382,7 +382,11 @@ def cmd_rescue(args: Any) -> int:
         for item in report.get("orphaned", []):
             _print(f"  orphaned {item['path']} [{item['kind']}]")
         for item in report.get("quarantined", []):
-            _print(f"  interrupted-cleanup {item['path']} [{item['kind']}]")
+            _print(f"  interrupted-cleanup {item['path']} [{item['kind']}] "
+                   f"classification={item.get('classification', 'unknown')} "
+                   f"candidate={item.get('candidate', '?')}")
+            if item.get("reason"):
+                _print(f"    reason: {item['reason']}")
         for item in report.get("issues", []):
             _print(f"  issue: {item}")
         if report.get("audit", {}).get("issues"):
