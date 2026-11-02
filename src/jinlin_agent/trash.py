@@ -1059,6 +1059,16 @@ def inspect_rescue(workspace: Path) -> dict[str, Any]:
         audit = _read_audit(workspace)
         states = _transaction_states(audit["events"])
         issues = list(audit["issues"])
+        incomplete_stages = [
+            stage for stage in stages
+            if stage.get("integrity") != "sha256-valid"
+        ]
+        if incomplete_stages:
+            issues.append({
+                "kind": "incomplete-or-unreadable-stage",
+                "count": len(incomplete_stages),
+                "paths": [stage["path"] for stage in incomplete_stages],
+            })
         for transaction in states:
             if transaction.get("transition_issues"):
                 issues.append({"kind": "invalid-state-transition", "txid": transaction["txid"],
@@ -1072,7 +1082,8 @@ def inspect_rescue(workspace: Path) -> dict[str, Any]:
         return {
             "status": "ok" if not issues else "attention-required",
             "counts": {"verified_rescue": len(listed["rescued"]), "unrecognized_rescue": len(listed["unrecognized"]),
-                       "stages": len(stages), "orphaned_stages": len(orphaned), "quarantined": len(quarantined),
+                       "stages": len(stages), "incomplete_stages": len(incomplete_stages),
+                       "orphaned_stages": len(orphaned), "quarantined": len(quarantined),
                        "audit_events": len(audit["events"]), "audit_issues": len(audit["issues"])},
             "rescued": listed["rescued"], "unrecognized": listed["unrecognized"],
             "stages": stages, "orphaned": orphaned, "quarantined": quarantined,
