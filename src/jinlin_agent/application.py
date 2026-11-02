@@ -72,7 +72,7 @@ class ApplicationService:
             try:
                 directory = entry.resolve(strict=True)
                 event_file = (directory / "events.jsonl").resolve(strict=True)
-                if directory.parent != root or event_file.parent != directory or not event_file.is_file():
+                if directory.parent != root or event_file.parent != directory or event_file.name != "events.jsonl" or not event_file.is_file():
                     continue
                 state = recover(read_events(directory))
                 if not include_other_workspaces and str(Path(state.workspace or "").resolve()) != str(self.workspace):
@@ -107,7 +107,7 @@ class ApplicationService:
             event_file = (path / "events.jsonl").resolve(strict=True)
         except OSError as exc:
             raise AgentError("SESSION_NOT_FOUND", "session not found", source="application") from exc
-        if path.parent != root or event_file.parent != path or not event_file.is_file():
+        if path.parent != root or event_file.parent != path or event_file.name != "events.jsonl" or not event_file.is_file():
             raise AgentError("SESSION_NOT_FOUND", "session not found", source="application")
         return path
 
