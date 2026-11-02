@@ -101,7 +101,7 @@ def test_service_reads_session_summary_events_and_stats(tmp_path):
     summary = service.get_session(sid)
     assert summary["session_id"] == sid
     assert summary["request"] == "inspect this project"
-    assert summary["status"] == "created"
+    assert summary["status"] == "running"
     assert summary["event_count"] >= 1
     assert service.list_sessions()[0]["session_id"] == sid
     events = service.list_events(sid, tail=10)
@@ -112,9 +112,10 @@ def test_service_reads_session_summary_events_and_stats(tmp_path):
     assert stats["tool_calls"] == 0
 
 
-def test_http_api_exposes_workspace_scoped_session_read_models(tmp_path):
+def test_http_api_exposes_workspace_scoped_session_read_models(tmp_path, monkeypatch):
     root = tmp_path / "workspace"
     root.mkdir()
+    monkeypatch.setenv("JINLIN_HOME", str(tmp_path / "jinlin-home"))
     cfg = load_config(root, home=tmp_path / "jinlin-home")
     session = SessionManager.create(cfg, root, "api summary task", NullSandbox(str(root)))
     sid = session.id
