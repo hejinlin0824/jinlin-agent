@@ -8,6 +8,9 @@ import urllib.request
 import pytest
 
 from jinlin_agent.application import ApplicationService
+from jinlin_agent.config import load_config
+from jinlin_agent.sandbox.null import NullSandbox
+from jinlin_agent.session import SessionManager
 from jinlin_agent.errors import AgentError
 from jinlin_agent.web import create_server
 
@@ -84,3 +87,53 @@ def test_server_refuses_non_loopback_bind(tmp_path):
     root.mkdir()
     with pytest.raises(ValueError):
         create_server(root, host="0.0.0.0")
+
+
+def test_service_reads_session_summary_events_and_stats(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    cfg = load_config(root, home=tmp_path / "jinlin-home")
+    session = SessionManager.create(cfg, root, "inspect this project", NullSandbox(str(root)))
+    sid = session.id
+    session.close()
+
+    service = ApplicationService(root, config=cfg)
+    summary = service.get_session(sid)
+    assert summary["session_id"] == sid
+    assert summary["request"] == "inspect this project"
+    assert summary["status"] == "created"
+    assert summary["event_count"] >= 1
+    assert service.list_sessions()[0]["session_id"] == sid
+    events = service.list_events(sid, tail=10)
+    assert events[0]["type"] == "session.created"
+    assert events[0]["request"] == "inspect this project"
+    stats = service.stats(sid)
+    assert stats["session_id"] == sid
+    assert stats["tool_calls"] == 0
+
+
+def test_http_api_exposes_workspace_scoped_session_read_models(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    cfg = load_config(root, home=tmp_path / "jinlin-home")
+    session = SessionManager.create(cfg, root, "api summary task", NullSandbox(str(root)))
+    sid = session.id
+    session.close()
+
+    server, _service, token = create_server(root, port=0, token="test-token")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = "http://127.0.0.1:%d" % server.server_address[1]
+    try:
+        status, payload = _request(base + "/api/v1/sessions/" + sid, token)
+        assert status == 200 and payload["data"]["request"] == "api summary task"
+        status, payload = _request(base + "/api/v1/sessions/" + sid + "/events?tail=5", token)
+        assert status == 200 and payload["data"][0]["type"] == "session.created"
+        status, payload = _request(base + "/api/v1/sessions/" + sid + "/stats", token)
+        assert status == 200 and payload["data"]["session_id"] == sid
+        status, payload = _request(base + "/api/v1/sessions", token, headers={"Origin": "http://evil.example"})
+        assert status == 403 and payload["error"]["code"] == "ORIGIN_REJECTED"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
