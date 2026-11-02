@@ -1504,11 +1504,15 @@ def recover_clean_quarantines(workspace: Path, apply: bool = False) -> dict[str,
 
 def restore_rescue(workspace: Path, rescue_rel: str) -> dict[str, Any]:
     result = _restore_rescue_impl(workspace, rescue_rel)
+    if result.get("status") == "locked":
+        return result
     return _audit_result(workspace, "restore", result, rescue=rescue_rel)
 
 
 def recover_rescue(workspace: Path) -> dict[str, Any]:
     result = _recover_rescue_impl(workspace)
+    if result.get("status") == "locked":
+        return result
     for item in result.get("items", []):
         _audit_result(workspace, "recover", item, rescue=item.get("rescue"), target=item.get("target"))
     for item in result.get("orphaned", []):
@@ -1518,6 +1522,8 @@ def recover_rescue(workspace: Path) -> dict[str, Any]:
 
 def clean_rescue(workspace: Path, apply: bool = False) -> dict[str, Any]:
     result = _clean_rescue_impl(workspace, apply=apply)
+    if result.get("status") == "locked":
+        return result
     action = "clean" if apply else "clean-preview"
     for item in result.get("eligible", []):
         if not apply:
