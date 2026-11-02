@@ -50,3 +50,21 @@ def test_serve_reports_port_conflict_without_traceback(tmp_path, capsys):
     assert "cannot bind workbench server" in captured.err
     assert "Traceback" not in captured.err
     assert captured.out == ""
+
+
+@pytest.mark.parametrize("command", ["trace", "stats"])
+def test_session_diagnostics_report_unknown_session_without_traceback(tmp_path, capsys, command):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    exit_code = main([
+        command,
+        "sess_20990101_000000_abcdef",
+        "--workspace",
+        str(workspace),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 4
+    assert "[error]" in captured.err
+    assert "Traceback" not in captured.err
+    assert captured.out == ""
