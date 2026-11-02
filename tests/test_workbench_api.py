@@ -210,3 +210,32 @@ def test_html_response_tolerates_client_disconnect(tmp_path):
         assert calls.count(("end_headers",)) == 1
     finally:
         server.server_close()
+
+
+
+def test_workbench_ui_sets_httponly_cookie_and_cookie_authenticates_api(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    server, _service, token = create_server(root, port=0, token="cookie-secret")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = "http://127.0.0.1:%d" % server.server_address[1]
+    try:
+        with urllib.request.urlopen(base + "/", timeout=3) as response:
+            page = response.read().decode("utf-8")
+            cookie = response.headers.get("Set-Cookie", "")
+            assert "HttpOnly" in cookie
+            assert "SameSite=Strict" in cookie
+            assert "Path=/api/v1" in cookie
+            assert token not in page
+            assert "__JINLIN_WORKBENCH_TOKEN__" not in page
+
+        status, payload = _request(
+            base + "/api/v1/sessions",
+            headers={"Cookie": "jinlin_workbench_session=cookie-secret"},
+        )
+        assert status == 200 and payload["data"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
