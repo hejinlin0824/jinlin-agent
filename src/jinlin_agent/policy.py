@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .domain import ApprovalDecision, RiskLevel, SideEffect
+from .task_contract import TaskContract, Capability
 from .paths import resolve_in_workspace, within as path_within
 from .errors import (
     APPROVAL_DENIED,
@@ -269,11 +270,13 @@ class PolicyEngine:
         approval_handler: ApprovalHandler | None = None,
         auto_approve: bool = False,
         read_only: bool = False,
+        task_contract: TaskContract | None = None,
     ) -> None:
         self.config = config
         self.paths = PathPolicy(workspace, follow_symlinks=bool(config.workspace.get("follow_symlinks", False)))
         self.approvals = ApprovalManager(config, approval_handler, auto_approve)
-        self.read_only = read_only
+        self.task_contract = task_contract or TaskContract.legacy(read_only=read_only)
+        self.read_only = self.task_contract.read_only
         self.workspace = workspace
 
     # ------------------------------------------------------------------ tool
