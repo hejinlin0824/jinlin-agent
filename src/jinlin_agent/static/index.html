@@ -71,6 +71,7 @@ button,input,textarea{font:inherit}button{cursor:pointer;border:1px solid #34445
   let activeTask = null;
   let selectedSession = null;
   let timer = null;
+  let pollBusy = false;
   $("token").value = token;
 
   function showError(message) { $("error").textContent = message; $("error").classList.toggle("show", !!message); }
@@ -92,10 +93,22 @@ button,input,textarea{font:inherit}button{cursor:pointer;border:1px solid #34445
       $("workspace").textContent = doctor.workspace || "已连接";
       setConnected(true, "本机服务已连接");
       showError("");
-      await loadSessions();
       await loadTasks();
+      await loadSessions();
+      if (!activeTask && !selectedSession) {
+        const latest = $("sessions").querySelector("button.session");
+        if (latest) latest.click();
+      }
       if (timer) clearInterval(timer);
-      timer = setInterval(() => { loadTasks().catch(e=>showError(e.message)); loadSessions().catch(()=>{}); }, 1800);
+      timer = setInterval(async () => {
+        if (pollBusy) return;
+        pollBusy = true;
+        try {
+          await loadTasks();
+          await loadSessions();
+        } catch (e) { showError(e.message); }
+        finally { pollBusy = false; }
+      }, 1800);
     } catch (error) { setConnected(false, "连接失败"); showError(error.message); }
   }
   async function loadSessions() {
@@ -120,9 +133,9 @@ button,input,textarea{font:inherit}button{cursor:pointer;border:1px solid #34445
     $("phase").textContent=session.phase || "—";
     $("step").textContent=String(session.step_index ?? 0);
     $("eventCount").textContent=String(session.event_count ?? events.length);
-    $("taskStatus").textContent=session.status;
-    $("taskStatus").className="status "+session.status;
-    $("taskPrompt").textContent=session.request || "";
+    // Task lifecycle status is authoritative here; session refresh must not
+    // overwrite it with a possibly stale/recovered session projection.
+    if (!$("taskPrompt").textContent) $("taskPrompt").textContent=session.request || "";
     renderEvents(events);
   }
   function renderEvents(events) {
@@ -139,11 +152,15 @@ button,input,textarea{font:inherit}button{cursor:pointer;border:1px solid #34445
   async function loadTasks() {
     const tasks=await api("/api/v1/tasks");
     if(!activeTask && !selectedSession && tasks.length) activeTask=tasks[0].task_id;
-    if(!activeTask) return;
+    if(!activeTask) {
+      if (selectedSession) await renderSession(selectedSession);
+      return;
+    }
     const task=await api("/api/v1/tasks/"+encodeURIComponent(activeTask));
     $("taskStatus").textContent=task.status;
     $("taskStatus").className="status "+task.status;
-    $("taskPrompt").textContent=task.request || "";
+    const errorText = task.error ? ("\n执行失败 [" + task.error.code + "]：" + task.error.message) : "";
+    $("taskPrompt").textContent=(task.request || "") + errorText;
     if(task.session_id) {
       selectedSession=task.session_id;
       await renderSession(task.session_id);
@@ -155,7 +172,6 @@ button,input,textarea{font:inherit}button{cursor:pointer;border:1px solid #34445
       $("approvalReason").textContent=approval.reason||"";
       $("approvalImpact").textContent=(approval.impact||[]).join(" · ");
     }
-    await loadSessions();
   }
   async function decide(decision) {
     if(!activeTask) return;
