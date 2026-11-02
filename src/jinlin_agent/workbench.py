@@ -91,7 +91,7 @@ class WorkbenchTaskManager:
                 note = getattr(task, "_approval_note", "")
                 task._approval_decision = None
                 task._approval_note = ""
-                return decision or ("denied", "approval was not provided")
+                return (decision or "denied", note or "approval was not provided")
 
         try:
             _session, status = self.service.run(
@@ -144,7 +144,7 @@ class WorkbenchTaskManager:
 
     def list(self) -> list[dict[str, Any]]:
         with self._condition:
-            return [self._snapshot(task) for task in reversed(list(self._tasks.values()))[:50]]
+            return [self._snapshot(task) for task in list(reversed(list(self._tasks.values())))[:50]]
 
     @staticmethod
     def _snapshot(task: WorkbenchTask) -> dict[str, Any]:
