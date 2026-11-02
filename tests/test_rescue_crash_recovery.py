@@ -323,3 +323,41 @@ raise SystemExit("crash hook was not reached")
         retried = trash._read_audit(tmp_path)
         assert retried["issues"] == []
         assert [event["seq"] for event in retried["events"]] == [1, 2]
+
+
+def test_first_audit_append_fsyncs_the_new_audit_directory_entry(tmp_path, monkeypatch):
+    real_sync = trash._fsync_directory
+    calls = []
+
+    def track(directory):
+        calls.append(Path(directory))
+        return real_sync(directory)
+
+    monkeypatch.setattr(trash, "_fsync_directory", track)
+    ok, warning = trash._append_audit_event(
+        tmp_path, "restore", "restored", txid="d" * 32,
+        rescue=".audit.py.jinlin-rescue-c0ffee04", target="audit.py", sha256="e" * 64,
+    )
+    assert ok and warning is None
+    assert calls == [tmp_path / ".jinlin"]
+    audit = trash._read_audit(tmp_path)
+    assert audit["issues"] == []
+    assert len(audit["events"]) == 1
+
+
+def test_first_audit_append_reports_directory_sync_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        trash, "_fsync_directory",
+        lambda _directory: {"supported": True, "synced": False, "detail": "injected audit directory sync failure"},
+    )
+    ok, warning = trash._append_audit_event(
+        tmp_path, "restore", "restored", txid="f" * 32,
+        rescue=".audit-sync.py.jinlin-rescue-c0ffee05", target="audit-sync.py", sha256="1" * 64,
+    )
+    assert not ok
+    assert "directory entry could not be synced" in warning
+    # The event bytes may be present, but the caller is told durability is
+    # uncertain and must not claim a fully durable audit commit.
+    audit = trash._read_audit(tmp_path)
+    assert audit["issues"] == []
+    assert len(audit["events"]) == 1
