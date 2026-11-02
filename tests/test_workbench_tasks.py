@@ -193,3 +193,39 @@ def test_workbench_root_serves_local_ui_without_exposing_api_data(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+
+def test_unexpected_agent_exception_marks_persisted_session_failed(tmp_path, monkeypatch):
+    from jinlin_agent.application import ApplicationService
+    from jinlin_agent.config import load_config
+    from jinlin_agent.sandbox.null import NullSandbox
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    config = load_config(root, home=tmp_path / "jinlin-home")
+    monkeypatch.setattr(
+        "jinlin_agent.application.create_sandbox",
+        lambda workspace, cfg: NullSandbox(str(workspace)),
+    )
+    monkeypatch.setattr("jinlin_agent.model.create_provider", lambda config, mock_script: object())
+
+    class BrokenHarness:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self):
+            raise RuntimeError("simulated unexpected failure")
+
+    monkeypatch.setattr("jinlin_agent.loop.Harness", BrokenHarness)
+    service = ApplicationService(root, config=config)
+
+    with pytest.raises(AgentError) as exc:
+        service.run("trigger controlled failure", mock_script="{}")
+    assert exc.value.code == "INTERNAL_ERROR"
+
+    sessions = service.list_sessions()
+    assert len(sessions) == 1
+    assert sessions[0]["status"] == "failed"
+    events = service.list_events(sessions[0]["session_id"])
+    assert any(event["type"] == "session.failed" for event in events)
