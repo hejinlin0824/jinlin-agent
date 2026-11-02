@@ -511,6 +511,94 @@ RESCUE_RE = re.compile(r"^\.(?P<orig>.+)\.jinlin-rescue-(?P<tag>[0-9a-f]{8})$")
 RESTORE_STAGE_RE = re.compile(r"^\.(?P<target>.+)\.jinlin-restore-(?P<digest>[0-9a-f]{16})$")
 CLEAN_QUARANTINE_RE = re.compile(r"^\..+\.jinlin-clean-[0-9a-f]{8}$")
 
+def _inspect_clean_quarantines(workspace: Path, manifest: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Classify interrupted cleanup quarantines without changing the filesystem."""
+    rescue_expected: dict[str, dict[str, Any]] = {}
+    stage_expected: dict[str, dict[str, Any]] = {}
+    for rescue_rel, entry in manifest.items():
+        if entry.get("kind") != "rescue":
+            continue
+        identity = entry.get("identity")
+        if not isinstance(identity, dict):
+            continue
+        digest = identity.get("sha256")
+        if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest):
+            rescue_expected[rescue_rel] = {"sha256": digest, "identity": identity}
+            target, error = _safe_rescue_target(workspace, str(entry.get("orig", "")))
+            if not error and target is not None:
+                stage = _restore_stage_path(target, digest)
+                stage_expected[_relative_posix(stage, workspace)] = {"sha256": digest, "rescue": rescue_rel}
+        else:
+            rescue_expected[rescue_rel] = {"sha256": None, "identity": identity}
+
+    items: list[dict[str, Any]] = []
+    by_candidate: dict[str, list[dict[str, Any]]] = {}
+    suffix_re = re.compile(r"^(?P<base>.+)\\.jinlin-clean-[0-9a-f]{8}$")
+    for root, dirs, files in os.walk(workspace, followlinks=False):
+        dirs[:] = [name for name in dirs if name not in _SKIP_DIRS]
+        for name in list(files) + list(dirs):
+            match = suffix_re.match(name[1:]) if name.startswith(".") else None
+            if not match:
+                continue
+            path = Path(root) / name
+            candidate = path.with_name(match.group("base"))
+            quarantine_rel = _relative_posix(path, workspace)
+            candidate_rel = _relative_posix(candidate, workspace)
+            kind = "symlink" if path.is_symlink() else ("directory" if path.is_dir() else "file")
+            item: dict[str, Any] = {"path": quarantine_rel, "kind": kind, "candidate": candidate_rel, "state": "CLEANUP_INTERRUPTED"}
+            expected = rescue_expected.get(candidate_rel)
+            candidate_kind = "rescue"
+            if expected is None:
+                expected = stage_expected.get(candidate_rel)
+                candidate_kind = "stage"
+            item["candidate_kind"] = candidate_kind if expected is not None else "unknown"
+            if expected is None:
+                item["classification"] = "unrecognized"
+                item["reason"] = "no manifest-backed Rescue or deterministic restore stage matches the former path"
+            elif kind != 'file':
+                item["classification"] = "identity-mismatch"
+                item["reason"] = "quarantine is not a regular non-symlink file"
+            else:
+                try:
+                    st = os.stat(path, follow_symlinks=False)
+                    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                    item["sha256"] = digest
+                    if expected.get("sha256") is None:
+                        item["classification"] = "legacy-unverified"
+                        item["reason"] = "legacy manifest has no SHA-256 proof for the Rescue payload"
+                    elif digest != expected["sha256"]:
+                        item["classification"] = "identity-mismatch"
+                        item["reason"] = "quarantine bytes do not match the manifest-bound SHA-256"
+                    elif candidate_kind == "rescue":
+                        ident = expected.get("identity") or {}
+                        actual = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+                        recorded = (ident.get("dev"), ident.get("ino"), ident.get("size"), ident.get("mtime_ns"))
+                        if actual != recorded:
+                            item["classification"] = "identity-mismatch"
+                            item["reason"] = "quarantine file identity differs from the recorded Rescue identity"
+                        else:
+                            item["classification"] = "safe-to-restore"
+                    else:
+                        item["classification"] = "safe-to-restore"
+                except OSError as exc:
+                    item["classification"] = "identity-mismatch"
+                    item["reason"] = f"quarantine cannot be read and verified: {exc}"
+            if candidate.exists() or candidate.is_symlink():
+                if item["classification"] == "safe-to-restore":
+                    item["classification"] = "target-conflict"
+                    item["reason"] = "former pathname is occupied; no-clobber restoration is not possible"
+            by_candidate.setdefault(candidate_rel, []).append(item)
+            items.append(item)
+    for claims in by_candidate.values():
+        if len(claims) > 1:
+            for item in claims:
+                if item["classification"] == "safe-to-restore":
+                    item["classification"] = "ambiguous"
+                    item["reason"] = "multiple verified quarantine objects claim the same former pathname"
+    items.sort(key=lambda item: item["path"])
+    return items
+
+
 
 def list_rescue(workspace: Path) -> dict[str, Any]:
     """List only rescue files whose manifest identity and SHA-256 still match."""
@@ -902,8 +990,8 @@ def _clean_rescue_impl(workspace: Path, apply: bool = False) -> dict[str, Any]:
                         "path": _relative_posix(candidate, workspace),
                         "kind": "symlink" if candidate.is_symlink() else ("directory" if candidate.is_dir() else "file"),
                     })
-        report["quarantined"].sort(key=lambda item: item["path"])
         manifest = _load_manifest(workspace)
+        report["quarantined"] = _inspect_clean_quarantines(workspace, manifest)
         eligible: list[dict[str, Any]] = []
         for rescue in listed["rescued"]:
             entry = manifest.get(rescue["path"], {})
@@ -1056,6 +1144,7 @@ def inspect_rescue(workspace: Path) -> dict[str, Any]:
                 if CLEAN_QUARANTINE_RE.match(name):
                     quarantined.append({"path": rel, "kind": "symlink" if path.is_symlink() else ("directory" if path.is_dir() else "file"),
                                         "state": "CLEANUP_INTERRUPTED"})
+        quarantined = _inspect_clean_quarantines(workspace, manifest)
         audit = _read_audit(workspace)
         states = _transaction_states(audit["events"])
         issues = list(audit["issues"])
@@ -1084,6 +1173,9 @@ def inspect_rescue(workspace: Path) -> dict[str, Any]:
             "counts": {"verified_rescue": len(listed["rescued"]), "unrecognized_rescue": len(listed["unrecognized"]),
                        "stages": len(stages), "incomplete_stages": len(incomplete_stages),
                        "orphaned_stages": len(orphaned), "quarantined": len(quarantined),
+                        "quarantine_safe_to_restore": sum(x.get("classification") == "safe-to-restore" for x in quarantined),
+                        "quarantine_conflicts": sum(x.get("classification") == "target-conflict" for x in quarantined),
+                        "quarantine_unverified": sum(x.get("classification") in ("identity-mismatch", "ambiguous", "unrecognized", "legacy-unverified") for x in quarantined),
                        "audit_events": len(audit["events"]), "audit_issues": len(audit["issues"])},
             "rescued": listed["rescued"], "unrecognized": listed["unrecognized"],
             "stages": stages, "orphaned": orphaned, "quarantined": quarantined,
