@@ -88,9 +88,9 @@ v2.0 §2.2 的资产表描述了一个"已有 Workbench / TaskContract / Applica
 - WP-10 不必从零建：evalkit 探针框架按 v2 §14-WP10 的任务集扩展即可。
 - 安全先行（v2 §15 末尾要求）：WP-6 中"任务级能力集 + workspace_scope 路径范围"必须**先于** Worker 获得写权限落地（→ ADR-006）。
 
-## 6. 待负责人确认的决策清单
+## 6. 决策清单（2026-11-03 负责人已全部确认）
 
-1. **基线修正**：v2 §2.2 资产表以本盘点（current-state.md）为准；`feature/workbench-*` 分支不存在，相关表述作废。
-2. ADR-001 ~ ADR-010（[decisions/](decisions/)）全部为 **Proposed**，逐条确认或驳回。
-3. 优先级：确认 WP-1 先行（WP-2 的 WorkerFactory 需要 TaskSpec 才有东西可实例化）。
-4. 零第三方依赖约束在 v2 阶段继续有效（影响 Pydantic/FastAPI 决策）——若愿意为 Web 层破例，需要显式修订 AGENTS.md 硬规则 1。
+1. ✅ **基线修正**：v2 §2.2 资产表以本盘点（current-state.md）为准；`feature/workbench-*` 分支不存在，相关表述作废。
+2. ✅ ADR-001 ~ ADR-010（[decisions/](decisions/)）全部由 **Proposed** 改为 **Accepted**。
+3. ✅ 优先级确认：WP-1 先行（WP-2 的 WorkerFactory 需要 TaskSpec 才有东西可实例化）。
+4. ✅ 零第三方依赖约束在 v2 阶段继续有效（Pydantic/FastAPI 不引入）。

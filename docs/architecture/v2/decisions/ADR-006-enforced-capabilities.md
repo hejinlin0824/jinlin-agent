@@ -1,6 +1,6 @@
 # ADR-006：能力集由 PolicyEngine + Sandbox 强制执行，不依赖 Prompt
 
-- 状态：Proposed（待项目负责人确认）
+- 状态：Accepted（2026-11-03 负责人确认）
 - 日期：2026-11-03
 - 关联：v2.0 §9.4/§9.6、§18-6；AGENTS.md 硬规则 4/7
 

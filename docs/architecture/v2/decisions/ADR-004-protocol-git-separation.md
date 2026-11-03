@@ -1,6 +1,6 @@
 # ADR-004：Task Protocol（消息）与 Git 协作（代码版本）分离
 
-- 状态：Proposed（待项目负责人确认）
+- 状态：Accepted（2026-11-03 负责人确认）
 - 日期：2026-11-03
 - 关联：v2.0 §7、§18-4；[current-state.md](../current-state.md) §3/§4
 

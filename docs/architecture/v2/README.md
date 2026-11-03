@@ -1,6 +1,6 @@
 # 架构 v2.0（统一 Runtime + 动态角色编排）——WP-V2.0-0 交付物
 
-> 状态：**盘点完成，待负责人评审 ADR 后进入 WP-V2.0-1**。依据：《Jinlin Agent 架构设计 2.0》（本目录 [ARCHITECTURE-v2.0.md](ARCHITECTURE-v2.0.md)）。
+> 状态：**盘点完成；ADR-001~010 已于 2026-11-03 由负责人全部确认（Accepted）；零第三方依赖约束继续有效；WP-V2.0-1 进行中**。依据：《Jinlin Agent 架构设计 2.0》（本目录 [ARCHITECTURE-v2.0.md](ARCHITECTURE-v2.0.md)）。
 > 阅读顺序：先读 [wp-v2.0-0-report.md](wp-v2.0-0-report.md)（3 分钟），再按需深入。
 
 | 文件 | 内容 |
@@ -16,9 +16,9 @@
 
 仓库的真实基线是**单 Agent、事件溯源、CLI 形态**的代码工程 harness：执行内核（事件日志/策略/沙箱/验证/完成门/上下文）完整且经 10 轮评审加固；v2.0 设计文档 §2.2 所列的 ApplicationService / Workbench / TaskContract / Web API **不存在**。v2 蓝图依然适用，落地路径 = 在现有内核之上新建**任务层**（TaskSpec / TaskLedger / Runtime / Planner / 协议 / Worktree 集成 / Web），按 WP-1 → WP-2 → WP-3/4 → WP-5/6 主轴增量推进，`main` 受保护，每步全量回归。
 
-## 下一步（需负责人确认后启动）
+## 决策记录（2026-11-03，负责人确认）
 
-1. 逐条确认/驳回 ADR-001 ~ ADR-010（[decisions/](decisions/)）；
-2. 确认 gap-analysis.md §0 的资产表勘误（以真实代码为准）；
-3. 确认零第三方依赖约束在 v2 阶段继续有效；
-4. 批准后启动 **WP-V2.0-1：统一 Task Model 与 Task Ledger**（独立分支、TDD、全量回归）。
+1. ✅ ADR-001 ~ ADR-010 全部确认（Accepted）；
+2. ✅ gap-analysis.md §0 的资产表勘误确认（以真实代码为准）；
+3. ✅ 零第三方依赖约束在 v2 阶段继续有效；
+4. ▶ **WP-V2.0-1：统一 Task Model 与 Task Ledger** 已启动（独立分支、TDD、全量回归）。

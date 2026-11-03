@@ -1,6 +1,6 @@
 # ADR-003：任务层权威源——Task Ledger 与会话事件日志的分工
 
-- 状态：Proposed（待项目负责人确认）
+- 状态：Accepted（2026-11-03 负责人确认）
 - 日期：2026-11-03
 - 关联：v2.0 §4.2、§12、§18-3；AGENTS.md 硬规则 10；[gap-analysis.md](../gap-analysis.md) §2-5
 

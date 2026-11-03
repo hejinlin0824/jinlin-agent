@@ -1,6 +1,6 @@
 # ADR-005：Worker 隔离分两层——Git Worktree 管版本，OS Sandbox 管安全
 
-- 状态：Proposed（待项目负责人确认）
+- 状态：Accepted（2026-11-03 负责人确认）
 - 日期：2026-11-03
 - 关联：v2.0 §9.1–9.3、§18-5；AGENTS.md 硬规则 7
 

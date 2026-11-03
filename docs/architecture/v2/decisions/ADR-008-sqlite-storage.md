@@ -1,6 +1,6 @@
 # ADR-008：存储 = 事件 JSONL（执行真相）+ stdlib SQLite（任务 Ledger）；不引入消息中间件
 
-- 状态：Proposed（待项目负责人确认）
+- 状态：Accepted（2026-11-03 负责人确认）
 - 日期：2026-11-03
 - 关联：v2.0 §11.2/§18-8；docs/PLAN.md D5；AGENTS.md 硬规则 1
 

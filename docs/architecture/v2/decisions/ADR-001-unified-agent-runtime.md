@@ -1,6 +1,6 @@
 # ADR-001：统一 Agent Runtime，而不是多个专用 Agent 产品
 
-- 状态：Proposed（待项目负责人确认）
+- 状态：Accepted（2026-11-03 负责人确认）
 - 日期：2026-11-03
 - 关联：v2.0 §1/§6/§18-1；[current-state.md](../current-state.md) §14
 
