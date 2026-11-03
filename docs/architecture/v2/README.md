@@ -1,6 +1,6 @@
 # 架构 v2.0（统一 Runtime + 动态角色编排）——WP-V2.0-0 交付物
 
-> 状态：**盘点完成；ADR-001~010 已于 2026-11-03 由负责人全部确认（Accepted）；WP-V2.0-1（Task Model + Task Ledger）已实现待复核（[wp-v2.0-1-report.md](wp-v2.0-1-report.md)，120 passed / 18/18）；下一步 WP-V2.0-2（Runtime）待复核后启动**。依据：《Jinlin Agent 架构设计 2.0》（本目录 [ARCHITECTURE-v2.0.md](ARCHITECTURE-v2.0.md)）。
+> 状态：**盘点完成；ADR-001~010 已于 2026-11-03 由负责人全部确认（Accepted）；WP-V2.0-1（Task Model + Ledger）与 WP-V2.0-2（Worker Runtime）已实现待复核（133 passed / 18/18）；下一步 WP-V2.0-3/4 待复核后启动**。依据：《Jinlin Agent 架构设计 2.0》（本目录 [ARCHITECTURE-v2.0.md](ARCHITECTURE-v2.0.md)）。
 > 阅读顺序：先读 [wp-v2.0-0-report.md](wp-v2.0-0-report.md)（3 分钟），再按需深入。
 
 | 文件 | 内容 |
@@ -12,6 +12,7 @@
 | [test-baseline.md](test-baseline.md) | **交付物 4**：测试基线（105 passed / 18/18 / CI 双平台绿 + 观察项） |
 | [wp-v2.0-0-report.md](wp-v2.0-0-report.md) | WP 实施报告（v2 §20.3 模板：基线/目标/改动/测试/未完成/本地验收） |
 | [wp-v2.0-1-report.md](wp-v2.0-1-report.md) | WP-V2.0-1 实施报告：Task Model + Task Ledger（`taskmodel.py` / `ledger.py` / CLI `ledger`，120 passed / 18/18） |
+| [wp-v2.0-2-report.md](wp-v2.0-2-report.md) | WP-V2.0-2 实施报告：Worker Runtime（`worker_runtime.py` + 内核参数化，133 passed / 18/18） |
 
 ## 一句话摘要
 
@@ -22,4 +23,4 @@
 1. ✅ ADR-001 ~ ADR-010 全部确认（Accepted）；
 2. ✅ gap-analysis.md §0 的资产表勘误确认（以真实代码为准）；
 3. ✅ 零第三方依赖约束在 v2 阶段继续有效；
-4. ✅ **WP-V2.0-1：统一 Task Model 与 Task Ledger** 已实现（独立分支、TDD、全量回归 120 passed / 18/18），待所有者复核后启动 WP-V2.0-2。
+4. ✅ **WP-V2.0-1（Task Model + Ledger）与 WP-V2.0-2（Worker Runtime）已实现**（TDD、全量回归 133 passed / 18/18），待所有者复核后启动 WP-V2.0-3/4。

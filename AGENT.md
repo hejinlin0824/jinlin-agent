@@ -9,7 +9,7 @@ branches:
   main: 249bbab   # 第 1 批 P2 加固归档线；第 2 批（含第 8/9/10 轮整改）在分支上等复核，批准后 ff
   review/followup-fixes: 17b2262+   # 第 10 轮整改最终代码 HEAD（rescue 停靠 + clean 隔离区验证）；其后为报告文档提交
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
-test_status: "python -m pytest -q => 120 passed (105 基线 + 15 task-ledger); jinlin-agent eval --suite all => 18/18"
+test_status: "python -m pytest -q => 133 passed (105 基线 + 16 task-ledger + 12 worker-runtime); jinlin-agent eval --suite all => 18/18"
 review_status: "第 10 轮整改完成（rescue 停靠 / clean 隔离区验证 / forget 诊断）；CI 双平台绿，等复核"
 trash_cleanup: "jinlin-agent clean [--workspace W] [--apply]（默认 dry-run；归属证明 = 严格命名模式 + .jinlin/trash-manifest.jsonl 记录）"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
@@ -456,6 +456,7 @@ git push origin main
 | 安全/完成门回归 | `tests/test_security.py` |
 | 任务层模型（v2） | `src/jinlin_agent/taskmodel.py` |
 | 任务账本（v2） | `src/jinlin_agent/ledger.py`、`tests/test_ledger.py`、CLI `ledger` |
+| Worker Runtime（v2） | `src/jinlin_agent/worker_runtime.py`、`tests/test_worker_runtime.py` |
 | v2 架构迁移 | `docs/architecture/v2/`（盘点 / 差距分析 / ADR-001~010 / WP 报告） |
 | 历史与承诺 | `docs/REVIEW-RESPONSE.md`、`docs/REVIEW-SUBMISSION.md`、`docs/REPORT-AND-HANDBOOK.md`、`AGENTS.md` |
 
@@ -530,6 +531,7 @@ git checkout main && git merge --ff-only review/followup-fixes && git push origi
 - **基线勘误（重要）**：v2.0 设计文档 §2.2 所列 ApplicationService / Workbench / TaskContract / Web API 与 `feature/workbench-*` 分支**在本仓库不存在**（`docs/architecture/v2/gap-analysis.md` §0）；迁移以 `current-state.md` 的真实代码盘点为准。所有者已于 2026-11-03 确认勘误并接受 ADR-001~010（Accepted），零第三方依赖约束在 v2 阶段继续有效。
 - **WP-V2.0-0 ✅**：现状盘点 + 差距分析 + ADR-001~010（分支 `feature/v2-wp0-inventory`）。
 - **WP-V2.0-1 ✅**：统一 Task Model 与 Task Ledger（分支 `feature/v2-wp1-task-ledger`，代码提交 `8a21316`，120 passed / 18/18）——`taskmodel.py`（TaskStatus 状态机 + SESSION_TO_TASK_STATUS 映射 + TaskSpec/RoleSpec/WorkerRecord/TaskMessage/交付校验/DAG 校验）、`ledger.py`（sqlite 投影 + `<home>/tasks/<root>/events.jsonl` 任务事件流 + 先事件后提交 + `rebuild()` + message_id 幂等）、CLI `ledger [--rebuild]`、`report.written` 收编进 `state._HANDLERS`；任务层事件 schema 记录在 `docs/PLAN.md` §12。
-- **下一步**：WP-V2.0-2（统一 Runtime 与 Worker 生命周期）——须经所有者复核 WP-1 报告后启动。
+- **WP-V2.0-2 ✅**：统一 Worker Runtime（同分支续提交，代码提交 `5de75c9`，133 passed / 18/18）——`worker_runtime.py`（submit/run/resume/cancel + Attempt 重试 + 并发上限 `runtime.max_concurrent_workers` + 同 workspace 独占）；内核参数化 `Harness(role=, budget=, cancel_check=)`（registry 白名单 view、系统提示 Role 段、步边界协作取消、per-worker 预算含 max_tool_calls）；账本跨线程安全 + `worker.session_bound` 事件；CI 触发加入 `feature/**`。取消语义 = 步边界协作式（进行中调用先完成），如实声明。
+- **下一步**：WP-V2.0-3（动态规划与 Supervisor）/ WP-V2.0-4（任务协议）——须所有者复核后启动。
 - **CI 注意**：`feature/**` 推送不触发 CI（ci.yml 只监听 `main` / `review/**` / `dev` / PR）；要 CI 请开 PR 或由所有者调整触发分支。
 - 分支纪律不变：不碰 `main`；每个 WP 独立分支 + 全量回归后交所有者复核。
