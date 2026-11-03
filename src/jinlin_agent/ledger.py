@@ -563,6 +563,51 @@ class TaskLedger:
             messages = conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"]
             return {"total": sum(by_status.values()), "by_status": by_status, "workers": workers, "messages": messages}
 
+    def metrics(self) -> dict[str, Any]:
+        """Per-root benchmark metrics (v2 §14-WP10): completion, replanning,
+        conflicts, attempts — computed from the task event streams, the same
+        truth the projection rebuilds from."""
+        tasks_dir = Path(self.config.tasks_dir)
+        per_root: dict[str, dict[str, Any]] = {}
+        if tasks_dir.exists():
+            for log_dir in sorted(p for p in tasks_dir.iterdir() if (p / "events.jsonl").exists()):
+                root_id = log_dir.name
+                m = {
+                    "tasks": 0, "completed": 0, "failed": 0, "cancelled": 0,
+                    "workers": 0, "max_attempts": 0, "replans": 0,
+                    "strategy": "", "conflicts": 0, "review_accepted": 0, "review_rejected": 0,
+                }
+                for evt in read_events(log_dir):
+                    etype, payload = evt.get("type", ""), evt.get("payload") or {}
+                    if etype == "task.created":
+                        m["tasks"] += 1
+                    elif etype == "task.status_changed":
+                        to = payload.get("to", "")
+                        if to == "completed":
+                            m["completed"] += 1
+                        elif to == "failed":
+                            m["failed"] += 1
+                        elif to == "cancelled":
+                            m["cancelled"] += 1
+                    elif etype == "worker.registered":
+                        m["workers"] += 1
+                        m["max_attempts"] = max(m["max_attempts"], int(payload.get("worker", {}).get("attempt", 1)))
+                    elif etype == "task.replanned":
+                        m["replans"] += 1
+                    elif etype == "task.strategy_selected":
+                        m["strategy"] = payload.get("strategy", "")
+                    elif etype == "task.message" and payload.get("message", {}).get("message_type") == "integration.conflict":
+                        m["conflicts"] += 1
+                    elif etype == "task.message":
+                        mt = payload.get("message", {}).get("message_type", "")
+                        if mt == "review.accepted":
+                            m["review_accepted"] += 1
+                        elif mt == "review.rejected":
+                            m["review_rejected"] += 1
+                if m["tasks"]:
+                    per_root[root_id] = m
+        return {"roots": per_root, "root_count": len(per_root)}
+
     def rebuild(self) -> dict[str, int]:
         """Drop and re-derive the projection from the task event logs.
 
