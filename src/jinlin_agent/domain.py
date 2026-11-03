@@ -344,6 +344,7 @@ class VerificationRun:
     findings: list[str] = field(default_factory=list)
     reason_skipped: str | None = None
     summary: dict[str, Any] = field(default_factory=dict)
+    sandbox_level: str = ""  # v2 §10.3 evidence: which sandbox ran it
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)

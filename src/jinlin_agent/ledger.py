@@ -308,8 +308,8 @@ class TaskLedger:
                 )
             self._emit(task_id_root(row), "task.status_changed", {"task_id": task_id, "from": current, "to": new_status, "reason": reason})
             conn.execute(
-                "UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?",
-                (new_status, _now(), task_id),
+                "UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE task_id = ?",
+                (new_status, reason, _now(), task_id),
             )
             conn.commit()
             return self.get_task(task_id)  # type: ignore[return-value]

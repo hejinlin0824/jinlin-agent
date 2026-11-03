@@ -281,6 +281,7 @@ class Verifier:
             started_at=utcnow_iso(),
             completed_at=utcnow_iso(),
         )
+        run.sandbox_level = getattr(self.sandbox, "level", "L0")
         self.emit("verification.completed", {"verification": run.to_dict()})
         return run
 
@@ -305,7 +306,9 @@ class Verifier:
             type="diff-review",
             started_at=utcnow_iso(),
         )
+        run.sandbox_level = getattr(self.sandbox, "level", "L0")
         self.emit("verification.started", {"verification_id": run.verification_id, "level": "L0", "type": "diff-review"})
+        run.sandbox_level = getattr(self.sandbox, "level", "L0")
         changed = self._changed_files()
         findings: list[str] = []
         for rel in changed:
@@ -335,7 +338,9 @@ class Verifier:
             type="structure",
             started_at=utcnow_iso(),
         )
+        run.sandbox_level = getattr(self.sandbox, "level", "L0")
         self.emit("verification.started", {"verification_id": run.verification_id, "level": "L1", "type": "structure"})
+        run.sandbox_level = getattr(self.sandbox, "level", "L0")
         issues: list[str] = []
         checked = 0
         for rel in self._changed_files():
@@ -372,7 +377,9 @@ class Verifier:
             type="static",
             started_at=utcnow_iso(),
         )
+        run.sandbox_level = getattr(self.sandbox, "level", "L0")
         self.emit("verification.started", {"verification_id": run.verification_id, "level": "L2", "type": "static"})
+        run.sandbox_level = getattr(self.sandbox, "level", "L0")
         if not self.project.lint_commands:
             run.status = "skipped"
             run.reason_skipped = "no lint/type-check command detected in the project"
@@ -398,7 +405,9 @@ class Verifier:
             type="tests",
             started_at=utcnow_iso(),
         )
+        run.sandbox_level = getattr(self.sandbox, "level", "L0")
         self.emit("verification.started", {"verification_id": run.verification_id, "level": "L3", "type": "tests"})
+        run.sandbox_level = getattr(self.sandbox, "level", "L0")
         if not self.project.test_commands:
             run.status = "skipped"
             run.reason_skipped = "no test command detected (declare one in .jinlin/config.toml [verification].test_command)"
@@ -444,6 +453,7 @@ class Verifier:
             type="regression",
             started_at=utcnow_iso(),
         )
+        run.sandbox_level = getattr(self.sandbox, "level", "L0")
         self.emit("verification.started", {"verification_id": run.verification_id, "level": "L5", "type": "regression"})
         baseline = self.ensure_baseline()
         if baseline is None:
@@ -523,6 +533,59 @@ def _looks_secret(path: Path) -> bool:
         r"(?i)(api[_-]?key|secret|password)\s*[:=]\s*['\"][^'\"]{12,}['\"]",
     )
     return any(re.search(p, text) for p in patterns)
+
+
+# --------------------------------------------------------------------------- task verification plan (WP-V2.0-8)
+
+# v2 §10.2: the TaskSpec verification profile maps to REQUIRED levels. A
+# required level that did not pass fails the task (the worker runtime runs
+# this gate at acceptance time) — budget or environment never turns
+# 'unverified' into 'success'.
+PROFILE_LEVELS: dict[str, tuple[str, ...]] = {
+    "code": ("L0", "L1", "L3"),
+    "config": ("L0", "L1"),
+    "docs": ("L0",),
+    "tests": ("L3",),
+    "analysis": (),
+}
+
+
+def plan_task_verification(spec: Any) -> list[str]:
+    profile = (getattr(spec, "verification", "") or "code").strip().lower()
+    return list(PROFILE_LEVELS.get(profile, PROFILE_LEVELS["code"]))
+
+
+def check_task_verification(spec: Any, result: dict[str, Any] | None, has_test_command: bool | None = None) -> list[str]:
+    """Reasons the deliverable fails its own verification contract.
+
+    `has_test_command` decides whether L3 is APPLICABLE (v2 §10.2): in a
+    project without a test command, the default 'code' profile records L3 as
+    not applicable instead of failing — but a profile that explicitly demands
+    L3 ('tests') fails with the explicit reason: un-verifiable is never
+    silently 'success' (v2 §10.4)."""
+    profile = (getattr(spec, "verification", "") or "code").strip().lower()
+    reasons: list[str] = []
+    required = list(PROFILE_LEVELS.get(profile, PROFILE_LEVELS["code"]))
+    if PROFILE_LEVELS.get(profile) is None:
+        reasons.append(f"unknown verification profile {profile!r}; treated as 'code'")
+        required = list(PROFILE_LEVELS["code"])
+    if has_test_command is False and "L3" in required and profile == "code":
+        required.remove("L3")  # not applicable in this project (recorded honestly)
+    tests = [t for t in (result or {}).get("tests", []) if isinstance(t, dict)]
+    changed = bool((result or {}).get("changed_files"))
+    if not changed:
+        # pure-analysis deliverables: L0/L1 inspect file changes; there is
+        # nothing for them to inspect (v2 §10.2: do not fabricate code tests)
+        required = [lvl for lvl in required if lvl not in ("L0", "L1")]
+    for level in required:
+        if not any(
+            str(t.get("level", "")).upper() == level and str(t.get("status", "")) == "passed" for t in tests
+        ):
+            detail = ""
+            if level == "L3" and has_test_command is False:
+                detail = " (no test command in this project — the task cannot be verified as required)"
+            reasons.append(f"required verification {level} did not pass (profile {profile!r}){detail}")
+    return reasons
 
 
 # --------------------------------------------------------------------------- gate

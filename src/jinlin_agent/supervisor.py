@@ -274,10 +274,11 @@ class Supervisor:
                 for task_id, worker_id in submitted:
                     out = self.runtime.wait_worker(worker_id)
                     if out["status"] == "failed":
-                        # the worker attempt failed; the task-level row must
-                        # reflect it (run_task does this for its own path)
+                        # covers both session failure and the WP-V2.0-8
+                        # verification gate (the worker runtime owns that
+                        # decision — it knows the project's test commands)
                         self._advance_task(task_id, "failed", reason=out.get("summary") or "attempt failed")
-                    if out["status"] == "completed":
+                    if out["status"] == "review_pending":
                         row = self.ledger.get_task(task_id)
                         if row and row.get("requires_review"):
                             accepted, actions = self._review_completed_task(row)

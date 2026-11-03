@@ -84,6 +84,7 @@ class ContextBuilder:
         sandbox: Any,
         project_instructions: str = "",
         role_instruction: str = "",
+        providers: list[Any] | None = None,
     ) -> None:
         self.config = config
         self.capabilities = capabilities
@@ -91,6 +92,9 @@ class ContextBuilder:
         self.sandbox = sandbox
         self.project_instructions = project_instructions
         self.role_instruction = role_instruction
+        # ContextProviders (v2 §8.2): extra scored blocks; a failing provider
+        # is recorded as a drop reason, never silently swallowed
+        self.providers = list(providers or [])
         self.ctx_cfg = config.context
 
     # ------------------------------------------------------------------ api
@@ -105,6 +109,18 @@ class ContextBuilder:
         system_text = self._system_text(state)
         frame_blocks = self._frame_blocks(state)
         retrieval = self._retrieval_blocks(state, budget)
+        for provider in self.providers:
+            try:
+                retrieval.extend(provider.blocks(state, budget))
+            except Exception as exc:
+                dropped.append(
+                    {
+                        "id": f"provider:{type(provider).__name__}",
+                        "source": "provider",
+                        "tokens": 0,
+                        "reason": f"provider failed: {type(exc).__name__}: {exc}",
+                    }
+                )
 
         # budget: required first, then scored optional candidates
         blocks: list[ContextBlock] = []

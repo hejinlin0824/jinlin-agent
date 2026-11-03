@@ -53,14 +53,16 @@ class Harness:
         budget: dict[str, Any] | None = None,
         cancel_check: Callable[[], bool] | None = None,
         policy: PolicyEngine | None = None,
+        context_providers: list[Any] | None = None,
     ) -> None:
-        """`role`/`budget`/`cancel_check`/`policy` parameterise the SAME kernel
-        for worker instances (v2.0 WP-V2.0-2, ADR-001): a RoleSpec narrows the
-        tool registry and adds a binding role instruction, a budget dict
-        overrides the session-level limits per worker, cancel_check stops the
-        loop cooperatively at step boundaries, and an injected policy carries
-        the task's capability set and workspace scope (ADR-006). All default
-        to None — the plain `run` path is unchanged."""
+        """`role`/`budget`/`cancel_check`/`policy`/`context_providers`
+        parameterise the SAME kernel for worker instances (v2.0 WP-V2.0-2,
+        ADR-001): a RoleSpec narrows the tool registry and adds a binding role
+        instruction, a budget dict overrides the session-level limits per
+        worker, cancel_check stops the loop cooperatively at step boundaries,
+        an injected policy carries the task's capability set and workspace
+        scope (ADR-006), and context providers contribute scored blocks (v2
+        §8.2). All default to None — the plain `run` path is unchanged."""
         self.session = session
         self.config = config
         self.provider = provider
@@ -71,6 +73,7 @@ class Harness:
         self.budget = dict(budget) if budget else None
         self.cancel_check = cancel_check
         self._injected_policy = policy
+        self.context_providers = list(context_providers or [])
         self.harness_verifier = Verifier(
             session.workspace,
             config,
@@ -118,6 +121,7 @@ class Harness:
             sandbox=session.sandbox,
             project_instructions=self.project_instructions,
             role_instruction=(role.system_instruction if role is not None else ""),
+            providers=self.context_providers,
         )
         self.history: list[Message] = self._restore_history()
         self.invalid_decisions = 0

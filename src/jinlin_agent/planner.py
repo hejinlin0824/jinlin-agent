@@ -32,7 +32,9 @@ Output ONLY a JSON object, no prose, no code fences:
    "depends_on": ["title of another subtask in this list"],
    "role": "worker",
    "capabilities": ["READ"],
-   "acceptance_criteria": ["machine-checkable criterion"]}
+   "acceptance_criteria": ["machine-checkable criterion"],
+   "verification": "code",
+   "requires_review": false}
 ]}
 
 Rules:
@@ -41,6 +43,8 @@ Rules:
   list; the dependency graph must be acyclic.
 - a subtask that only investigates is READ-only; only subtasks that must edit
   files declare WRITE.
+- verification is one of: code (default; L0/L1/L3), config (L0/L1), docs (L0),
+  tests (L3), analysis (pure investigation, no code verification).
 - do not restate the root goal as a subtask."""
 
 ASSESSOR_SYSTEM = """You assess the execution strategy for one software-engineering request, given
@@ -135,6 +139,7 @@ def plan_subtasks(provider: Any, goal: str, context: str, root_id: str, instruct
                 role=str(item.get("role", "worker")).strip() or "worker",
                 capabilities=[str(c).strip().upper() for c in item.get("capabilities") or [] if str(c).strip()],
                 acceptance_criteria=[str(c).strip() for c in item.get("acceptance_criteria") or [] if str(c).strip()],
+                verification=str(item.get("verification", "code")).strip().lower() or "code",
                 requires_review=bool(item.get("requires_review", False)),
             )
         )

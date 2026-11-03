@@ -303,6 +303,11 @@ class WorkerRuntime:
                 task_capabilities=caps or None,
                 workspace_scope=scope,
             )
+        context_providers = None
+        if spec.dependencies:
+            from .context_provider import DependencyContextProvider
+
+            context_providers = [DependencyContextProvider(self.ledger, list(spec.dependencies))]
         return Harness(
             session=session,
             config=self.config,
@@ -311,6 +316,7 @@ class WorkerRuntime:
             budget=budget,
             cancel_check=cancel_flag.is_set,
             policy=policy,
+            context_providers=context_providers,
             log=self.log,
         )
 
@@ -325,15 +331,39 @@ class WorkerRuntime:
         self.ledger.set_worker_status(record.worker_id, task_status, reason=reason)
 
         error_code = (state.last_error or {}).get("code", "") if status == "failed" else ""
+        outcome_status = task_status
+        outcome_summary = (
+            str((state.completion or {}).get("summary", ""))
+            if status == "completed"
+            else str((state.last_error or {}).get("message", reason))
+        )
         if status == "completed":
             completion = state.completion or {}
             result = self._build_result(state, "completed", str(completion.get("summary", "")))
             self.ledger.record_result(record.task_id, result)
             task_row = self.ledger.get_task(record.task_id) or {}
-            if task_row.get("requires_review"):
+            # acceptance gate (WP-V2.0-8): the session succeeded, but the task
+            # is only COMPLETED when its verification contract is satisfied.
+            # Runs here in the worker thread because only this context knows
+            # whether the project even HAS a test command (v2 §10.2).
+            from .verify import check_task_verification, detect_project
+
+            project = detect_project(session.workspace, self.config)
+            reasons = check_task_verification(spec, result, has_test_command=bool(project.test_commands))
+            if reasons:
+                self._advance_task(
+                    record.task_id,
+                    "failed",
+                    reason="task verification gate: " + "; ".join(reasons),
+                )
+                outcome_status = "failed"
+                outcome_summary = "task verification gate: " + "; ".join(reasons)
+                error_code = "VERIFICATION_GATE"
+            elif task_row.get("requires_review"):
                 # the deliverable is NOT accepted yet: an independent review
                 # completes it (or fails it) — never a terminal state first
                 self._advance_task(record.task_id, "review_pending", reason="awaiting independent review")
+                outcome_status = "review_pending"
             else:
                 self._advance_task(record.task_id, "completed", reason=reason)
         elif status == "failed":
@@ -346,22 +376,28 @@ class WorkerRuntime:
             self._advance_task(record.task_id, task_status, reason=reason)
         self._store_outcome(
             record,
-            status=task_status,
+            status=outcome_status,
             session_id=session.id,
-            summary=str((state.completion or {}).get("summary", "")) if status == "completed" else str((state.last_error or {}).get("message", reason)),
+            summary=outcome_summary,
             error_code=error_code,
         )
 
     def _build_result(self, state: Any, status: str, summary: str) -> dict[str, Any]:
+        # keep the LATEST run per level (same semantics as the session gate's
+        # by_level map) — a truncating window could drop a required level
+        by_level: dict[str, Any] = {}
+        for run in state.verification_runs:
+            by_level[run.level] = run
         tests = []
-        for run in state.verification_runs[-4:]:
+        for level in sorted(by_level):
+            run = by_level[level]
             command = " ".join(run.command) if run.command else f"{run.level} {run.type}"
-            tests.append({"command": command, "status": run.status, "exit_code": run.exit_code})
+            tests.append({"command": command, "level": run.level, "status": run.status, "exit_code": run.exit_code})
         return {
             "status": status,
             "summary": summary or ("completed" if status == "completed" else "attempt failed"),
             "changed_files": state.diff_paths(),
-            "commit": "",  # commit binding arrives with WP-V2.0-5 (worktrees)
+            "commit": "",  # attached by the IntegrationCoordinator (WP-V2.0-5)
             "tests": tests,
             "known_risks": [],
             "follow_up": [],
