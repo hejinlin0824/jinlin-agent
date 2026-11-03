@@ -347,6 +347,35 @@ def cmd_eval(args: Any) -> int:
     return run_suite(args.suite, base, verbose=not args.quiet)
 
 
+def cmd_ledger(args: Any) -> int:
+    """Task-layer ledger (v2.0 WP-V2.0-1): sqlite projection + task event logs."""
+    from .ledger import TaskLedger
+
+    cfg = load_config(Path(args.workspace or ".").resolve())
+    if args.rebuild:
+        ledger = TaskLedger(cfg).open()
+        try:
+            counts = ledger.rebuild()
+        finally:
+            ledger.close()
+        _print(
+            f"[ledger] rebuilt from {counts['logs']} task log(s): "
+            f"tasks={counts['tasks']} workers={counts['workers']} messages={counts['messages']}"
+        )
+    ledger = TaskLedger(cfg).open()
+    try:
+        summary = ledger.summary()
+        _print(f"[ledger] {cfg.ledger_path}")
+        status_line = " ".join(f"{k}={v}" for k, v in sorted(summary["by_status"].items()))
+        _print(f"tasks: {summary['total']}  {status_line}  workers={summary['workers']}  messages={summary['messages']}")
+        for row in ledger.list_tasks()[:20]:
+            title = (row.get("title") or "").replace("\n", " ")[:60]
+            _print(f"{row['task_id']}  {row['status']:<16} root={row['root_task_id']}  {title}")
+    finally:
+        ledger.close()
+    return 0
+
+
 # --------------------------------------------------------------------------- main
 
 
@@ -414,6 +443,11 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--workspace", default=None, help="optional base dir to keep probe fixtures (default: temp)")
     ev.add_argument("--quiet", action="store_true")
     ev.set_defaults(func=cmd_eval)
+
+    lg = sub.add_parser("ledger", help="task ledger summary (v2 task layer); --rebuild re-derives it from task event logs")
+    lg.add_argument("--rebuild", action="store_true", help="drop and rebuild the sqlite projection from <home>/tasks/*/events.jsonl")
+    lg.add_argument("--workspace", default=".")
+    lg.set_defaults(func=cmd_ledger)
 
     return parser
 

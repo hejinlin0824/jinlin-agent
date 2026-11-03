@@ -160,3 +160,31 @@ python -m jinlin_agent run --workspace ... --task "..."   # 真实使用
 - SQLite 投影未实现（事件折叠直接承担 V1 查询），`state.py` 已保留投影边界。
 - 完成时由 harness 自动重跑 L0/L1（有代码改动时）与 L3（项目有测试时），模型自己跑过的验证仍作为事件证据保留。
 - 沙箱默认低完整性（Low IL）+ 受限令牌；若环境不允许构造，自动降级并在 `sandbox.mode` 与报告中如实标注。
+
+## 12. v2.0 任务层（WP-V2.0-1 新增，2026-11-03）
+
+> 依据 `docs/architecture/v2/`（差距分析 + ADR-001~010，已由负责人确认）。任务层的完整设计见该目录；本节只记录新增的事件 schema 与模块边界。
+
+### 12.1 两套事件流的边界
+
+- **会话事件流**（既有，`~/.jinlin-agent/sessions/<sid>/events.jsonl`）：执行证据的唯一真相，语义不变。本轮唯一的会话流变化：`report.written`（此前由 `loop.py` 发出但无折叠 handler）已收编进 `state._HANDLERS`。
+- **任务事件流**（新增，`~/.jinlin-agent/tasks/<root_task_id>/events.jsonl`）：任务层的真相流，复用同一个 `EventLog`（append-only、seq 单调、fsync、尾部修复、单写者锁），事件 `session_id` 字段承载 root_task_id。**任务流事件不进 `state._HANDLERS`**——那是会话状态的折叠器；任务流的投影是 Task Ledger。
+
+### 12.2 任务流事件类型（6 种）
+
+| 事件 | 关键 payload | 说明 |
+|---|---|---|
+| `task.created` | `task`（完整 TaskSpec dict） | 根任务或子任务创建 |
+| `task.status_changed` | `task_id` / `from` / `to` / `reason` | 合法迁移见 `taskmodel._TASK_TRANSITIONS`；终态不可复活 |
+| `worker.registered` | `worker`（完整 WorkerRecord dict） | 一次执行尝试（attempt）登记 |
+| `worker.status_changed` | `worker_id` / `task_id` / `from` / `to` / `reason` | 与任务同一张状态机表 |
+| `task.message` | `message`（完整 TaskMessage 信封 dict） | 协议消息；`message_id` 唯一 = 幂等键 |
+| `task.result_recorded` | `task_id` / `result`（v2 §7.4 结构化交付） | 交付校验：status/summary/tests 必填 |
+
+### 12.3 Task Ledger（`ledger.py` + `taskmodel.py`）
+
+- sqlite（stdlib）投影：`<home>/ledger.db`（home 派生，沿 `storage.home` 规则，无独立配置键）；WAL；`user_version` fail-closed（新版 schema 拒绝打开）。
+- 写序：**先发事件、后提交行**——崩溃在中间时最多多一条可重放事件，绝不出现"行存在而日志无法解释"。
+- `rebuild()`：删除并从全部任务日志重放重建投影（`jinlin-agent ledger --rebuild`）；重放历史迁移不再校验合法性（写入时已校验）；未知事件类型忽略（v2 §7.5 向前兼容）。
+- 状态机：`TaskStatus`（v2 §6.3 九态，无 paused）+ 迁移表 + `SESSION_TO_TASK_STATUS` 映射（session `paused` 预留态 → task `blocked`），全部由 `tests/test_ledger.py` 锁定（ADR-003）。
+- 并发（WP-1 范围）：进程内单写者（RLock）；连接不跨线程；跨进程靠 sqlite 自身锁 + 初始化锁；Worker 多线程化时由 WP-2 重新评估。

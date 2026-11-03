@@ -375,6 +375,10 @@ def _session_checkpoint(s: SessionState, p: dict[str, Any]) -> None:
     s.last_checkpoint_seq = int(p.get("seq", s.last_seq))
 
 
+def _report_written(s: SessionState, p: dict[str, Any]) -> None:
+    s.report_artifact_id = p.get("report_artifact_id")
+
+
 _HANDLERS = {
     "session.created": _session_created,
     "session.resumed": lambda s, p: None,
@@ -409,4 +413,5 @@ _HANDLERS = {
     "sandbox.mode": _sandbox_mode,
     "config.escalation_blocked": _config_escalation_blocked,
     "loop.detected": _loop_detected,
+    "report.written": _report_written,
 }
