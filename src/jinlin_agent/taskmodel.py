@@ -42,6 +42,7 @@ class TaskStatus(str, Enum):
     WAITING_APPROVAL = "waiting_approval"
     WAITING_USER = "waiting_user"
     BLOCKED = "blocked"
+    REVIEW_PENDING = "review_pending"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -63,10 +64,17 @@ _TASK_TRANSITIONS: dict[str, frozenset[str]] = {
             TaskStatus.WAITING_APPROVAL.value,
             TaskStatus.WAITING_USER.value,
             TaskStatus.BLOCKED.value,
+            TaskStatus.REVIEW_PENDING.value,
             TaskStatus.COMPLETED.value,
             TaskStatus.FAILED.value,
             TaskStatus.CANCELLED.value,
         }
+    ),
+    # a task whose contract requires_review parks here after the worker
+    # finishes: only an accepted review completes it (a rejection fails it) —
+    # terminal states are never revived (ADR-009)
+    TaskStatus.REVIEW_PENDING.value: frozenset(
+        {TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value}
     ),
     TaskStatus.WAITING_APPROVAL.value: frozenset({TaskStatus.RUNNING.value, TaskStatus.CANCELLED.value}),
     TaskStatus.WAITING_USER.value: frozenset({TaskStatus.RUNNING.value, TaskStatus.CANCELLED.value}),
@@ -154,6 +162,7 @@ class TaskSpec:
     acceptance_criteria: list[str] = field(default_factory=list)
     budget: Budget = field(default_factory=Budget)
     verification: str = "code"
+    requires_review: bool = False
     created_at: str = field(default_factory=utcnow_iso)
 
     def is_root(self) -> bool:
@@ -174,6 +183,7 @@ class TaskSpec:
             "acceptance_criteria": list(self.acceptance_criteria),
             "budget": self.budget.to_dict(),
             "verification": self.verification,
+            "requires_review": self.requires_review,
             "created_at": self.created_at,
         }
 
@@ -195,6 +205,7 @@ class TaskSpec:
             acceptance_criteria=list(d.get("acceptance_criteria") or []),
             budget=Budget.from_dict(budget) if isinstance(budget, dict) else Budget(),
             verification=d.get("verification", "code"),
+            requires_review=bool(d.get("requires_review", False)),
             created_at=d.get("created_at", ""),
         )
 

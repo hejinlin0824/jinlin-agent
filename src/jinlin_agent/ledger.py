@@ -45,7 +45,7 @@ from .taskmodel import (
     validate_task_result,
 )
 
-_SCHEMA_V1 = """
+_SCHEMA_V2 = """
 CREATE TABLE IF NOT EXISTS tasks (
     task_id TEXT PRIMARY KEY,
     root_task_id TEXT NOT NULL,
@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     acceptance_criteria TEXT NOT NULL DEFAULT '[]',
     budget TEXT NOT NULL DEFAULT '{}',
     verification TEXT NOT NULL DEFAULT 'code',
+    requires_review INTEGER NOT NULL DEFAULT 0,
     result TEXT,
     error TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT '',
@@ -91,7 +92,8 @@ CREATE TABLE IF NOT EXISTS messages (
     correlation_id TEXT NOT NULL DEFAULT '',
     payload TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT '',
-    recorded_at TEXT NOT NULL DEFAULT ''
+    recorded_at TEXT NOT NULL DEFAULT '',
+    processed_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_root ON tasks (root_task_id);
 CREATE INDEX IF NOT EXISTS idx_workers_task ON workers (task_id);
@@ -101,7 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_root ON messages (root_task_id);
 _TASK_COLS = (
     "task_id, root_task_id, parent_task_id, title, description, task_kind, status, role, "
     "dependencies, capabilities, workspace_scope, acceptance_criteria, budget, verification, "
-    "result, error, created_at, updated_at"
+    "requires_review, result, error, created_at, updated_at"
 )
 
 
@@ -110,7 +112,7 @@ def _json(value: Any) -> str:
 
 
 class TaskLedger:
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, config: Any) -> None:
         self.config = config
@@ -194,7 +196,12 @@ class TaskLedger:
                 source="ledger",
             )
         if version < self.SCHEMA_VERSION:
-            conn.executescript(_SCHEMA_V1)
+            if version < 1:
+                conn.executescript(_SCHEMA_V2)
+            else:
+                # v1 -> v2: protocol processing marks + review requirement flag
+                conn.execute("ALTER TABLE messages ADD COLUMN processed_at TEXT NOT NULL DEFAULT ''")
+                conn.execute("ALTER TABLE tasks ADD COLUMN requires_review INTEGER NOT NULL DEFAULT 0")
             conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
             conn.commit()
 
@@ -238,7 +245,7 @@ class TaskLedger:
                 {"task": data},
             )
             conn.execute(
-                f"INSERT INTO tasks ({_TASK_COLS}) VALUES ({','.join('?' * 18)})",
+                f"INSERT INTO tasks ({_TASK_COLS}) VALUES ({','.join('?' * 19)})",
                 (
                     spec.task_id,
                     root,
@@ -254,6 +261,7 @@ class TaskLedger:
                     _json(spec.acceptance_criteria),
                     _json(spec.budget.to_dict()),
                     spec.verification,
+                    1 if spec.requires_review else 0,
                     None,
                     "",
                     spec.created_at,
@@ -334,6 +342,7 @@ class TaskLedger:
         for key in ("workspace_scope", "budget"):
             out[key] = json.loads(out.get(key) or "{}")
         out["result"] = json.loads(out["result"]) if out.get("result") else None
+        out["requires_review"] = bool(out.get("requires_review", 0))
         return out
 
     # ------------------------------------------------------------------ workers
@@ -493,6 +502,40 @@ class TaskLedger:
                 out.append(item)
             return out
 
+    def pending_messages(
+        self,
+        root_task_id: str,
+        message_type: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Unprocessed protocol messages, oldest first (the pump's queue)."""
+        with self._mu:
+            conn = self._require_conn()
+            sql = "SELECT * FROM messages WHERE root_task_id = ? AND processed_at = ''"
+            params: list[Any] = [root_task_id]
+            if message_type is not None:
+                sql += " AND message_type = ?"
+                params.append(message_type)
+            sql += " ORDER BY recorded_at ASC, message_id"
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(int(limit))
+            rows = conn.execute(sql, params).fetchall()
+            out = []
+            for row in rows:
+                item = dict(row)
+                item["payload"] = json.loads(item.get("payload") or "{}")
+                out.append(item)
+            return out
+
+    def mark_message_processed(self, message_id: str) -> None:
+        with self._mu:
+            self._require_conn().execute(
+                "UPDATE messages SET processed_at = ? WHERE message_id = ?",
+                (_now(), message_id),
+            )
+            self._require_conn().commit()
+
     # ------------------------------------------------------------------ summary / rebuild
 
     def summary(self) -> dict[str, Any]:
@@ -514,7 +557,7 @@ class TaskLedger:
         counts = {"tasks": 0, "workers": 0, "messages": 0, "logs": 0}
         with self._mu:
             conn.executescript("DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS workers; DROP TABLE IF EXISTS tasks;")
-            conn.executescript(_SCHEMA_V1)
+            conn.executescript(_SCHEMA_V2)
             conn.commit()
             tasks_dir = Path(self.config.tasks_dir)
             log_dirs = sorted(p for p in tasks_dir.iterdir() if (p / "events.jsonl").exists()) if tasks_dir.exists() else []
@@ -533,7 +576,7 @@ class TaskLedger:
         if etype == "task.created":
             spec = TaskSpec.from_dict(payload.get("task") or {})
             conn.execute(
-                f"INSERT INTO tasks ({_TASK_COLS}) VALUES ({','.join('?' * 18)})",
+                f"INSERT INTO tasks ({_TASK_COLS}) VALUES ({','.join('?' * 19)})",
                 (
                     spec.task_id,
                     spec.root_task_id or spec.task_id,
@@ -549,6 +592,7 @@ class TaskLedger:
                     _json(spec.acceptance_criteria),
                     _json(spec.budget.to_dict()),
                     spec.verification,
+                    1 if spec.requires_review else 0,
                     None,
                     "",
                     spec.created_at or ts,

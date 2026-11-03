@@ -90,6 +90,18 @@ def test_illegal_transitions():
     assert not can_transition("completed", "failed")
 
 
+def test_review_pending_stage_transitions():
+    """WP-V2.0-4: a requires_review task parks in review_pending after the
+    worker finishes; only the review verdict completes or fails it."""
+    assert can_transition("running", "review_pending")
+    assert can_transition("review_pending", "completed")
+    assert can_transition("review_pending", "failed")
+    assert can_transition("review_pending", "cancelled")
+    assert not can_transition("review_pending", "running")
+    assert not can_transition("review_pending", "queued")
+    assert not can_transition("completed", "review_pending")  # terminal never re-enters review
+
+
 def test_session_to_task_mapping_covers_every_session_status():
     """ADR-003: the TaskStatus<->SessionStatus mapping is frozen and tested."""
     assert set(SESSION_TO_TASK_STATUS) == {s.value for s in Status}

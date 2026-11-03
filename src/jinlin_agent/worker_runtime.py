@@ -301,7 +301,13 @@ class WorkerRuntime:
             completion = state.completion or {}
             result = self._build_result(state, "completed", str(completion.get("summary", "")))
             self.ledger.record_result(record.task_id, result)
-            self._advance_task(record.task_id, "completed", reason=reason)
+            task_row = self.ledger.get_task(record.task_id) or {}
+            if task_row.get("requires_review"):
+                # the deliverable is NOT accepted yet: an independent review
+                # completes it (or fails it) — never a terminal state first
+                self._advance_task(record.task_id, "review_pending", reason="awaiting independent review")
+            else:
+                self._advance_task(record.task_id, "completed", reason=reason)
         elif status == "failed":
             message = str((state.last_error or {}).get("message", "attempt failed"))
             result = self._build_result(state, "failed", message)

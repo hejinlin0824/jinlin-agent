@@ -260,6 +260,18 @@ class Supervisor:
                         # the worker attempt failed; the task-level row must
                         # reflect it (run_task does this for its own path)
                         self._advance_task(task_id, "failed", reason=out.get("summary") or "attempt failed")
+                    if out["status"] == "completed":
+                        row = self.ledger.get_task(task_id)
+                        if row and row.get("requires_review"):
+                            accepted, actions = self._review_completed_task(row)
+                            if accepted:
+                                self._advance_task(task_id, "completed", reason="reviewer accepted the deliverable")
+                            else:
+                                self._advance_task(
+                                    task_id,
+                                    "failed",
+                                    reason="reviewer rejected the deliverable: " + "; ".join(actions),
+                                )
                     if out["status"] in ("waiting_user", "waiting_approval"):
                         return {
                             "status": out["status"],
@@ -341,6 +353,27 @@ class Supervisor:
         for spec in specs:
             self.ledger.create_task(spec)
             self.ledger.set_task_status(spec.task_id, "queued", reason="replanned")
+
+    # ------------------------------------------------------------------ review gate (WP-V2.0-4)
+
+    def _review_completed_task(self, row: dict[str, Any]) -> tuple[bool, list[str]]:
+        """Independent reviewer over the structured deliverable (v2 §12.4).
+        The request, verdict and outcome are protocol messages, not prose."""
+        from .protocol import conduct_review, record_review, request_review
+        from .ledger import task_spec_from_row
+
+        spec = task_spec_from_row(row)
+        workers = [w for w in self.ledger.list_workers(row["task_id"]) if w["status"] == "completed"]
+        worker_id = workers[-1]["worker_id"] if workers else ""
+        request_review(self.ledger, spec, worker_id=worker_id)
+        result = row.get("result") or {}
+        evidence = "; ".join(
+            f"{t.get('command', '')} -> {t.get('status', '')}" for t in result.get("tests", []) if isinstance(t, dict)
+        )
+        review = conduct_review(self.provider, row["title"], result, evidence)
+        record_review(self.ledger, spec, worker_id=worker_id, review=review)
+        self.log(f"[supervisor] review of {row['task_id']}: {review.status}")
+        return review.status == "accepted", review.required_actions
 
     # ------------------------------------------------------------------ helpers
 

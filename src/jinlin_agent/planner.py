@@ -135,6 +135,7 @@ def plan_subtasks(provider: Any, goal: str, context: str, root_id: str, instruct
                 role=str(item.get("role", "worker")).strip() or "worker",
                 capabilities=[str(c).strip().upper() for c in item.get("capabilities") or [] if str(c).strip()],
                 acceptance_criteria=[str(c).strip() for c in item.get("acceptance_criteria") or [] if str(c).strip()],
+                requires_review=bool(item.get("requires_review", False)),
             )
         )
 
