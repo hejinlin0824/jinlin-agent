@@ -44,6 +44,7 @@ DEFAULTS: dict[str, Any] = {
         "max_consecutive_tool_failures": 5,
         "max_tool_signature_repeats": 3,
         "max_concurrent_workers": 2,
+        "max_replans": 3,
         "model_request_timeout_seconds": 180,
         "default_tool_timeout_seconds": 120,
         "max_shell_timeout_seconds": 1800,
@@ -152,6 +153,7 @@ _RULES: dict[str, str] = {
     "runtime.max_model_calls": "decrease",
     "runtime.max_consecutive_tool_failures": "decrease",
     "runtime.max_concurrent_workers": "decrease",
+    "runtime.max_replans": "decrease",
     "runtime.wall_clock_seconds": "decrease",
     "runtime.max_total_tokens": "decrease",
 }

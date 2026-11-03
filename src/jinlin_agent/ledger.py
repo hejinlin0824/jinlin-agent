@@ -217,6 +217,12 @@ class TaskLedger:
         that rebuild() folds in — never a row the log cannot account for."""
         self._log_for(root_task_id).append(etype, payload)
 
+    def emit(self, root_task_id: str, etype: str, payload: dict[str, Any]) -> None:
+        """Public task-stream event (task-layer decisions such as strategy
+        selection and replanning that have no row of their own)."""
+        with self._mu:
+            self._emit(root_task_id, etype, payload)
+
     # ------------------------------------------------------------------ tasks
 
     def create_task(self, spec: TaskSpec) -> dict[str, Any]:
