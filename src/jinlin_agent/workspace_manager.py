@@ -286,6 +286,11 @@ class IntegrationCoordinator:
         if not project.test_commands:
             return {"passed": True, "command": "", "exit_code": None, "note": "no test command detected"}
         command = project.test_commands[0]
+        # process_env() is an OVERRIDE dict (UTF-8 + workspace tmp), not a
+        # complete environment: POSIX execvp resolves executables through the
+        # CHILD's PATH, so the parent PATH must be merged in or the command
+        # cannot even be found (this exact bug broke ubuntu CI).
+        env = {**os.environ, **process_env(str(self._path))}
         try:
             res = subprocess.run(
                 command,
@@ -295,10 +300,17 @@ class IntegrationCoordinator:
                 encoding="utf-8",
                 errors="replace",
                 timeout=int(self.config.runtime.get("max_shell_timeout_seconds", 1800)),
-                env=process_env(str(self._path)),
+                env=env,
             )
         except subprocess.TimeoutExpired:
             return {"passed": False, "command": " ".join(command), "exit_code": None, "note": "verification timed out"}
+        except FileNotFoundError as exc:
+            return {
+                "passed": False,
+                "command": " ".join(command),
+                "exit_code": None,
+                "note": f"verification command could not be executed: {exc}",
+            }
         parsed = parse_test_output((res.stdout or "") + (res.stderr or ""), res.returncode, False)
         passed = res.returncode == 0 and parsed["failed"] == 0 and parsed["errors"] == 0 and not parsed["failed_ids"]
         return {
