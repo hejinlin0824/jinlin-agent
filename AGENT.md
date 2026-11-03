@@ -9,7 +9,7 @@ branches:
   main: 249bbab   # 第 1 批 P2 加固归档线；第 2 批（含第 8/9/10 轮整改）在分支上等复核，批准后 ff
   review/followup-fixes: 17b2262+   # 第 10 轮整改最终代码 HEAD（rescue 停靠 + clean 隔离区验证）；其后为报告文档提交
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
-test_status: "python -m pytest -q => 105 passed; jinlin-agent eval --suite all => 18/18"
+test_status: "python -m pytest -q => 120 passed (105 基线 + 15 task-ledger); jinlin-agent eval --suite all => 18/18"
 review_status: "第 10 轮整改完成（rescue 停靠 / clean 隔离区验证 / forget 诊断）；CI 双平台绿，等复核"
 trash_cleanup: "jinlin-agent clean [--workspace W] [--apply]（默认 dry-run；归属证明 = 严格命名模式 + .jinlin/trash-manifest.jsonl 记录）"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
@@ -454,6 +454,9 @@ git push origin main
 | 模型 | `src/jinlin_agent/model/openai_compat.py`、`model/mock.py` |
 | 探针 | `src/jinlin_agent/evalkit.py`、`tests/test_eval.py` |
 | 安全/完成门回归 | `tests/test_security.py` |
+| 任务层模型（v2） | `src/jinlin_agent/taskmodel.py` |
+| 任务账本（v2） | `src/jinlin_agent/ledger.py`、`tests/test_ledger.py`、CLI `ledger` |
+| v2 架构迁移 | `docs/architecture/v2/`（盘点 / 差距分析 / ADR-001~010 / WP 报告） |
 | 历史与承诺 | `docs/REVIEW-RESPONSE.md`、`docs/REVIEW-SUBMISSION.md`、`docs/REPORT-AND-HANDBOOK.md`、`AGENTS.md` |
 
 ---
@@ -517,3 +520,16 @@ git checkout main && git merge --ff-only review/followup-fixes && git push origi
 - 把本文件（`AGENT.md`）与最新评审报告（`JINLIN_AGENT_SUBMISSION_REVIEW.md`）一起交给接手 AI；
 - 提醒它：**先读本文件，再动手；不要直接改 main；两个 P1 修完要跑 pytest/eval/CI 并更新评审响应**；
 - 接手 AI 若在本机同一仓库工作，直接说"按 AGENT.md 和评审报告执行"即可；若在另一环境，需要给它仓库访问 + 本文件 + 评审报告 + DeepSeek key（通过环境变量提供，不要写进文件）。
+
+---
+
+## 16. v2.0 架构迁移（2026-11-03 启动，进行中）
+
+> 设计与盘点全部在 `docs/architecture/v2/`（README 是入口）。本节只给接手者最快的状态。
+
+- **基线勘误（重要）**：v2.0 设计文档 §2.2 所列 ApplicationService / Workbench / TaskContract / Web API 与 `feature/workbench-*` 分支**在本仓库不存在**（`docs/architecture/v2/gap-analysis.md` §0）；迁移以 `current-state.md` 的真实代码盘点为准。所有者已于 2026-11-03 确认勘误并接受 ADR-001~010（Accepted），零第三方依赖约束在 v2 阶段继续有效。
+- **WP-V2.0-0 ✅**：现状盘点 + 差距分析 + ADR-001~010（分支 `feature/v2-wp0-inventory`）。
+- **WP-V2.0-1 ✅**：统一 Task Model 与 Task Ledger（分支 `feature/v2-wp1-task-ledger`，代码提交 `8a21316`，120 passed / 18/18）——`taskmodel.py`（TaskStatus 状态机 + SESSION_TO_TASK_STATUS 映射 + TaskSpec/RoleSpec/WorkerRecord/TaskMessage/交付校验/DAG 校验）、`ledger.py`（sqlite 投影 + `<home>/tasks/<root>/events.jsonl` 任务事件流 + 先事件后提交 + `rebuild()` + message_id 幂等）、CLI `ledger [--rebuild]`、`report.written` 收编进 `state._HANDLERS`；任务层事件 schema 记录在 `docs/PLAN.md` §12。
+- **下一步**：WP-V2.0-2（统一 Runtime 与 Worker 生命周期）——须经所有者复核 WP-1 报告后启动。
+- **CI 注意**：`feature/**` 推送不触发 CI（ci.yml 只监听 `main` / `review/**` / `dev` / PR）；要 CI 请开 PR 或由所有者调整触发分支。
+- 分支纪律不变：不碰 `main`；每个 WP 独立分支 + 全量回归后交所有者复核。
