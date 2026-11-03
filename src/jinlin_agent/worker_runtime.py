@@ -287,6 +287,22 @@ class WorkerRuntime:
             "max_tool_calls": int(spec.budget.max_tool_calls),
             "timeout_seconds": int(spec.budget.timeout_seconds),
         }
+        # task capability set + workspace scope become enforced policy (ADR-006)
+        caps = {str(c).strip().upper() for c in (spec.capabilities or []) if str(c).strip()}
+        scope = spec.workspace_scope if (spec.workspace_scope and (spec.workspace_scope.read or spec.workspace_scope.write)) else None
+        policy = None
+        if caps or scope is not None:
+            from .policy import PolicyEngine
+
+            policy = PolicyEngine(
+                self.config,
+                session.workspace,
+                approval_handler=None,
+                auto_approve=False,
+                read_only=False,
+                task_capabilities=caps or None,
+                workspace_scope=scope,
+            )
         return Harness(
             session=session,
             config=self.config,
@@ -294,6 +310,7 @@ class WorkerRuntime:
             role=role,
             budget=budget,
             cancel_check=cancel_flag.is_set,
+            policy=policy,
             log=self.log,
         )
 

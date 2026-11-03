@@ -52,13 +52,15 @@ class Harness:
         role: Any | None = None,
         budget: dict[str, Any] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        policy: PolicyEngine | None = None,
     ) -> None:
-        """`role`/`budget`/`cancel_check` parameterise the SAME kernel for
-        worker instances (v2.0 WP-V2.0-2, ADR-001): a RoleSpec narrows the tool
-        registry and adds a binding role instruction, a budget dict overrides
-        the session-level limits per worker, and cancel_check stops the loop
-        cooperatively at step boundaries. All three default to None — the
-        plain `run` path is unchanged."""
+        """`role`/`budget`/`cancel_check`/`policy` parameterise the SAME kernel
+        for worker instances (v2.0 WP-V2.0-2, ADR-001): a RoleSpec narrows the
+        tool registry and adds a binding role instruction, a budget dict
+        overrides the session-level limits per worker, cancel_check stops the
+        loop cooperatively at step boundaries, and an injected policy carries
+        the task's capability set and workspace scope (ADR-006). All default
+        to None — the plain `run` path is unchanged."""
         self.session = session
         self.config = config
         self.provider = provider
@@ -68,6 +70,7 @@ class Harness:
         self.role = role
         self.budget = dict(budget) if budget else None
         self.cancel_check = cancel_check
+        self._injected_policy = policy
         self.harness_verifier = Verifier(
             session.workspace,
             config,
@@ -84,7 +87,7 @@ class Harness:
             self.registry = build_default_registry().view(role.allowed_tools)
         else:
             self.registry = build_default_registry()
-        self.policy = PolicyEngine(
+        self.policy = policy if policy is not None else PolicyEngine(
             config,
             session.workspace,
             approval_handler=approval_handler,
