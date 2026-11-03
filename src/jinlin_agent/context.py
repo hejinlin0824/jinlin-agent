@@ -83,12 +83,14 @@ class ContextBuilder:
         artifacts: Any,
         sandbox: Any,
         project_instructions: str = "",
+        role_instruction: str = "",
     ) -> None:
         self.config = config
         self.capabilities = capabilities
         self.artifacts = artifacts
         self.sandbox = sandbox
         self.project_instructions = project_instructions
+        self.role_instruction = role_instruction
         self.ctx_cfg = config.context
 
     # ------------------------------------------------------------------ api
@@ -169,7 +171,7 @@ class ContextBuilder:
     def _system_text(self, state: Any) -> str:
         from .prompt import build_system_prompt
 
-        return build_system_prompt(self.config, state, self.project_instructions)
+        return build_system_prompt(self.config, state, self.project_instructions, self.role_instruction)
 
     # ------------------------------------------------------------------ frame
 

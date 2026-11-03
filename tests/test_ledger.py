@@ -342,3 +342,23 @@ def test_cli_ledger_summary_and_rebuild(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "rebuilt" in out
     assert "tasks: 1" in out
+
+
+def test_worker_session_binding_survives_rebuild(tmp_path):
+    """resume depends on the worker->session binding; it must live in the
+    event stream (worker.session_bound), not only in the projection."""
+    cfg = make_cfg(tmp_path)
+    lg = TaskLedger(cfg).open()
+    root = root_spec()
+    lg.create_task(root)
+    w = WorkerRecord(worker_id=new_worker_id(), task_id=root.task_id, root_task_id=root.task_id, attempt=1, status="running")
+    lg.register_worker(w)
+    lg.set_worker_session(w.worker_id, "sess_20261103_120000_abc123")
+    assert lg.get_worker(w.worker_id)["session_id"] == "sess_20261103_120000_abc123"
+    lg.close()
+
+    cfg.ledger_path.unlink()
+    lg2 = TaskLedger(cfg).open()
+    lg2.rebuild()
+    assert lg2.get_worker(w.worker_id)["session_id"] == "sess_20261103_120000_abc123"
+    lg2.close()

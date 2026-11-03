@@ -127,7 +127,10 @@ class TaskLedger:
         self.config.tasks_dir.mkdir(parents=True, exist_ok=True)
         self._acquire_init_lock()
         try:
-            self._conn = sqlite3.connect(str(self.path))
+            # One shared connection for the process (WP-V2.0-2 decision, revisiting
+            # the WP-1 note): check_same_thread=False + every operation under
+            # self._mu makes the ledger safe for the worker runtime's threads.
+            self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._ensure_schema()
         except BaseException:
@@ -255,8 +258,9 @@ class TaskLedger:
             return self.get_task(spec.task_id)  # type: ignore[return-value]
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
-        row = self._require_conn().execute(f"SELECT {_TASK_COLS} FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
-        return self._task_row(row) if row is not None else None
+        with self._mu:
+            row = self._require_conn().execute(f"SELECT {_TASK_COLS} FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+            return self._task_row(row) if row is not None else None
 
     def require_task(self, task_id: str) -> dict[str, Any]:
         row = self.get_task(task_id)
@@ -265,15 +269,16 @@ class TaskLedger:
         return row
 
     def list_tasks(self, root_task_id: str | None = None) -> list[dict[str, Any]]:
-        conn = self._require_conn()
-        if root_task_id:
-            rows = conn.execute(
-                f"SELECT {_TASK_COLS} FROM tasks WHERE root_task_id = ? ORDER BY created_at DESC, task_id",
-                (root_task_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(f"SELECT {_TASK_COLS} FROM tasks ORDER BY created_at DESC, task_id").fetchall()
-        return [self._task_row(r) for r in rows]
+        with self._mu:
+            conn = self._require_conn()
+            if root_task_id:
+                rows = conn.execute(
+                    f"SELECT {_TASK_COLS} FROM tasks WHERE root_task_id = ? ORDER BY created_at DESC, task_id",
+                    (root_task_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(f"SELECT {_TASK_COLS} FROM tasks ORDER BY created_at DESC, task_id").fetchall()
+            return [self._task_row(r) for r in rows]
 
     def set_task_status(self, task_id: str, new_status: str, reason: str = "") -> dict[str, Any]:
         conn = self._require_conn()
@@ -361,16 +366,34 @@ class TaskLedger:
             return self.get_worker(record.worker_id)  # type: ignore[return-value]
 
     def get_worker(self, worker_id: str) -> dict[str, Any] | None:
-        row = self._require_conn().execute("SELECT * FROM workers WHERE worker_id = ?", (worker_id,)).fetchone()
-        return self._worker_row(row) if row is not None else None
+        with self._mu:
+            row = self._require_conn().execute("SELECT * FROM workers WHERE worker_id = ?", (worker_id,)).fetchone()
+            return self._worker_row(row) if row is not None else None
 
     def list_workers(self, task_id: str | None = None) -> list[dict[str, Any]]:
-        conn = self._require_conn()
-        if task_id:
-            rows = conn.execute("SELECT * FROM workers WHERE task_id = ? ORDER BY attempt ASC, worker_id", (task_id,)).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM workers ORDER BY created_at DESC, worker_id").fetchall()
-        return [self._worker_row(r) for r in rows]
+        with self._mu:
+            conn = self._require_conn()
+            if task_id:
+                rows = conn.execute("SELECT * FROM workers WHERE task_id = ? ORDER BY attempt ASC, worker_id", (task_id,)).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM workers ORDER BY created_at DESC, worker_id").fetchall()
+            return [self._worker_row(r) for r in rows]
+
+    def set_worker_session(self, worker_id: str, session_id: str) -> None:
+        """Bind the worker attempt to its session. Emitted as an event so a
+        rebuilt projection keeps the binding (resume depends on it)."""
+        with self._mu:
+            row = self.get_worker(worker_id)
+            if row is None:
+                raise AgentError(TASK_NOT_FOUND, f"unknown worker: {worker_id}", source="ledger")
+            if not str(session_id).strip():
+                raise AgentError(TASK_MESSAGE_INVALID, "session_id must not be empty", source="ledger")
+            self._emit(row["root_task_id"], "worker.session_bound", {"worker_id": worker_id, "task_id": row["task_id"], "session_id": session_id})
+            self._require_conn().execute(
+                "UPDATE workers SET session_id = ?, updated_at = ? WHERE worker_id = ?",
+                (session_id, _now(), worker_id),
+            )
+            self._require_conn().commit()
 
     def set_worker_status(self, worker_id: str, new_status: str, reason: str = "") -> dict[str, Any]:
         conn = self._require_conn()
@@ -449,29 +472,31 @@ class TaskLedger:
             return True
 
     def list_messages(self, root_task_id: str | None = None) -> list[dict[str, Any]]:
-        conn = self._require_conn()
-        if root_task_id:
-            rows = conn.execute(
-                "SELECT * FROM messages WHERE root_task_id = ? ORDER BY recorded_at ASC, message_id", (root_task_id,)
-            ).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM messages ORDER BY recorded_at ASC, message_id").fetchall()
-        out = []
-        for row in rows:
-            item = dict(row)
-            item["payload"] = json.loads(item.get("payload") or "{}")
-            out.append(item)
-        return out
+        with self._mu:
+            conn = self._require_conn()
+            if root_task_id:
+                rows = conn.execute(
+                    "SELECT * FROM messages WHERE root_task_id = ? ORDER BY recorded_at ASC, message_id", (root_task_id,)
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM messages ORDER BY recorded_at ASC, message_id").fetchall()
+            out = []
+            for row in rows:
+                item = dict(row)
+                item["payload"] = json.loads(item.get("payload") or "{}")
+                out.append(item)
+            return out
 
     # ------------------------------------------------------------------ summary / rebuild
 
     def summary(self) -> dict[str, Any]:
-        conn = self._require_conn()
-        rows = conn.execute("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status").fetchall()
-        by_status = {r["status"]: r["n"] for r in rows}
-        workers = conn.execute("SELECT COUNT(*) AS n FROM workers").fetchone()["n"]
-        messages = conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"]
-        return {"total": sum(by_status.values()), "by_status": by_status, "workers": workers, "messages": messages}
+        with self._mu:
+            conn = self._require_conn()
+            rows = conn.execute("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status").fetchall()
+            by_status = {r["status"]: r["n"] for r in rows}
+            workers = conn.execute("SELECT COUNT(*) AS n FROM workers").fetchone()["n"]
+            messages = conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"]
+            return {"total": sum(by_status.values()), "by_status": by_status, "workers": workers, "messages": messages}
 
     def rebuild(self) -> dict[str, int]:
         """Drop and re-derive the projection from the task event logs.
@@ -571,6 +596,11 @@ class TaskLedger:
                     f"task log replay: worker status change for unknown worker {payload.get('worker_id')!r}",
                     source="ledger",
                 )
+        elif etype == "worker.session_bound":
+            conn.execute(
+                "UPDATE workers SET session_id = ?, updated_at = ? WHERE worker_id = ?",
+                (payload.get("session_id", ""), ts, payload.get("worker_id", "")),
+            )
         elif etype == "task.message":
             msg = TaskMessage.from_dict(payload.get("message") or {})
             cur = conn.execute(
@@ -603,6 +633,13 @@ class TaskLedger:
 
 def task_id_root(task_row: dict[str, Any]) -> str:
     return str(task_row.get("root_task_id") or task_row.get("task_id") or "")
+
+
+def task_spec_from_row(row: dict[str, Any]) -> TaskSpec:
+    """Rebuild the TaskSpec contract from a ledger row (projection columns
+    status/result/error/updated_at are not part of the contract)."""
+    data = {k: v for k, v in row.items() if k not in ("status", "result", "error", "updated_at")}
+    return TaskSpec.from_dict(data)
 
 
 def _now() -> str:

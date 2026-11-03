@@ -188,3 +188,15 @@ python -m jinlin_agent run --workspace ... --task "..."   # 真实使用
 - `rebuild()`：删除并从全部任务日志重放重建投影（`jinlin-agent ledger --rebuild`）；重放历史迁移不再校验合法性（写入时已校验）；未知事件类型忽略（v2 §7.5 向前兼容）。
 - 状态机：`TaskStatus`（v2 §6.3 九态，无 paused）+ 迁移表 + `SESSION_TO_TASK_STATUS` 映射（session `paused` 预留态 → task `blocked`），全部由 `tests/test_ledger.py` 锁定（ADR-003）。
 - 并发（WP-1 范围）：进程内单写者（RLock）；连接不跨线程；跨进程靠 sqlite 自身锁 + 初始化锁；Worker 多线程化时由 WP-2 重新评估。
+
+## 13. Worker Runtime（WP-V2.0-2 新增，2026-11-03）
+
+- 模块 `worker_runtime.py`：Worker = 既有 Harness 内核的**参数化实例**（ADR-001），本模块不含第二套执行循环。
+- 内核参数化（三个可选参数，默认 None，原 `run` 路径零变化）：
+  - `Harness(role=RoleSpec)`：`allowed_tools` 经 `ToolRegistry.view()` 白名单过滤（白名单外工具对 dispatcher 不可达，TOOL_NOT_FOUND）；`system_instruction` 进入系统提示的 binding Role 段。
+  - `Harness(budget=dict)`：per-worker 预算覆盖（max_tokens / max_tool_calls / timeout_seconds，config 兜底）；新增 `max_tool_calls` 检查。
+  - `Harness(cancel_check=...)`：步边界协作式取消——进行中的模型调用/工具先完成，下一个 step 前退出（v2 §13.4 的 WP-2 形态）。
+- 生命周期（v2 §6.3）：submit → queued → running →（waiting_user/approval → resume 续同一 session）→ completed/failed/cancelled；重试 = 新 Attempt（次数来自 `TaskSpec.budget.max_attempts`）；`BUDGET_EXCEEDED` 不可重试（ADR-009）。
+- 并发（v2 §6.5 的 WP-2 形态）：`runtime.max_concurrent_workers`（默认 2，项目级只能减小）；**同一 workspace 整程独占**（Windows 沙箱按实例授/收工作区写 ACE，重叠实例会竞争 ACL）；不同 workspace 可并行；worktree 隔离由 WP-V2.0-5 交付（ADR-005）。
+- 任务事件流新增第 7 种事件：`worker.session_bound`（worker→session 绑定；resume 依赖它，且必须可重建）。
+- 交付结果：完成/失败均 `record_result`（v2 §7.4 结构）；`changed_files` 来自 `state.diff_paths()`，`tests` 来自最近 verification_runs；`commit` 字段留空，待 WP-V2.0-5 绑定。
