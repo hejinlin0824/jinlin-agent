@@ -23,3 +23,7 @@ worktree 是版本隔离不是安全边界（OS 沙箱仍按 worker workspace �
 
 ## 6. 未完成事项
 "受影响验证"目前为集成树全量测试套件；按 Diff 取子集属 WP-8 的 diff-aware 延伸（当前实现已满足 v2 §9.2 的"合并后重验证"）；Windows Sandbox/ACL 更强隔离的评估（v2 §9.5）独立排期。
+
+### 6.1 CI 抓出的跨平台缺陷（已修复）
+
+`_verify` 直接把 `process_env()` 当完整环境传给 `subprocess.run`——该函数是**覆盖字典**（UTF-8 + workspace tmp），不含 PATH；沙箱调用方会与继承环境合并，而这里没有。POSIX `execvp` 经子进程 PATH 解析可执行文件 → ubuntu CI 找不到裸 `pytest`（Windows 经父进程 PATH 解析，本地全绿——正是 v2 §16.5 "不能只在 Windows 验证"的活教材）。修复：合并父进程 PATH + 验证命令无法执行时按 `verification_failed` 如实上报而非崩溃（提交 `5012d21`，CI 双平台绿：run 41627192763）。
