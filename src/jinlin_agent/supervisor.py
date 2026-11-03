@@ -168,6 +168,13 @@ class Supervisor:
         self.runtime = runtime
         self.provider = provider
         self.log = log or (lambda msg: None)
+        self.workspace_manager: Any | None = None
+
+    def attach_workspace_manager(self, manager: Any) -> None:
+        """WP-V2.0-5: give every WRITE worker its own git worktree and run the
+        Integration Coordinator before the root completes. Without a manager
+        the supervisor behaves exactly as before (shared workspace)."""
+        self.workspace_manager = manager
 
     # ------------------------------------------------------------------ entry
 
@@ -252,7 +259,17 @@ class Supervisor:
             if runnable:
                 submitted: list[tuple[str, str]] = []
                 for r in runnable:
-                    worker_id = self.runtime.submit_task(r["task_id"], workspace)
+                    target_workspace = workspace
+                    branch = ""
+                    base_commit = ""
+                    if self.workspace_manager is not None:
+                        ws = self.workspace_manager.create_worker_workspace(r["task_id"])
+                        target_workspace = ws.path
+                        branch = ws.branch
+                        base_commit = ws.base_commit
+                    worker_id = self.runtime.submit_task(
+                        r["task_id"], target_workspace, branch=branch, base_commit=base_commit
+                    )
                     submitted.append((r["task_id"], worker_id))
                 for task_id, worker_id in submitted:
                     out = self.runtime.wait_worker(worker_id)
@@ -286,6 +303,22 @@ class Supervisor:
                 # (the replaced node's own failed/cancelled row stays as evidence)
                 resolved = {r["task_id"] for r in rows if r["status"] == "completed" or r["task_id"] in superseded}
                 if rows and all(r["task_id"] in resolved for r in rows):
+                    if self.workspace_manager is not None:
+                        integration = self._integrate_all(root_id)
+                        if integration["status"] == "conflict":
+                            # v2 §5.4: worker result conflicts pause the
+                            # integration and ask for adjudication
+                            self._advance_task(root_id, "blocked", reason="integration conflict needs adjudication")
+                            return {
+                                "status": "blocked",
+                                "task_id": root_id,
+                                "conflicts": integration.get("conflicts", []),
+                                "replans": replans,
+                            }
+                        if integration["status"] != "integrated":
+                            reason = f"integration failed: {integration['status']}"
+                            self._advance_task(root_id, "failed", reason=reason)
+                            return {"status": "failed", "task_id": root_id, "reason": reason, "replans": replans}
                     self._advance_task(root_id, "completed", "all subtasks resolved")
                     return {"status": "completed", "task_id": root_id, "replans": replans}
                 self._advance_task(root_id, "failed", "no runnable subtasks and the set is not fully resolved")
@@ -353,6 +386,33 @@ class Supervisor:
         for spec in specs:
             self.ledger.create_task(spec)
             self.ledger.set_task_status(spec.task_id, "queued", reason="replanned")
+
+    # ------------------------------------------------------------------ integration (WP-V2.0-5)
+
+    def _integrate_all(self, root_id: str) -> dict[str, Any]:
+        """Merge every completed worker's worktree into the integration branch,
+        attach the commits to the task results, release the worker worktrees.
+        The integration worktree itself is kept as the deliverable staging
+        until the owner merges/releases."""
+        assert self.workspace_manager is not None
+        conflicts: list[dict[str, Any]] = []
+        for row in self.ledger.list_tasks(root_id):
+            if row["task_id"] == root_id or row["status"] != "completed":
+                continue
+            if self.workspace_manager.get(row["task_id"]) is None:
+                continue  # task ran without a worktree (read-only replan leftover)
+            outcome = self.workspace_manager.integrate(row["task_id"], root_id)
+            if outcome["status"] == "conflict":
+                conflicts.append({"task_id": row["task_id"], "conflict_files": outcome.get("conflict_files", [])})
+                continue
+            if outcome["status"] != "integrated":
+                return {"status": outcome["status"], "task_id": row["task_id"], "detail": outcome}
+            if outcome.get("commit") and row.get("result"):
+                self.ledger.attach_commit(row["task_id"], outcome["commit"])
+            self.workspace_manager.cleanup_worker_workspace(row["task_id"])
+        if conflicts:
+            return {"status": "conflict", "conflicts": conflicts}
+        return {"status": "integrated"}
 
     # ------------------------------------------------------------------ review gate (WP-V2.0-4)
 

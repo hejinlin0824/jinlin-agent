@@ -93,9 +93,18 @@ class WorkerRuntime:
 
     # ------------------------------------------------------------------ public api
 
-    def submit_task(self, task_id: str, workspace: Path | str, role_spec: Any | None = None) -> str:
+    def submit_task(
+        self,
+        task_id: str,
+        workspace: Path | str,
+        role_spec: Any | None = None,
+        branch: str = "",
+        base_commit: str = "",
+    ) -> str:
         """Register a new worker attempt for the task and queue it. One active
-        worker per task; a retry is another submit (run_task drives that)."""
+        worker per task; a retry is another submit (run_task drives that).
+        branch/base_commit record worktree isolation when a WorkspaceManager
+        assigned one (WP-V2.0-5)."""
         with self._mu:
             row = self.ledger.require_task(task_id)
             active = [w for w in self.ledger.list_workers(task_id) if w["status"] not in _TERMINAL_WORKER_STATUSES]
@@ -116,6 +125,8 @@ class WorkerRuntime:
                 attempt=attempt,
                 status="queued",
                 workspace_path=str(workspace),
+                branch=branch,
+                base_commit=base_commit,
             )
             self.ledger.register_worker(record)
             if row["status"] == "created":

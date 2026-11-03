@@ -334,6 +334,22 @@ class TaskLedger:
             conn.commit()
             return self.get_task(task_id)  # type: ignore[return-value]
 
+    def attach_commit(self, task_id: str, commit: str) -> None:
+        """Bind the integration commit to the task's recorded result. Evented
+        (task.commit_attached) so a rebuilt projection keeps the binding."""
+        with self._mu:
+            row = self.require_task(task_id)
+            result = row.get("result")
+            if not isinstance(result, dict):
+                return
+            self._emit(row["root_task_id"], "task.commit_attached", {"task_id": task_id, "commit": commit})
+            result["commit"] = commit
+            self._require_conn().execute(
+                "UPDATE tasks SET result = ?, updated_at = ? WHERE task_id = ?",
+                (_json(result), _now(), task_id),
+            )
+            self._require_conn().commit()
+
     @staticmethod
     def _task_row(row: sqlite3.Row) -> dict[str, Any]:
         out = dict(row)
@@ -675,6 +691,15 @@ class TaskLedger:
                 "UPDATE tasks SET result = ?, updated_at = ? WHERE task_id = ?",
                 (_json(payload.get("result") or {}), ts, payload.get("task_id", "")),
             )
+        elif etype == "task.commit_attached":
+            row = conn.execute("SELECT result FROM tasks WHERE task_id = ?", (payload.get("task_id", ""),)).fetchone()
+            if row is not None and row["result"]:
+                result = json.loads(row["result"])
+                result["commit"] = payload.get("commit", "")
+                conn.execute(
+                    "UPDATE tasks SET result = ?, updated_at = ? WHERE task_id = ?",
+                    (_json(result), ts, payload.get("task_id", "")),
+                )
         # unknown types are ignored (forward compatibility, v2 §7.5)
 
 
