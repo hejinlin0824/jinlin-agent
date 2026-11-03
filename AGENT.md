@@ -9,7 +9,7 @@ branches:
   main: 249bbab   # 第 1 批 P2 加固归档线；第 2 批（含第 8/9/10 轮整改）在分支上等复核，批准后 ff
   review/followup-fixes: 17b2262+   # 第 10 轮整改最终代码 HEAD（rescue 停靠 + clean 隔离区验证）；其后为报告文档提交
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
-test_status: "python -m pytest -q => 133 passed (105 基线 + 16 task-ledger + 12 worker-runtime); jinlin-agent eval --suite all => 18/18"
+test_status: "python -m pytest -q => 200 passed (105 v1 基线 + 95 v2 任务层); jinlin-agent eval --suite all => 22/22 (18 v1 + 4 v2)"
 review_status: "第 10 轮整改完成（rescue 停靠 / clean 隔离区验证 / forget 诊断）；CI 双平台绿，等复核"
 trash_cleanup: "jinlin-agent clean [--workspace W] [--apply]（默认 dry-run；归属证明 = 严格命名模式 + .jinlin/trash-manifest.jsonl 记录）"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
@@ -455,9 +455,15 @@ git push origin main
 | 探针 | `src/jinlin_agent/evalkit.py`、`tests/test_eval.py` |
 | 安全/完成门回归 | `tests/test_security.py` |
 | 任务层模型（v2） | `src/jinlin_agent/taskmodel.py` |
-| 任务账本（v2） | `src/jinlin_agent/ledger.py`、`tests/test_ledger.py`、CLI `ledger` |
+| 任务账本（v2） | `src/jinlin_agent/ledger.py`、`tests/test_ledger.py`、CLI `ledger [--rebuild|--metrics]` |
 | Worker Runtime（v2） | `src/jinlin_agent/worker_runtime.py`、`tests/test_worker_runtime.py` |
-| v2 架构迁移 | `docs/architecture/v2/`（盘点 / 差距分析 / ADR-001~010 / WP 报告） |
+| 规划/Supervisor（v2） | `src/jinlin_agent/planner.py`、`src/jinlin_agent/supervisor.py`、`tests/test_supervisor.py` |
+| 任务协议/评审（v2） | `src/jinlin_agent/protocol.py`、`tests/test_protocol.py` |
+| Worktree/集成（v2） | `src/jinlin_agent/workspace_manager.py`、`tests/test_worktree.py` |
+| 细粒度权限（v2） | `src/jinlin_agent/policy.py`、`tests/test_permissions.py` |
+| 上下文注入/验收门（v2） | `src/jinlin_agent/context_provider.py`、`tests/test_context_provider.py`、`tests/test_task_verification.py` |
+| Workbench 可观测（v2） | `src/jinlin_agent/workbench.py`、CLI `serve`、`tests/test_workbench.py` |
+| v2 架构迁移 | `docs/architecture/v2/`（盘点 / 差距分析 / ADR-001~010 / WP-0~10 报告） |
 | 历史与承诺 | `docs/REVIEW-RESPONSE.md`、`docs/REVIEW-SUBMISSION.md`、`docs/REPORT-AND-HANDBOOK.md`、`AGENTS.md` |
 
 ---
@@ -532,6 +538,13 @@ git checkout main && git merge --ff-only review/followup-fixes && git push origi
 - **WP-V2.0-0 ✅**：现状盘点 + 差距分析 + ADR-001~010（分支 `feature/v2-wp0-inventory`）。
 - **WP-V2.0-1 ✅**：统一 Task Model 与 Task Ledger（分支 `feature/v2-wp1-task-ledger`，代码提交 `8a21316`，120 passed / 18/18）——`taskmodel.py`（TaskStatus 状态机 + SESSION_TO_TASK_STATUS 映射 + TaskSpec/RoleSpec/WorkerRecord/TaskMessage/交付校验/DAG 校验）、`ledger.py`（sqlite 投影 + `<home>/tasks/<root>/events.jsonl` 任务事件流 + 先事件后提交 + `rebuild()` + message_id 幂等）、CLI `ledger [--rebuild]`、`report.written` 收编进 `state._HANDLERS`；任务层事件 schema 记录在 `docs/PLAN.md` §12。
 - **WP-V2.0-2 ✅**：统一 Worker Runtime（同分支续提交，代码提交 `5de75c9`，133 passed / 18/18）——`worker_runtime.py`（submit/run/resume/cancel + Attempt 重试 + 并发上限 `runtime.max_concurrent_workers` + 同 workspace 独占）；内核参数化 `Harness(role=, budget=, cancel_check=)`（registry 白名单 view、系统提示 Role 段、步边界协作取消、per-worker 预算含 max_tool_calls）；账本跨线程安全 + `worker.session_bound` 事件；CI 触发加入 `feature/**`。取消语义 = 步边界协作式（进行中调用先完成），如实声明。
-- **下一步**：WP-V2.0-3（动态规划与 Supervisor）/ WP-V2.0-4（任务协议）——须所有者复核后启动。
+- **WP-V2.0-3 ✅** `bc83c02`：混合复杂度评估（默认 direct）+ 模型驱动 Planner（标题引用依赖、坏输出 fail-closed）+ Supervisor 调度（依赖全过才启动、有界局部重规划 `runtime.max_replans`、stale 下游取消、可续跑）。
+- **WP-V2.0-4 ✅** `3c776c2`：任务协议（MessagePump 至少一次投递/恰好一次处理标记、主版本门 fail-closed、确定性交付 id 幂等）+ Reviewer 协议（v2 §12.4）+ **schema v1→v2 迁移** + `review_pending` 任务态（评审通过才 completed）。
+- **WP-V2.0-5 ✅** `dc391f8`：per-worker git worktree（harness home 下）+ IntegrationCoordinator（harness 身份 commit、垃圾剥离、过期 rebase、冲突 abort + `integration.conflict` 消息、合并后验证失败即回滚、稳定分支绝不触碰）。
+- **WP-V2.0-6 ✅** `86b16c8`：能力集（READ/WRITE/EXECUTE/NETWORK/DELETE）+ workspace_scope 路径范围在 PolicyEngine 代码强制（先于审批与 intent）；单 Agent 路径不受影响。
+- **WP-V2.0-7/8 ✅** `9d0988d`：ContextProvider 钩子 + 上游交付物注入（预算内有理由丢弃）；验收门在 worker 完成时运行（必需等级未过 → 任务 failed；L3 适用性跟随项目测试命令；未验证绝不冒充成功）；VerificationRun.sandbox_level 证据。
+- **WP-V2.0-9/10 ✅** `d126b38`：Workbench 可观测（127.0.0.1 只读 + cancel/answer，**HTTP 审批有意不暴露**）+ 4 个 v2 探针（**22 总计**：并行重叠/依赖顺序/能力越界/预算不重试）+ `ledger --metrics` 基准指标。
+- **v2 代码实施全部完成**；**发布门槛未达成**：30–50 真实任务集对比（单 Agent vs 规划 vs 多 Worker）需真实模型与仓库，未执行——多 Worker 因此**不设为默认策略**（v2 §14-WP10 要求）。
+- **下一步（所有者决策）**：复核全部 WP 报告（`docs/architecture/v2/wp-*.md`）→ 决定合并 → 真实任务集评测 → 多 Worker 是否转默认。
 - **CI 注意**：`feature/**` 推送不触发 CI（ci.yml 只监听 `main` / `review/**` / `dev` / PR）；要 CI 请开 PR 或由所有者调整触发分支。
 - 分支纪律不变：不碰 `main`；每个 WP 独立分支 + 全量回归后交所有者复核。

@@ -200,3 +200,13 @@ python -m jinlin_agent run --workspace ... --task "..."   # 真实使用
 - 并发（v2 §6.5 的 WP-2 形态）：`runtime.max_concurrent_workers`（默认 2，项目级只能减小）；**同一 workspace 整程独占**（Windows 沙箱按实例授/收工作区写 ACE，重叠实例会竞争 ACL）；不同 workspace 可并行；worktree 隔离由 WP-V2.0-5 交付（ADR-005）。
 - 任务事件流新增第 7 种事件：`worker.session_bound`（worker→session 绑定；resume 依赖它，且必须可重建）。
 - 交付结果：完成/失败均 `record_result`（v2 §7.4 结构）；`changed_files` 来自 `state.diff_paths()`，`tests` 来自最近 verification_runs；`commit` 字段留空，待 WP-V2.0-5 绑定。
+
+## 14. v2 任务层完整状态（WP-3 ~ WP-10，2026-11-03）
+
+任务流事件全族（`<home>/tasks/<root>/events.jsonl`，信封同 v1）：`task.created` / `task.status_changed` / `worker.registered` / `worker.status_changed` / `worker.session_bound` / `task.message` / `task.result_recorded` / `task.strategy_selected` / `task.replanned` / `task.commit_attached` / `integration.verified`。
+
+模块地图（v2 增量，全部单执行内核参数化，无第二套 Loop）：`taskmodel`（状态机 review_pending 等 10 态 + 迁移表 + 映射）→ `ledger`（sqlite v2 schema + 任务流 + rebuild + metrics）→ `worker_runtime`（生命周期/Attempt/并发/取消/验收门）→ `planner` + `supervisor`（评估/DAG 调度/有界重规划/stale 下游）→ `protocol`（MessagePump/信封校验/交付/评审）→ `workspace_manager`（worktree + IntegrationCoordinator）→ `policy`（能力集 + workspace_scope 强制）→ `context_provider`（依赖产物注入）→ `verify`（PROFILE_LEVELS 验收 + sandbox_level 证据）→ `workbench`（127.0.0.1 只读可观测 + cancel/answer）。
+
+评测：22 个探针（HCS P1–P6/P3b + E1–E8 + v2 P7 并行重叠 / P8 依赖顺序 / P9 能力越界拒绝 / P10 预算不重试），`jinlin-agent eval --suite all|v2`；指标 `jinlin-agent ledger --metrics`。
+
+已知边界（诚实清单，详见 docs/architecture/v2/wp-*.md 各"未完成事项"）：协作式取消为步边界；HTTP 审批有意不暴露；真实任务集对比（发布门槛）未执行；Windows 更强沙箱后端未评估；30–50 真实仓库基准未跑。

@@ -45,7 +45,7 @@ python -m jinlin_agent run --workspace ./my-repo -t "给查询接口加分页，
 
 > 论文明确"四条件是成员资格测试，不是质量度量"。所以本仓库用 **18 个可执行探针**同时证明"是 harness"和"不是玩具"：`jinlin-agent eval --suite all`。
 
-当前状态：**18/18 通过**（见 §9）。
+当前状态：**22/22 通过**（18 个 v1 + 4 个 v2 任务层探针，见 §9）。
 
 ---
 
@@ -267,3 +267,24 @@ python -m jinlin_agent eval --suite all
 ```
 
 约定：零第三方运行时依赖；所有副作用必须落事件；工具必须返回可序列化结果；先写测试再改行为。
+
+---
+
+## 14. 架构 2.0：统一 Runtime + 动态角色编排（2026-11-03 实施完成，待评审）
+
+在 v1 单 Agent 内核之上，v2 增加了**任务层**（设计文档：`docs/architecture/v2/ARCHITECTURE-v2.0.md`；盘点/差距/ADR/WP 报告全在 `docs/architecture/v2/`）。全部为增量模块，零第三方依赖不变：
+
+- **任务账本**：`jinlin-agent ledger [--rebuild|--metrics]`；sqlite 投影 + `<home>/tasks/<root>/events.jsonl` 任务事件流（同一 append-only 语义），先事件后提交、可重建、message_id 幂等。
+- **Worker Runtime**：`Harness(role=, budget=, cancel_check=, policy=, context_providers=)` —— 同一执行内核的参数化实例；Attempt 重试、并发上限、协作式取消。
+- **规划与调度**：混合复杂度评估（**默认直接执行，简单任务永不规划**）→ 模型驱动 Planner（坏输出 fail-closed）→ Supervisor 按依赖调度 DAG、有界局部重规划（`runtime.max_replans`）、冲突即暂停。
+- **安全边界**：TaskSpec 能力集（READ/WRITE/EXECUTE/NETWORK/DELETE）+ workspace_scope 路径范围在 PolicyEngine **代码强制**（先于审批与 intent）；每 Worker 独立 git worktree（`agent/task-<id>`），集成协调器合并/过期 rebase/冲突暂停/验证失败回滚，稳定分支绝不自动触碰。
+- **验收门下沉**：会话完成 ≠ 任务完成——TaskSpec 验证档案（code/config/docs/tests/analysis）的必需等级未过，任务即失败（未验证绝不冒充成功）。
+- **可观测**：`jinlin-agent serve`（127.0.0.1 只读 Workbench + cancel/answer；HTTP 审批有意不暴露）。
+
+```bash
+python -m jinlin_agent eval --suite v2   # 任务层 4 探针
+python -m jinlin_agent ledger --metrics  # 按根任务基准指标
+python -m jinlin_agent serve --port 7800 # Workbench
+```
+
+诚实边界：协作式取消为步边界；HTTP 审批不暴露；**发布门槛（30–50 真实任务集对比）未执行，多 Worker 不设为默认策略**。逐 WP 证据见 `docs/architecture/v2/wp-*.md`。
