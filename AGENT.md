@@ -11,7 +11,7 @@ branches:
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
 test_status: "主体任务包 01–06、最终收尾包 01–04 均已由所有者本地验收；最新 HEAD 40c196f 的 Push/PR CI 均在 Ubuntu 与 Windows 通过"
 review_status: "主体任务包 01–06 完成；最终收尾包 01–04 完成；最终收尾包 05 发布候选审查进行中（不扩展功能）"
-v2_status: "v2 任务层 WP-0~10 已实施并合入整改分支 feature/v2-integration-remediation（评审任务书 WP-R1 主线整合，合并后全量回归 324 passed / eval 22/22）；详见 docs/architecture/v2/ 与本文 §16"
+v2_status: "整改完成：WP-R1~R10（评审任务书）全部处理，357 passed + 3 skipped / eval 22/22，CI 双平台绿；详见 docs/architecture/v2/REMEDIATION-REPORT.md 与本文 §16"
 trash_cleanup: "jinlin-agent clean [--workspace W] [--apply]（默认 dry-run；归属证明 = 严格命名模式 + .jinlin/trash-manifest.jsonl 记录）"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
@@ -558,6 +558,7 @@ git checkout main && git merge --ff-only review/followup-fixes && git push origi
 - **WP-V2.0-7/8 ✅** `9d0988d`：ContextProvider 钩子 + 上游交付物注入（预算内有理由丢弃）；验收门在 worker 完成时运行（必需等级未过 → 任务 failed；L3 适用性跟随项目测试命令；未验证绝不冒充成功）；VerificationRun.sandbox_level 证据。
 - **WP-V2.0-9/10 ✅** `d126b38`：Workbench 可观测（127.0.0.1 只读 + cancel/answer，**HTTP 审批有意不暴露**）+ 4 个 v2 探针（**22 总计**：并行重叠/依赖顺序/能力越界/预算不重试）+ `ledger --metrics` 基准指标。
 - **v2 代码实施全部完成**；**发布门槛未达成**：30–50 真实任务集对比（单 Agent vs 规划 vs 多 Worker）需真实模型与仓库，未执行——多 Worker 因此**不设为默认策略**（v2 §14-WP10 要求）。
-- **下一步（所有者决策）**：复核全部 WP 报告（`docs/architecture/v2/wp-*.md`）→ 决定合并 → 真实任务集评测 → 多 Worker 是否转默认。
+- **整改（2026-11-04，评审任务书）✅**：分支 `feature/v2-integration-remediation`（基于最新 main@bcb0e39）——WP-R1 主线整合 / WP-R2 集成验证 Sandbox 化（fail-closed）/ WP-R3 Workbench 安全（textContent-only + Token/Host/Origin）/ WP-R4 能力三层交集 / WP-R5-7 恢复语义（会话真相回填、孤儿不删、集成缺失即 blocked、审批与文本分离）/ WP-R8 `task run/status/resume/cancel/trace` CLI / WP-R9 create 端点 + decisions 时间线 / WP-R10 评测骨架 `scripts/benchmark_matrix.py`。**发布门槛（真实任务集）未执行，多 Worker 维持非默认。** 总报告：`docs/architecture/v2/REMEDIATION-REPORT.md`。
+- **下一步（所有者决策）**：复核 REMEDIATION-REPORT.md → 决定合并 → 提供 API key 跑真实任务集（R10）→ 多 Worker 是否转默认。
 - **CI 注意**：`feature/**` 推送不触发 CI（ci.yml 只监听 `main` / `review/**` / `dev` / PR）；要 CI 请开 PR 或由所有者调整触发分支。
 - 分支纪律不变：不碰 `main`；每个 WP 独立分支 + 全量回归后交所有者复核。

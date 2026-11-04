@@ -1,6 +1,6 @@
 # 架构 v2.0（统一 Runtime + 动态角色编排）——WP-V2.0-0 交付物
 
-> 状态：**v2.0 全部任务包（WP-0 ~ WP-10）实施完成，200 passed / eval 22/22，待负责人统一送评审**。发布门槛（30–50 真实任务集对比）未执行，多 Worker 不设为默认策略。依据：《Jinlin Agent 架构设计 2.0》（本目录 [ARCHITECTURE-v2.0.md](ARCHITECTURE-v2.0.md)）。
+> 状态：**v2.0 全部任务包（WP-0~10）实施完成；评审整改（WP-R1~R10）亦完成——P0 安全 + 主线整合 + 恢复语义 + CLI 入口全落地，357 passed + 3 skipped / eval 22/22，CI 双平台绿；真实任务集评测（P2）待所有者执行，多 Worker 维持非默认**。总报告：[REMEDIATION-REPORT.md](REMEDIATION-REPORT.md)。设计依据：《Jinlin Agent 架构设计 2.0》（[ARCHITECTURE-v2.0.md](ARCHITECTURE-v2.0.md)）。
 > 阅读顺序：先读 [wp-v2.0-0-report.md](wp-v2.0-0-report.md)（3 分钟），再按需深入。
 
 | 文件 | 内容 |

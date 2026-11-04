@@ -1,0 +1,7 @@
+[
+  {"id": "explain-entry", "kind": "code_explain", "workspace": "fixtures/demo", "prompt": "梳理入口与调用链", "expected": {}},
+  {"id": "fix-add", "kind": "single_file_fix", "workspace": "fixtures/calc", "prompt": "修复 add() 使 test_add 通过", "expected": {"test_command": "pytest -q"}},
+  {"id": "add-config", "kind": "multi_file_feature", "workspace": "fixtures/app", "prompt": "为 SETTINGS 增加 timeout 字段并补测试", "expected": {"test_command": "pytest -q"}},
+  {"id": "needs-input", "kind": "needs_user", "workspace": "fixtures/app", "prompt": "在两个备选方案中选择一个并实现（必须先询问用户）", "expected": {}},
+  {"id": "flaky-replan", "kind": "replan_required", "workspace": "fixtures/app", "prompt": "完成一个首次尝试必然失败的多步任务并重规划", "expected": {}}
+]
