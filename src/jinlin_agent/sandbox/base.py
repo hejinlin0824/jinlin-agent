@@ -81,6 +81,15 @@ class Sandbox:
         """Best-effort check whether the sandbox would allow writing `path`."""
         return True, "no probe available"
 
+    def grant_traverse(self, path: str) -> bool:
+        """Best-effort read+traverse access for an ANCESTOR of the workspace.
+
+        Contained tooling legitimately probes ancestor directories (pytest 9
+        stats the parent of every collected node for conftests). Default is a
+        no-op: only real OS sandboxes can grant anything, and they must NEVER
+        grant write access through this — read/traverse only."""
+        return False
+
     def close(self) -> None:
         pass
 

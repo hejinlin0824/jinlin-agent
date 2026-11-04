@@ -37,6 +37,7 @@ from typing import Any
 
 from .errors import AgentError, GIT_OPERATION_FAILED
 from .ledger import TaskLedger
+from .sandbox import create_sandbox
 from .sandbox.base import process_env
 from .taskmodel import TaskMessage, new_message_id
 from .verify import detect_project, parse_test_output
@@ -72,6 +73,34 @@ def _git(repo: Path, *args: Any, env_extra: dict[str, str] | None = None, check:
     return res
 
 
+def _with_confcutdir(command: list[str], root: Path) -> list[str]:
+    """Constrain pytest to the integration tree.
+
+    pytest 9's perform_collect walks ALL ancestor directories of its args
+    (confcutdir defaults to None = unbounded) to collect them as packages.
+    Under the L1 sandbox the integration tree's PARENT is deliberately not
+    readable (containment), and that ancestor walk dies with PermissionError
+    before a single test runs. Pinning confcutdir to the tree keeps every
+    read inside the containment boundary; non-pytest commands are untouched
+    (PYTEST_ADDOPTS-style env tricks would also work, but an explicit argv
+    is auditable)."""
+    if not command:
+        return command
+    prog = Path(str(command[0])).name.lower()
+    prog = prog[:-4] if prog.endswith(".exe") else prog
+    pytest_token = -1
+    if "pytest" in prog:
+        pytest_token = 0
+    elif prog in ("python", "python3") and len(command) >= 3 and str(command[1]) == "-m" and "pytest" in [str(x).lower() for x in command[2:4]]:
+        pytest_token = 3
+    if pytest_token < 0:
+        return command
+    out = list(command)
+    out.insert(pytest_token + 1, "--confcutdir")
+    out.insert(pytest_token + 2, str(root))
+    return out
+
+
 @dataclass
 class WorkerWorkspace:
     task_id: str
@@ -85,7 +114,15 @@ class WorkspaceManager:
         self.repo = Path(repo).resolve()
         self.config = config
         self.ledger = ledger
-        self.home = Path(config.home) / "worktrees"
+        # Worktrees live INSIDE the workspace under .jinlin/ (same place v1
+        # already keeps config/locks/trash evidence). Containment reason: the
+        # L1 sandbox grants its write ACE on the workspace subtree, so every
+        # ANCESTOR of a worktree stays readable by the restricted token —
+        # pytest 9 stats the parent of every collected node (conftest probe)
+        # and dies with PermissionError under an unreadable parent. Harness-
+        # home placement put worktrees behind an unreadable parent and broke
+        # integration verification (WP-R2, CI/first-principles caught).
+        self.home = self.repo / ".jinlin" / "worktrees"
         self._worktrees: dict[str, WorkerWorkspace] = {}
         self._coordinators: dict[str, IntegrationCoordinator] = {}
 
@@ -166,16 +203,67 @@ class WorkspaceManager:
             self.cleanup_worker_workspace(task_id)
         _git(self.repo, "worktree", "prune")
 
+    # ------------------------------------------------------------------ sandbox plumbing (WP-R2)
+
+    def make_sandbox(self, workspace: Path | str) -> Any:
+        """Create a sandbox for a path inside the workspace and grant the
+        sandbox SID read/traverse on the ancestor chain up to the repository
+        root. Needed because the L1 write ACE covers only the workspace
+        subtree, while contained pytest runs stat ancestors of every
+        collected node. Traverse is read-only by contract (Sandbox.
+        grant_traverse never grants write)."""
+        sandbox = create_sandbox(workspace, self.config)
+        self._grant_traverse_chain(sandbox, Path(workspace))
+        return sandbox
+
+    def _grant_traverse_chain(self, sandbox: Any, target: Path) -> None:
+        grant = getattr(sandbox, "grant_traverse", None)
+        if not callable(grant):
+            return
+        repo_root = Path(os.path.normcase(os.path.abspath(self.repo)))
+        segments: list[Path] = []
+        for parent in Path(target).resolve().parents:
+            if parent == repo_root:
+                segments.append(parent)
+                break
+            segments.append(parent)
+            if len(segments) >= 8:  # containment sanity cap
+                break
+        for segment in reversed(segments):
+            try:
+                grant(segment)
+            except Exception:
+                pass  # best-effort: verification will fail closed if it matters
+
+    def sandbox_factory(self) -> Any:
+        """Worker-runtime sandbox factory bound to this manager (grants the
+        traverse chain, so worker-session verification works under L1 too)."""
+        return lambda ws: self.make_sandbox(ws)
+
 
 class IntegrationCoordinator:
-    def __init__(self, repo: Path | str, config: Any, ledger: TaskLedger | None, root_id: str, manager: WorkspaceManager) -> None:
+    def __init__(
+        self,
+        repo: Path | str,
+        config: Any,
+        ledger: TaskLedger | None,
+        root_id: str,
+        manager: WorkspaceManager,
+        sandbox_factory: Any | None = None,
+    ) -> None:
         self.repo = Path(repo).resolve()
         self.config = config
         self.ledger = ledger
         self.root_id = root_id
         self.manager = manager
+        # WP-R2: the integration tree's tests execute UNTRUSTED repository
+        # code — they must run through the Sandbox abstraction, never through
+        # a bare subprocess. Git plumbing stays argv-based by design (see the
+        # module docstring: management operations are a different trust
+        # boundary, and the reviewer's task book draws the same line).
+        self._sandbox_factory = sandbox_factory or (lambda ws: self.manager.make_sandbox(ws))
         self.integration_branch = f"agent/integration-{root_id}"
-        self._path = Path(config.home) / "worktrees" / f"integration-{root_id}"
+        self._path = manager.home / f"integration-{root_id}"
         self._ensure_integration_tree()
 
     # ------------------------------------------------------------------ setup
@@ -279,46 +367,65 @@ class IntegrationCoordinator:
         }
 
     def _verify(self) -> dict[str, Any]:
-        """Run the project's own tests on the integration tree (v2: merged
-        changes are re-verified; 'affected only' targeting arrives with
-        WP-V2.0-8's diff-aware planning)."""
+        """Run the project's own tests on the integration tree THROUGH the
+        sandbox (WP-R2: untrusted repository code, fail-closed when the
+        sandbox cannot be built or refuses; no subprocess fallback anywhere).
+        'Affected only' targeting arrives with diff-aware planning."""
         project = detect_project(self._path, self.config)
         if not project.test_commands:
-            return {"passed": True, "command": "", "exit_code": None, "note": "no test command detected"}
-        command = project.test_commands[0]
-        # process_env() is an OVERRIDE dict (UTF-8 + workspace tmp), not a
-        # complete environment: POSIX execvp resolves executables through the
-        # CHILD's PATH, so the parent PATH must be merged in or the command
-        # cannot even be found (this exact bug broke ubuntu CI).
-        env = {**os.environ, **process_env(str(self._path))}
+            return {"passed": True, "command": "", "exit_code": None, "note": "no test command detected", "sandbox": {}}
         try:
-            res = subprocess.run(
+            sandbox = self._sandbox_factory(self._path)
+        except Exception as exc:
+            return {
+                "passed": False,
+                "command": " ".join(project.test_commands[0]),
+                "exit_code": None,
+                "note": f"sandbox unavailable, fail-closed: {type(exc).__name__}: {exc}",
+                "sandbox": {},
+            }
+        self.manager._grant_traverse_chain(sandbox, self._path)
+        command = project.test_commands[0]
+        command = _with_confcutdir(command, self._path)
+        sandbox_info = {
+            "level": getattr(sandbox, "level", "L0"),
+            "engine": getattr(sandbox, "engine", "none"),
+        }
+        try:
+            res = sandbox.run(
                 command,
                 cwd=str(self._path),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=int(self.config.runtime.get("max_shell_timeout_seconds", 1800)),
-                env=env,
+                env=process_env(str(self._path)),
             )
-        except subprocess.TimeoutExpired:
-            return {"passed": False, "command": " ".join(command), "exit_code": None, "note": "verification timed out"}
-        except FileNotFoundError as exc:
+        except Exception as exc:
             return {
                 "passed": False,
                 "command": " ".join(command),
                 "exit_code": None,
-                "note": f"verification command could not be executed: {exc}",
+                "note": f"sandbox refused execution, fail-closed: {type(exc).__name__}: {exc}",
+                "sandbox": sandbox_info,
             }
-        parsed = parse_test_output((res.stdout or "") + (res.stderr or ""), res.returncode, False)
-        passed = res.returncode == 0 and parsed["failed"] == 0 and parsed["errors"] == 0 and not parsed["failed_ids"]
+        parsed = parse_test_output((res.stdout or "") + (res.stderr or ""), res.exit_code, res.timed_out)
+        passed = (
+            not res.timed_out
+            and res.exit_code == 0
+            and parsed["failed"] == 0
+            and parsed["errors"] == 0
+            and not parsed["failed_ids"]
+        )
+        note = ""
+        if res.timed_out:
+            note = "verification timed out (sandbox killed the process tree)"
+        elif not passed:
+            note = "verification command failed on the integration tree"
         return {
             "passed": passed,
             "command": " ".join(command),
-            "exit_code": res.returncode,
+            "exit_code": res.exit_code,
             "failed_ids": parsed["failed_ids"][:5],
-            "note": "",
+            "note": note,
+            "sandbox": sandbox_info,
         }
 
     def cleanup(self) -> None:

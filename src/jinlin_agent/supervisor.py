@@ -173,8 +173,14 @@ class Supervisor:
     def attach_workspace_manager(self, manager: Any) -> None:
         """WP-V2.0-5: give every WRITE worker its own git worktree and run the
         Integration Coordinator before the root completes. Without a manager
-        the supervisor behaves exactly as before (shared workspace)."""
+        the supervisor behaves exactly as before (shared workspace). Also
+        binds the runtime's sandbox factory to the manager so worker-session
+        verification inherits the ancestor traverse grants (WP-R2)."""
         self.workspace_manager = manager
+        try:
+            self.runtime.sandbox_factory = manager.sandbox_factory()
+        except Exception:
+            pass  # runtime without a swappable factory keeps its own
 
     # ------------------------------------------------------------------ entry
 

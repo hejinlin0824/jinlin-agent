@@ -1398,6 +1398,23 @@ class WindowsSandbox(Sandbox):
         spawned = self._spawn(argv, cwd, env, None, token=-1)
         return _PopenHandle(spawned)
 
+    # ----------------------------------------------------------- traverse (WP-R2)
+
+    def grant_traverse(self, path: str) -> bool:
+        """Grant read + traverse (NO write, NO inheritance) on an ancestor
+        directory for the sandbox SID.
+
+        Contained pytest runs stat every ancestor of collected test paths
+        (conftest probing). The sandbox write ACE covers the workspace
+        subtree; ancestors stay unwritable, but without at least read/
+        traverse even a stat() is denied. Read-only on purpose: this must
+        never open write access outside the workspace. Generic RX includes
+        read-attributes, which os.stat needs."""
+        with self._lock:
+            if self._closed or not getattr(self, "_ace_sid", None):
+                return False
+            return self._run_icacls([str(path), "/grant:r", f"*{self._ace_sid}:(RX)"])
+
     # ----------------------------------------------------------- probe_write
 
     def probe_write(self, path: str) -> tuple[bool, str]:
