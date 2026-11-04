@@ -218,8 +218,10 @@ class RoleSpec:
     role_id: str
     description: str = ""
     system_instruction: str = ""
-    allowed_capabilities: list[str] = field(default_factory=list)
-    allowed_tools: list[str] = field(default_factory=list)
+    # None = this role does not constrain capabilities (inherit the task's);
+    # an explicit list (including []) is the role's grant — WP-R4 semantics.
+    allowed_capabilities: list[str] | None = None
+    allowed_tools: list[str] | None = None
     can_delegate: bool = False
     output_schema: str = ""
 

@@ -287,11 +287,25 @@ class WorkerRuntime:
             "max_tool_calls": int(spec.budget.max_tool_calls),
             "timeout_seconds": int(spec.budget.timeout_seconds),
         }
-        # task capability set + workspace scope become enforced policy (ADR-006)
-        caps = {str(c).strip().upper() for c in (spec.capabilities or []) if str(c).strip()}
+        # WP-R4: effective capabilities = task ∩ role (the system layer is
+        # the config gate set enforced inside PolicyEngine). None layers do
+        # not constrain; empty layers are hard denies; the intersection can
+        # only shrink. The role's allowed_tools whitelist still applies via
+        # Harness(role=...) on top.
+        from .policy import intersect_capability_layers
+
+        task_layer = (
+            {str(c).strip().upper() for c in (spec.capabilities or []) if str(c).strip()}
+            if spec.capabilities is not None
+            else None
+        )
+        role_layer = None
+        if role is not None and getattr(role, "allowed_capabilities", None) is not None:
+            role_layer = {str(c).strip().upper() for c in role.allowed_capabilities if str(c).strip()}
+        effective_caps = intersect_capability_layers(task_layer, role_layer)
         scope = spec.workspace_scope if (spec.workspace_scope and (spec.workspace_scope.read or spec.workspace_scope.write)) else None
         policy = None
-        if caps or scope is not None:
+        if effective_caps is not None or scope is not None:
             from .policy import PolicyEngine
 
             policy = PolicyEngine(
@@ -300,7 +314,7 @@ class WorkerRuntime:
                 approval_handler=None,
                 auto_approve=False,
                 read_only=False,
-                task_capabilities=caps or None,
+                task_capabilities=effective_caps,
                 workspace_scope=scope,
             )
         context_providers = None

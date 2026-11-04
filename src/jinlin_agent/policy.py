@@ -263,6 +263,28 @@ class PolicyDecision:
     approval_request: ApprovalRequest | None = None
 
 
+def intersect_capability_layers(*layers: set[str] | None) -> set[str] | None:
+    """WP-R4: effective_capabilities = task ∩ role ∩ system.
+
+    Layer semantics (review task book §三 WP-R4): ``None`` = this layer does
+    not constrain (inherit); an EMPTY SET = this layer grants NOTHING (a hard
+    deny that must not degrade to unrestricted); an explicit set = granted.
+    The result shrinks monotonically — no layer can expand another's grant.
+    The system layer on top of this is the existing config gate set
+    (workspace.allow_write/allow_delete, approval defaults), enforced inside
+    PolicyEngine.evaluate below, which no other layer can override."""
+    effective: set[str] | None = None
+    for layer in layers:
+        if layer is None:
+            continue
+        normalized = {str(c).strip().upper() for c in layer if str(c).strip()}
+        if effective is None:
+            effective = normalized
+        else:
+            effective = effective & normalized
+    return effective
+
+
 class PolicyEngine:
     def __init__(
         self,
@@ -284,7 +306,12 @@ class PolicyEngine:
         self.approvals = ApprovalManager(config, approval_handler, auto_approve)
         self.read_only = read_only
         self.workspace = workspace
-        self.task_capabilities = ({str(c).strip().upper() for c in task_capabilities if str(c).strip()} if task_capabilities else None)
+        # empty set is a HARD deny (WP-R4): only None means unrestricted
+        self.task_capabilities = (
+            {str(c).strip().upper() for c in task_capabilities if str(c).strip()}
+            if task_capabilities is not None
+            else None
+        )
         self.workspace_scope = workspace_scope
         self._scope_prefix_cache: dict[str, Path | None] = {}
 
