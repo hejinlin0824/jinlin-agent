@@ -9,13 +9,9 @@ branches:
   main: 249bbab   # 本次独立复核的固定基线；禁止直接修改
   review/followup-fixes: live GitHub ref   # 使用前查询实时 HEAD；不要依赖静态短 SHA
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
-<<<<<<< HEAD
 test_status: "主体任务包 01–06、最终收尾包 01–04 均已由所有者本地验收；最新 HEAD 40c196f 的 Push/PR CI 均在 Ubuntu 与 Windows 通过"
 review_status: "主体任务包 01–06 完成；最终收尾包 01–04 完成；最终收尾包 05 发布候选审查进行中（不扩展功能）"
-=======
-test_status: "python -m pytest -q => 200 passed (105 v1 基线 + 95 v2 任务层); jinlin-agent eval --suite all => 22/22 (18 v1 + 4 v2)"
-review_status: "第 10 轮整改完成（rescue 停靠 / clean 隔离区验证 / forget 诊断）；CI 双平台绿，等复核"
->>>>>>> feature/v2-wp1-task-ledger
+v2_status: "v2 任务层 WP-0~10 已实施并合入整改分支 feature/v2-integration-remediation（评审任务书 WP-R1 主线整合）；详见 docs/architecture/v2/ 与本文 §16"
 trash_cleanup: "jinlin-agent clean [--workspace W] [--apply]（默认 dry-run；归属证明 = 严格命名模式 + .jinlin/trash-manifest.jsonl 记录）"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
