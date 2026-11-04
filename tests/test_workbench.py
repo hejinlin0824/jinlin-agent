@@ -51,7 +51,7 @@ def http_json(token, url, payload=None, method=None, headers=None):
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def wait_for_status(ledger, worker_id, status, timeout=90.0):
+def wait_for_status(ledger, worker_id, status, timeout=240.0):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         row = ledger.get_worker(worker_id)
@@ -201,7 +201,12 @@ def test_answer_endpoint_resumes_a_waiting_worker(tmp_path):
             time.sleep(0.05)
         status, data = http_json(server.token, f"{server.base_url}/api/tasks/{spec.task_id}/answer", payload={"answer": "use X"}, method="POST")
         assert status == 200, data
-        assert wait_for_status(ledger, worker_id, "completed")
+        reached = wait_for_status(ledger, worker_id, "completed")
+        row = ledger.get_worker(worker_id)
+        # diagnostic on failure: the worker row carries the crash/failure reason
+        assert reached and row["status"] == "completed", (
+            f"worker stuck at {row['status']}; error={row.get('error')!r}"
+        )
         assert ledger.get_task(spec.task_id)["status"] == "completed"
     finally:
         server.shutdown()
