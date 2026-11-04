@@ -207,7 +207,15 @@ def test_answer_endpoint_resumes_a_waiting_worker(tmp_path):
         assert reached and row["status"] == "completed", (
             f"worker stuck at {row['status']}; error={row.get('error')!r}"
         )
-        assert ledger.get_task(spec.task_id)["status"] == "completed"
+        # the worker row advances slightly before the task row; poll the task
+        deadline = time.monotonic() + 60
+        task_status = None
+        while time.monotonic() < deadline:
+            task_status = ledger.get_task(spec.task_id)["status"]
+            if task_status == "completed":
+                break
+            time.sleep(0.1)
+        assert task_status == "completed", f"task stuck at {task_status}"
     finally:
         server.shutdown()
         runtime.shutdown()
