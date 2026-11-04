@@ -473,6 +473,66 @@ def cmd_eval(args: Any) -> int:
     return run_suite(args.suite, base, verbose=not args.quiet)
 
 
+def cmd_ledger(args: Any) -> int:
+    """Task-layer ledger (v2.0 WP-V2.0-1): sqlite projection + task event logs."""
+    from .ledger import TaskLedger
+
+    cfg = load_config(Path(args.workspace or ".").resolve())
+    if args.rebuild:
+        ledger = TaskLedger(cfg).open()
+        try:
+            counts = ledger.rebuild()
+        finally:
+            ledger.close()
+        _print(
+            f"[ledger] rebuilt from {counts['logs']} task log(s): "
+            f"tasks={counts['tasks']} workers={counts['workers']} messages={counts['messages']}"
+        )
+    ledger = TaskLedger(cfg).open()
+    try:
+        if getattr(args, "metrics", False):
+            _print(json.dumps(ledger.metrics(), ensure_ascii=False, indent=2))
+            return 0
+        summary = ledger.summary()
+        _print(f"[ledger] {cfg.ledger_path}")
+        status_line = " ".join(f"{k}={v}" for k, v in sorted(summary["by_status"].items()))
+        _print(f"tasks: {summary['total']}  {status_line}  workers={summary['workers']}  messages={summary['messages']}")
+        for row in ledger.list_tasks()[:20]:
+            title = (row.get("title") or "").replace("\n", " ")[:60]
+            _print(f"{row['task_id']}  {row['status']:<16} root={row['root_task_id']}  {title}")
+    finally:
+        ledger.close()
+    return 0
+    try:
+        summary = ledger.summary()
+        _print(f"[ledger] {cfg.ledger_path}")
+        status_line = " ".join(f"{k}={v}" for k, v in sorted(summary["by_status"].items()))
+        _print(f"tasks: {summary['total']}  {status_line}  workers={summary['workers']}  messages={summary['messages']}")
+        for row in ledger.list_tasks()[:20]:
+            title = (row.get("title") or "").replace("\n", " ")[:60]
+            _print(f"{row['task_id']}  {row['status']:<16} root={row['root_task_id']}  {title}")
+    finally:
+        ledger.close()
+    return 0
+
+
+def cmd_serve(args: Any) -> int:
+    """Task workbench (WP-V2.0-9): ledger-only mode — cancel/answer require a
+    live runtime and stay library-side until a long-lived service exists."""
+    from .workbench import WorkbenchServer
+
+    cfg = load_config(Path(args.workspace or ".").resolve())
+    server = WorkbenchServer(cfg, runtime=None, port=int(args.port))
+    _print(f"[workbench] http://{server.base_url.split('//')[1]}  (read-only; Ctrl-C to stop)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+    return 0
+
+
 # --------------------------------------------------------------------------- main
 
 
@@ -570,10 +630,21 @@ def build_parser() -> argparse.ArgumentParser:
     quarantine_recover.set_defaults(func=cmd_rescue)
 
     ev = sub.add_parser("eval", help="run the harness conformance / evaluation suite")
-    ev.add_argument("--suite", default="all", choices=["all", "hcs", "e1e8"])
+    ev.add_argument("--suite", default="all", choices=["all", "hcs", "e1e8", "v2"])
     ev.add_argument("--workspace", default=None, help="optional base dir to keep probe fixtures (default: temp)")
     ev.add_argument("--quiet", action="store_true")
     ev.set_defaults(func=cmd_eval)
+
+    lg = sub.add_parser("ledger", help="task ledger summary (v2 task layer); --rebuild re-derives it from task event logs")
+    lg.add_argument("--rebuild", action="store_true", help="drop and rebuild the sqlite projection from <home>/tasks/*/events.jsonl")
+    lg.add_argument("--metrics", action="store_true", help="print per-root benchmark metrics (v2 §14-WP10)")
+    lg.add_argument("--workspace", default=".")
+    lg.set_defaults(func=cmd_ledger)
+
+    wb = sub.add_parser("serve", help="task workbench: read-only observability on 127.0.0.1 (v2 task layer)")
+    wb.add_argument("--port", type=int, default=7800)
+    wb.add_argument("--workspace", default=".")
+    wb.set_defaults(func=cmd_serve)
 
     return parser
 

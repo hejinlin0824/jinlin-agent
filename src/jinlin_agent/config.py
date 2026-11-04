@@ -43,6 +43,8 @@ DEFAULTS: dict[str, Any] = {
         "max_compactions": 10,
         "max_consecutive_tool_failures": 5,
         "max_tool_signature_repeats": 3,
+        "max_concurrent_workers": 2,
+        "max_replans": 3,
         "model_request_timeout_seconds": 180,
         "default_tool_timeout_seconds": 120,
         "max_shell_timeout_seconds": 1800,
@@ -150,6 +152,8 @@ _RULES: dict[str, str] = {
     "runtime.max_steps_per_session": "decrease",
     "runtime.max_model_calls": "decrease",
     "runtime.max_consecutive_tool_failures": "decrease",
+    "runtime.max_concurrent_workers": "decrease",
+    "runtime.max_replans": "decrease",
     "runtime.wall_clock_seconds": "decrease",
     "runtime.max_total_tokens": "decrease",
 }
@@ -198,6 +202,16 @@ class Config:
     @property
     def sessions_dir(self) -> Path:
         return self.home / "sessions"
+
+    @property
+    def tasks_dir(self) -> Path:
+        """Root-task event logs (v2.0 task layer); home-derived like sessions_dir."""
+        return self.home / "tasks"
+
+    @property
+    def ledger_path(self) -> Path:
+        """Task ledger sqlite projection; home-derived (ADR-008), no separate config key."""
+        return self.home / "ledger.db"
 
     def api_key(self) -> str | None:
         return os.environ.get(self.model.api_key_env)

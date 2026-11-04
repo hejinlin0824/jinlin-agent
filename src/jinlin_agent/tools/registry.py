@@ -41,6 +41,17 @@ class ToolRegistry:
             )
         return out
 
+    def view(self, allowed) -> "ToolRegistry":
+        """A subset view for role whitelists (v2 §6.2). Unknown names are
+        ignored so a RoleSpec may list tools from a newer registry; the
+        dispatcher simply cannot reach anything outside the whitelist."""
+        reg = ToolRegistry()
+        for name in allowed:
+            spec = self._tools.get(name)
+            if spec is not None:
+                reg.register(spec)
+        return reg
+
 
 def build_default_registry() -> ToolRegistry:
     from . import fs, git, patch, project, shell, task

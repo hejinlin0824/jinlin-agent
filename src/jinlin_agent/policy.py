@@ -18,9 +18,11 @@ from .paths import resolve_in_workspace, within as path_within
 from .errors import (
     APPROVAL_DENIED,
     APPROVAL_REQUIRED,
+    CAPABILITY_DENIED,
     COMMAND_DENIED,
     PATH_OUTSIDE_WORKSPACE,
     PROTECTED_FILE_ACCESS,
+    SCOPE_VIOLATED,
     AgentError,
 )
 
@@ -269,12 +271,72 @@ class PolicyEngine:
         approval_handler: ApprovalHandler | None = None,
         auto_approve: bool = False,
         read_only: bool = False,
+        task_capabilities: set[str] | None = None,
+        workspace_scope: Any | None = None,
     ) -> None:
+        """`task_capabilities` (READ/WRITE/EXECUTE/NETWORK/DELETE) and
+        `workspace_scope` come from the TaskSpec contract (v2 §9.4, ADR-006).
+        None/empty means unrestricted — the single-agent path is unchanged.
+        These checks run BEFORE approval and before tool.intent; prompt
+        content cannot grant anything."""
         self.config = config
         self.paths = PathPolicy(workspace, follow_symlinks=bool(config.workspace.get("follow_symlinks", False)))
         self.approvals = ApprovalManager(config, approval_handler, auto_approve)
         self.read_only = read_only
         self.workspace = workspace
+        self.task_capabilities = ({str(c).strip().upper() for c in task_capabilities if str(c).strip()} if task_capabilities else None)
+        self.workspace_scope = workspace_scope
+        self._scope_prefix_cache: dict[str, Path | None] = {}
+
+    # ------------------------------------------------------------------ capabilities / scope
+
+    def _cap(self, needed: str) -> bool:
+        return self.task_capabilities is None or needed in self.task_capabilities
+
+    def _capability_denial(self, needed: str, what: str) -> PolicyDecision:
+        return PolicyDecision(
+            allowed=False,
+            risk=RiskLevel.HIGH.value,
+            reason=f"task capability {needed} is not granted ({what})",
+            error=AgentError(
+                CAPABILITY_DENIED,
+                f"capability {needed} is not granted for this task: {what}",
+                source="policy",
+            ),
+        )
+
+    def _scope_prefix(self, prefix: str) -> Path | None:
+        if prefix not in self._scope_prefix_cache:
+            try:
+                self._scope_prefix_cache[prefix] = resolve_in_workspace(
+                    self.paths.root, prefix, self.paths.follow_symlinks
+                )
+            except AgentError:
+                self._scope_prefix_cache[prefix] = None
+        return self._scope_prefix_cache[prefix]
+
+    def _within_scope(self, path: Path, prefixes: list[str]) -> bool:
+        target = os.path.normcase(str(path))
+        for prefix in prefixes:
+            base = self._scope_prefix(str(prefix))
+            if base is None:
+                continue
+            base_s = os.path.normcase(str(base))
+            if target == base_s or target.startswith(base_s.rstrip(os.sep) + os.sep):
+                return True
+        return False
+
+    def _scope_violation(self, raw: str, kind: str) -> PolicyDecision:
+        return PolicyDecision(
+            allowed=False,
+            risk=RiskLevel.HIGH.value,
+            reason=f"{raw} is outside the task's {kind} scope",
+            error=AgentError(
+                SCOPE_VIOLATED,
+                f"{raw} is outside the task's {kind} scope (workspace_scope)",
+                source="policy",
+            ),
+        )
 
     # ------------------------------------------------------------------ tool
 
@@ -286,6 +348,11 @@ class PolicyEngine:
                 reason="read-only session",
                 error=AgentError(COMMAND_DENIED, "session is read-only; this operation needs write access", source="policy"),
             )
+        if side_effect == SideEffect.WRITE.value and not self._cap("WRITE"):
+            return self._capability_denial("WRITE", f"{tool_name} modifies files")
+        if side_effect == SideEffect.EXECUTE.value and tool_name != "read_process_output" and not self._cap("EXECUTE"):
+            return self._capability_denial("EXECUTE", f"{tool_name} runs processes")
+
         if side_effect in (SideEffect.READ.value, SideEffect.NONE.value):
             return self._check_reads(tool_name, args)
 
@@ -309,6 +376,9 @@ class PolicyEngine:
         _path, error = self.paths.check(raw, write=False)
         if error:
             return PolicyDecision(allowed=False, risk=RiskLevel.HIGH.value, error=error, reason=error.message)
+        read_scope = list(getattr(self.workspace_scope, "read", None) or []) if self.workspace_scope else []
+        if read_scope and _path is not None and not self._within_scope(_path, read_scope):
+            return self._scope_violation(raw, "read")
         return PolicyDecision(allowed=True)
 
     def _check_writes(self, tool_name: str, args: dict[str, Any]) -> PolicyDecision:
@@ -319,17 +389,19 @@ class PolicyEngine:
                 error=AgentError(COMMAND_DENIED, "workspace writes are disabled in config", source="policy"),
                 reason="writes disabled",
             )
+        write_scope = list(getattr(self.workspace_scope, "write", None) or []) if self.workspace_scope else []
+        candidates: list[str] = []
         path = args.get("path")
         if isinstance(path, str):
-            _p, error = self.paths.check(path, write=True)
+            candidates.append(path)
+        if tool_name == "apply_patch":
+            candidates.extend(_patch_paths(str(args.get("patch") or "")))
+        for raw in candidates:
+            resolved, error = self.paths.check(raw, write=True)
             if error:
                 return PolicyDecision(allowed=False, risk=RiskLevel.HIGH.value, error=error, reason=error.message)
-        if tool_name == "apply_patch":
-            patch_text = str(args.get("patch") or "")
-            for candidate in _patch_paths(patch_text):
-                _p, error = self.paths.check(candidate, write=True)
-                if error:
-                    return PolicyDecision(allowed=False, risk=RiskLevel.HIGH.value, error=error, reason=error.message)
+            if write_scope and resolved is not None and not self._within_scope(resolved, write_scope):
+                return self._scope_violation(raw, "write")
         if not self.config.workspace.get("allow_delete", False) and tool_name == "delete_file":
             return PolicyDecision(
                 allowed=False,
@@ -356,6 +428,10 @@ class PolicyEngine:
             except AgentError as exc:
                 return PolicyDecision(allowed=False, risk=RiskLevel.HIGH.value, error=exc, reason=exc.message)
         assessment = assess_command([str(x) for x in argv])
+        if assessment.network and not self._cap("NETWORK"):
+            return self._capability_denial("NETWORK", f"command reaches the network ({assessment.reason})")
+        if assessment.destructive and not self._cap("DELETE"):
+            return self._capability_denial("DELETE", f"command is destructive ({assessment.reason})")
         mode_decision = self._risk_mode(assessment)
         summary = " ".join(str(x) for x in argv)[:300]
         request = ApprovalRequest(

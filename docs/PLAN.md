@@ -160,3 +160,53 @@ python -m jinlin_agent run --workspace ... --task "..."   # 真实使用
 - SQLite 投影未实现（事件折叠直接承担 V1 查询），`state.py` 已保留投影边界。
 - 完成时由 harness 自动重跑 L0/L1（有代码改动时）与 L3（项目有测试时），模型自己跑过的验证仍作为事件证据保留。
 - 沙箱默认低完整性（Low IL）+ 受限令牌；若环境不允许构造，自动降级并在 `sandbox.mode` 与报告中如实标注。
+
+## 12. v2.0 任务层（WP-V2.0-1 新增，2026-11-03）
+
+> 依据 `docs/architecture/v2/`（差距分析 + ADR-001~010，已由负责人确认）。任务层的完整设计见该目录；本节只记录新增的事件 schema 与模块边界。
+
+### 12.1 两套事件流的边界
+
+- **会话事件流**（既有，`~/.jinlin-agent/sessions/<sid>/events.jsonl`）：执行证据的唯一真相，语义不变。本轮唯一的会话流变化：`report.written`（此前由 `loop.py` 发出但无折叠 handler）已收编进 `state._HANDLERS`。
+- **任务事件流**（新增，`~/.jinlin-agent/tasks/<root_task_id>/events.jsonl`）：任务层的真相流，复用同一个 `EventLog`（append-only、seq 单调、fsync、尾部修复、单写者锁），事件 `session_id` 字段承载 root_task_id。**任务流事件不进 `state._HANDLERS`**——那是会话状态的折叠器；任务流的投影是 Task Ledger。
+
+### 12.2 任务流事件类型（6 种）
+
+| 事件 | 关键 payload | 说明 |
+|---|---|---|
+| `task.created` | `task`（完整 TaskSpec dict） | 根任务或子任务创建 |
+| `task.status_changed` | `task_id` / `from` / `to` / `reason` | 合法迁移见 `taskmodel._TASK_TRANSITIONS`；终态不可复活 |
+| `worker.registered` | `worker`（完整 WorkerRecord dict） | 一次执行尝试（attempt）登记 |
+| `worker.status_changed` | `worker_id` / `task_id` / `from` / `to` / `reason` | 与任务同一张状态机表 |
+| `task.message` | `message`（完整 TaskMessage 信封 dict） | 协议消息；`message_id` 唯一 = 幂等键 |
+| `task.result_recorded` | `task_id` / `result`（v2 §7.4 结构化交付） | 交付校验：status/summary/tests 必填 |
+
+### 12.3 Task Ledger（`ledger.py` + `taskmodel.py`）
+
+- sqlite（stdlib）投影：`<home>/ledger.db`（home 派生，沿 `storage.home` 规则，无独立配置键）；WAL；`user_version` fail-closed（新版 schema 拒绝打开）。
+- 写序：**先发事件、后提交行**——崩溃在中间时最多多一条可重放事件，绝不出现"行存在而日志无法解释"。
+- `rebuild()`：删除并从全部任务日志重放重建投影（`jinlin-agent ledger --rebuild`）；重放历史迁移不再校验合法性（写入时已校验）；未知事件类型忽略（v2 §7.5 向前兼容）。
+- 状态机：`TaskStatus`（v2 §6.3 九态，无 paused）+ 迁移表 + `SESSION_TO_TASK_STATUS` 映射（session `paused` 预留态 → task `blocked`），全部由 `tests/test_ledger.py` 锁定（ADR-003）。
+- 并发（WP-1 范围）：进程内单写者（RLock）；连接不跨线程；跨进程靠 sqlite 自身锁 + 初始化锁；Worker 多线程化时由 WP-2 重新评估。
+
+## 13. Worker Runtime（WP-V2.0-2 新增，2026-11-03）
+
+- 模块 `worker_runtime.py`：Worker = 既有 Harness 内核的**参数化实例**（ADR-001），本模块不含第二套执行循环。
+- 内核参数化（三个可选参数，默认 None，原 `run` 路径零变化）：
+  - `Harness(role=RoleSpec)`：`allowed_tools` 经 `ToolRegistry.view()` 白名单过滤（白名单外工具对 dispatcher 不可达，TOOL_NOT_FOUND）；`system_instruction` 进入系统提示的 binding Role 段。
+  - `Harness(budget=dict)`：per-worker 预算覆盖（max_tokens / max_tool_calls / timeout_seconds，config 兜底）；新增 `max_tool_calls` 检查。
+  - `Harness(cancel_check=...)`：步边界协作式取消——进行中的模型调用/工具先完成，下一个 step 前退出（v2 §13.4 的 WP-2 形态）。
+- 生命周期（v2 §6.3）：submit → queued → running →（waiting_user/approval → resume 续同一 session）→ completed/failed/cancelled；重试 = 新 Attempt（次数来自 `TaskSpec.budget.max_attempts`）；`BUDGET_EXCEEDED` 不可重试（ADR-009）。
+- 并发（v2 §6.5 的 WP-2 形态）：`runtime.max_concurrent_workers`（默认 2，项目级只能减小）；**同一 workspace 整程独占**（Windows 沙箱按实例授/收工作区写 ACE，重叠实例会竞争 ACL）；不同 workspace 可并行；worktree 隔离由 WP-V2.0-5 交付（ADR-005）。
+- 任务事件流新增第 7 种事件：`worker.session_bound`（worker→session 绑定；resume 依赖它，且必须可重建）。
+- 交付结果：完成/失败均 `record_result`（v2 §7.4 结构）；`changed_files` 来自 `state.diff_paths()`，`tests` 来自最近 verification_runs；`commit` 字段留空，待 WP-V2.0-5 绑定。
+
+## 14. v2 任务层完整状态（WP-3 ~ WP-10，2026-11-03）
+
+任务流事件全族（`<home>/tasks/<root>/events.jsonl`，信封同 v1）：`task.created` / `task.status_changed` / `worker.registered` / `worker.status_changed` / `worker.session_bound` / `task.message` / `task.result_recorded` / `task.strategy_selected` / `task.replanned` / `task.commit_attached` / `integration.verified`。
+
+模块地图（v2 增量，全部单执行内核参数化，无第二套 Loop）：`taskmodel`（状态机 review_pending 等 10 态 + 迁移表 + 映射）→ `ledger`（sqlite v2 schema + 任务流 + rebuild + metrics）→ `worker_runtime`（生命周期/Attempt/并发/取消/验收门）→ `planner` + `supervisor`（评估/DAG 调度/有界重规划/stale 下游）→ `protocol`（MessagePump/信封校验/交付/评审）→ `workspace_manager`（worktree + IntegrationCoordinator）→ `policy`（能力集 + workspace_scope 强制）→ `context_provider`（依赖产物注入）→ `verify`（PROFILE_LEVELS 验收 + sandbox_level 证据）→ `workbench`（127.0.0.1 只读可观测 + cancel/answer）。
+
+评测：22 个探针（HCS P1–P6/P3b + E1–E8 + v2 P7 并行重叠 / P8 依赖顺序 / P9 能力越界拒绝 / P10 预算不重试），`jinlin-agent eval --suite all|v2`；指标 `jinlin-agent ledger --metrics`。
+
+已知边界（诚实清单，详见 docs/architecture/v2/wp-*.md 各"未完成事项"）：协作式取消为步边界；HTTP 审批有意不暴露；真实任务集对比（发布门槛）未执行；Windows 更强沙箱后端未评估；30–50 真实仓库基准未跑。

@@ -49,13 +49,31 @@ class Harness:
         read_only: bool = False,
         stream_callback: Callable[[str], None] | None = None,
         log: Callable[[str], None] = lambda msg: None,
+        role: Any | None = None,
+        budget: dict[str, Any] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+        policy: PolicyEngine | None = None,
+        context_providers: list[Any] | None = None,
     ) -> None:
+        """`role`/`budget`/`cancel_check`/`policy`/`context_providers`
+        parameterise the SAME kernel for worker instances (v2.0 WP-V2.0-2,
+        ADR-001): a RoleSpec narrows the tool registry and adds a binding role
+        instruction, a budget dict overrides the session-level limits per
+        worker, cancel_check stops the loop cooperatively at step boundaries,
+        an injected policy carries the task's capability set and workspace
+        scope (ADR-006), and context providers contribute scored blocks (v2
+        §8.2). All default to None — the plain `run` path is unchanged."""
         self.session = session
         self.config = config
         self.provider = provider
         self.state = session.state
         self.log = log
         self.stream_callback = stream_callback
+        self.role = role
+        self.budget = dict(budget) if budget else None
+        self.cancel_check = cancel_check
+        self._injected_policy = policy
+        self.context_providers = list(context_providers or [])
         self.harness_verifier = Verifier(
             session.workspace,
             config,
@@ -68,8 +86,11 @@ class Harness:
         self.project_instructions = load_project_instructions(
             session.workspace, config.project.get("instruction_files", [])
         )
-        self.registry = build_default_registry()
-        self.policy = PolicyEngine(
+        if role is not None and role.allowed_tools:
+            self.registry = build_default_registry().view(role.allowed_tools)
+        else:
+            self.registry = build_default_registry()
+        self.policy = policy if policy is not None else PolicyEngine(
             config,
             session.workspace,
             approval_handler=approval_handler,
@@ -99,6 +120,8 @@ class Harness:
             artifacts=session.artifacts,
             sandbox=session.sandbox,
             project_instructions=self.project_instructions,
+            role_instruction=(role.system_instruction if role is not None else ""),
+            providers=self.context_providers,
         )
         self.history: list[Message] = self._restore_history()
         self.invalid_decisions = 0
@@ -161,13 +184,25 @@ class Harness:
 
     def _check_budget(self) -> AgentError | None:
         cfg = self.config.runtime
-        if self.state.step_index >= int(cfg.get("max_steps_per_session", 200)):
+        limits = self.budget or {}
+
+        def _limit(key: str, cfg_key: str, default: int) -> int:
+            # per-worker budget (TaskSpec.budget) overrides the session default
+            if key in limits:
+                return int(limits[key])
+            return int(cfg.get(cfg_key, default))
+
+        if self.state.step_index >= _limit("max_steps_per_session", "max_steps_per_session", 200):
             return AgentError(BUDGET_EXCEEDED, "max_steps_per_session reached", source="runtime")
-        if self.state.model_calls >= int(cfg.get("max_model_calls", 120)):
+        if self.state.model_calls >= _limit("max_model_calls", "max_model_calls", 120):
             return AgentError(BUDGET_EXCEEDED, "max_model_calls reached", source="runtime")
-        if self.state.tokens_in + self.state.tokens_out > int(cfg.get("max_total_tokens", 4_000_000)):
+        if self.state.tokens_in + self.state.tokens_out > _limit("max_tokens", "max_total_tokens", 4_000_000):
             return AgentError(BUDGET_EXCEEDED, "max_total_tokens reached", source="runtime")
-        if time.monotonic() - self._started > float(cfg.get("wall_clock_seconds", 14400)):
+        max_tool_calls = _limit("max_tool_calls", "max_tool_calls", 0)
+        if max_tool_calls > 0 and self.state.tool_calls_total >= max_tool_calls:
+            return AgentError(BUDGET_EXCEEDED, "max_tool_calls reached", source="runtime")
+        wall = float(limits.get("timeout_seconds", cfg.get("wall_clock_seconds", 14400)))
+        if time.monotonic() - self._started > wall:
             return AgentError(BUDGET_EXCEEDED, "wall_clock_seconds reached", source="runtime")
         return None
 
@@ -193,6 +228,12 @@ class Harness:
             return self.state.status
         try:
             while not self.state.is_terminal():
+                # cooperative cancellation (worker runtime): takes effect at
+                # step boundaries — the in-flight model call/tool finishes first
+                if self.cancel_check is not None and self.cancel_check():
+                    self.session.emit("session.cancelled", {"reason": "cancelled by the runtime before the next step"})
+                    self.session.close()
+                    return Status.CANCELLED.value
                 budget_error = self._check_budget()
                 if budget_error is not None:
                     self._fail(budget_error)

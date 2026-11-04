@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from jinlin_agent.evalkit import E_PROBES, HCS_PROBES, run_probe
+from jinlin_agent.evalkit import E_PROBES, HCS_PROBES, V2_PROBES, run_probe
 
 
 @pytest.mark.parametrize("probe", HCS_PROBES, ids=lambda p: f"hcs-{p.name}")
@@ -20,5 +20,11 @@ def test_hcs_conformance(probe):
 
 @pytest.mark.parametrize("probe", E_PROBES, ids=lambda p: f"eval-{p.name}")
 def test_task_evaluations(probe):
+    ok, detail = run_probe(probe)
+    assert ok, f"{probe.name} {probe.title}: {detail}"
+
+
+@pytest.mark.parametrize("probe", V2_PROBES, ids=lambda p: f"v2-{p.name}")
+def test_v2_task_layer(probe):
     ok, detail = run_probe(probe)
     assert ok, f"{probe.name} {probe.title}: {detail}"
