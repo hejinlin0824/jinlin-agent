@@ -574,9 +574,11 @@ def check_task_verification(spec: Any, result: dict[str, Any] | None, has_test_c
     tests = [t for t in (result or {}).get("tests", []) if isinstance(t, dict)]
     changed = bool((result or {}).get("changed_files"))
     if not changed:
-        # pure-analysis deliverables: L0/L1 inspect file changes; there is
-        # nothing for them to inspect (v2 §10.2: do not fabricate code tests)
-        required = [lvl for lvl in required if lvl not in ("L0", "L1")]
+        # Pure-analysis deliverables (v2 §10.2): L0/L1 inspect file changes
+        # and L3 needs a runnable delta — there is nothing for them to
+        # verify. Only a profile that EXPLICITLY demands L3 ("tests") keeps
+        # it, so an unverifiable demand still fails loudly.
+        required = [lvl for lvl in required if lvl == "L3" and profile == "tests"]
     for level in required:
         if not any(
             str(t.get("level", "")).upper() == level and str(t.get("status", "")) == "passed" for t in tests

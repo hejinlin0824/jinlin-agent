@@ -57,8 +57,10 @@ def test_gate_rejects_missing_or_failed_required_levels():
     assert any("L3" in r for r in reasons)
     reasons = check_task_verification(spec_with("code"), result_with(("L0", "passed"), ("L1", "passed"), ("L3", "failed")))
     assert any("L3" in r for r in reasons)
-    reasons = check_task_verification(spec_with("code"), {"status": "completed", "summary": "x", "tests": []})
-    assert len(reasons) == 1 and "L3" in reasons[0]  # no changes -> only L3 remains (analysis-style)
+    reasons = check_task_verification(
+        spec_with("code"), {"status": "completed", "summary": "x", "changed_files": ["a.py"], "tests": []}
+    )
+    assert len(reasons) == 3  # changes present: L0, L1, L3 all required and missing
 
 
 def test_l3_applicability_depends_on_the_project():

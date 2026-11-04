@@ -72,16 +72,26 @@ def test_schema_v1_migrates_to_v2(tmp_path):
 
     # rewind the projection to the exact v1 shape (ALTER DROP keeps the PK)
     conn = sqlite3.connect(str(cfg.ledger_path))
-    conn.execute("ALTER TABLE messages DROP COLUMN processed_at")
-    conn.execute("ALTER TABLE tasks DROP COLUMN requires_review")
-    conn.execute("PRAGMA user_version = 1")
+    for ddl in (
+        "ALTER TABLE messages DROP COLUMN processed_at",
+        "ALTER TABLE tasks DROP COLUMN requires_review",
+        "ALTER TABLE tasks DROP COLUMN integration",
+        "ALTER TABLE workers DROP COLUMN last_commit",
+        "PRAGMA user_version = 1",
+    ):
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass  # already absent (older shape)
     conn.commit()
     conn.close()
 
     ledger2 = TaskLedger(cfg).open()
+    assert ledger2.SCHEMA_VERSION == 3
     row = ledger2.get_task(spec.task_id)
     assert row is not None
     assert row["requires_review"] is False  # v1 default
+    assert row["integration"] == ""  # migrated rows start at the neutral default
     pump = MessagePump(ledger2)
     pump.publish(envelope(root_task_id=spec.task_id, task_id=spec.task_id))
     seen = pump.drain(spec.task_id, lambda msg: None)

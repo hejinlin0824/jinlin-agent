@@ -45,7 +45,7 @@ from .taskmodel import (
     validate_task_result,
 )
 
-_SCHEMA_V2 = """
+_SCHEMA_V3 = """
 CREATE TABLE IF NOT EXISTS tasks (
     task_id TEXT PRIMARY KEY,
     root_task_id TEXT NOT NULL,
@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     budget TEXT NOT NULL DEFAULT '{}',
     verification TEXT NOT NULL DEFAULT 'code',
     requires_review INTEGER NOT NULL DEFAULT 0,
+    integration TEXT NOT NULL DEFAULT '',
     result TEXT,
     error TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT '',
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS workers (
     branch TEXT NOT NULL DEFAULT '',
     base_commit TEXT NOT NULL DEFAULT '',
     budget_used TEXT NOT NULL DEFAULT '{}',
+    last_commit TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT ''
 );
@@ -103,7 +105,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_root ON messages (root_task_id);
 _TASK_COLS = (
     "task_id, root_task_id, parent_task_id, title, description, task_kind, status, role, "
     "dependencies, capabilities, workspace_scope, acceptance_criteria, budget, verification, "
-    "requires_review, result, error, created_at, updated_at"
+    "requires_review, integration, result, error, created_at, updated_at"
 )
 
 
@@ -112,7 +114,7 @@ def _json(value: Any) -> str:
 
 
 class TaskLedger:
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, config: Any) -> None:
         self.config = config
@@ -197,11 +199,15 @@ class TaskLedger:
             )
         if version < self.SCHEMA_VERSION:
             if version < 1:
-                conn.executescript(_SCHEMA_V2)
+                conn.executescript(_SCHEMA_V3)
             else:
-                # v1 -> v2: protocol processing marks + review requirement flag
-                conn.execute("ALTER TABLE messages ADD COLUMN processed_at TEXT NOT NULL DEFAULT ''")
-                conn.execute("ALTER TABLE tasks ADD COLUMN requires_review INTEGER NOT NULL DEFAULT 0")
+                if version < 2:
+                    # v1 -> v2: protocol processing marks + review requirement flag
+                    conn.execute("ALTER TABLE messages ADD COLUMN processed_at TEXT NOT NULL DEFAULT ''")
+                    conn.execute("ALTER TABLE tasks ADD COLUMN requires_review INTEGER NOT NULL DEFAULT 0")
+                # v2 -> v3: integration state + worker commit binding (WP-R5/R6)
+                conn.execute("ALTER TABLE tasks ADD COLUMN integration TEXT NOT NULL DEFAULT ''")
+                conn.execute("ALTER TABLE workers ADD COLUMN last_commit TEXT NOT NULL DEFAULT ''")
             conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
             conn.commit()
 
@@ -245,7 +251,7 @@ class TaskLedger:
                 {"task": data},
             )
             conn.execute(
-                f"INSERT INTO tasks ({_TASK_COLS}) VALUES ({','.join('?' * 19)})",
+                f"INSERT INTO tasks ({_TASK_COLS}) VALUES ({','.join('?' * 20)})",
                 (
                     spec.task_id,
                     root,
@@ -262,6 +268,7 @@ class TaskLedger:
                     _json(spec.budget.to_dict()),
                     spec.verification,
                     1 if spec.requires_review else 0,
+                    "pending",
                     None,
                     "",
                     spec.created_at,
@@ -334,7 +341,7 @@ class TaskLedger:
             conn.commit()
             return self.get_task(task_id)  # type: ignore[return-value]
 
-    def attach_commit(self, task_id: str, commit: str) -> None:
+    def attach_commit(self, task_id: str, commit: str, worker_id: str = "") -> None:
         """Bind the integration commit to the task's recorded result. Evented
         (task.commit_attached) so a rebuilt projection keeps the binding."""
         with self._mu:
@@ -342,12 +349,21 @@ class TaskLedger:
             result = row.get("result")
             if not isinstance(result, dict):
                 return
-            self._emit(row["root_task_id"], "task.commit_attached", {"task_id": task_id, "commit": commit})
+            self._emit(
+                row["root_task_id"],
+                "task.commit_attached",
+                {"task_id": task_id, "commit": commit, "worker_id": worker_id},
+            )
             result["commit"] = commit
             self._require_conn().execute(
-                "UPDATE tasks SET result = ?, updated_at = ? WHERE task_id = ?",
+                "UPDATE tasks SET result = ?, integration = 'integrated', updated_at = ? WHERE task_id = ?",
                 (_json(result), _now(), task_id),
             )
+            if worker_id:
+                self._require_conn().execute(
+                    "UPDATE workers SET last_commit = ?, updated_at = ? WHERE worker_id = ?",
+                    (commit, _now(), worker_id),
+                )
             self._require_conn().commit()
 
     @staticmethod
@@ -359,6 +375,7 @@ class TaskLedger:
             out[key] = json.loads(out.get(key) or "{}")
         out["result"] = json.loads(out["result"]) if out.get("result") else None
         out["requires_review"] = bool(out.get("requires_review", 0))
+        out["integration"] = out.get("integration", "")
         return out
 
     # ------------------------------------------------------------------ workers
@@ -453,6 +470,7 @@ class TaskLedger:
     def _worker_row(row: sqlite3.Row) -> dict[str, Any]:
         out = dict(row)
         out["budget_used"] = json.loads(out.get("budget_used") or "{}")
+        out["last_commit"] = out.get("last_commit", "")
         return out
 
     # ------------------------------------------------------------------ messages
@@ -618,7 +636,7 @@ class TaskLedger:
         counts = {"tasks": 0, "workers": 0, "messages": 0, "logs": 0}
         with self._mu:
             conn.executescript("DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS workers; DROP TABLE IF EXISTS tasks;")
-            conn.executescript(_SCHEMA_V2)
+            conn.executescript(_SCHEMA_V3)
             conn.commit()
             tasks_dir = Path(self.config.tasks_dir)
             log_dirs = sorted(p for p in tasks_dir.iterdir() if (p / "events.jsonl").exists()) if tasks_dir.exists() else []
@@ -637,7 +655,7 @@ class TaskLedger:
         if etype == "task.created":
             spec = TaskSpec.from_dict(payload.get("task") or {})
             conn.execute(
-                f"INSERT INTO tasks ({_TASK_COLS}) VALUES ({','.join('?' * 19)})",
+                f"INSERT INTO tasks ({_TASK_COLS}) VALUES ({','.join('?' * 20)})",
                 (
                     spec.task_id,
                     spec.root_task_id or spec.task_id,
@@ -654,6 +672,7 @@ class TaskLedger:
                     _json(spec.budget.to_dict()),
                     spec.verification,
                     1 if spec.requires_review else 0,
+                    "pending",
                     None,
                     "",
                     spec.created_at or ts,
@@ -732,9 +751,11 @@ class TaskLedger:
             )
             counts["messages"] += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         elif etype == "task.result_recorded":
+            result = payload.get("result") or {}
+            integration = "not_needed" if not result.get("changed_files") else "pending"
             conn.execute(
-                "UPDATE tasks SET result = ?, updated_at = ? WHERE task_id = ?",
-                (_json(payload.get("result") or {}), ts, payload.get("task_id", "")),
+                "UPDATE tasks SET result = ?, integration = ?, updated_at = ? WHERE task_id = ?",
+                (_json(result), integration, ts, payload.get("task_id", "")),
             )
         elif etype == "task.commit_attached":
             row = conn.execute("SELECT result FROM tasks WHERE task_id = ?", (payload.get("task_id", ""),)).fetchone()
@@ -742,8 +763,13 @@ class TaskLedger:
                 result = json.loads(row["result"])
                 result["commit"] = payload.get("commit", "")
                 conn.execute(
-                    "UPDATE tasks SET result = ?, updated_at = ? WHERE task_id = ?",
+                    "UPDATE tasks SET result = ?, integration = 'integrated', updated_at = ? WHERE task_id = ?",
                     (_json(result), ts, payload.get("task_id", "")),
+                )
+            if payload.get("worker_id"):
+                conn.execute(
+                    "UPDATE workers SET last_commit = ?, updated_at = ? WHERE worker_id = ?",
+                    (payload.get("commit", ""), ts, payload.get("worker_id")),
                 )
         # unknown types are ignored (forward compatibility, v2 §7.5)
 

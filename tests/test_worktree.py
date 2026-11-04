@@ -287,8 +287,8 @@ def test_supervisor_runs_workers_in_worktrees_and_integrates(tmp_path):
         for task_row in ledger.list_tasks(tid):
             if task_row["task_id"] != tid:
                 assert task_row["result"]["commit"], f"task {task_row['title']} has no attached commit"
-        assert not list((cfg.home / "worktrees").glob("task_*"))
-        assert (cfg.home / "worktrees" / f"integration-{tid}").exists()  # deliverable staging kept
+        assert not list((repo / ".jinlin" / "worktrees").glob("task_*"))
+        assert (repo / ".jinlin" / "worktrees" / f"integration-{tid}").exists()  # deliverable staging kept
         # the STABLE branch was never touched before the root gate
         stable = (repo / "calc.py").read_text(encoding="utf-8")
         assert "# reviewed" not in stable  # stable branch still has the original code

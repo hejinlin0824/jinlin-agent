@@ -203,6 +203,80 @@ class WorkspaceManager:
             self.cleanup_worker_workspace(task_id)
         _git(self.repo, "worktree", "prune")
 
+    # ------------------------------------------------------------------ recovery (WP-R5)
+
+    def recover(self, ledger: TaskLedger | None, root_id: str) -> dict[str, Any]:
+        """Rebuild in-memory worktree mappings after a process restart.
+
+        Live worktrees under the manager home with a branch agent/task-<id>
+        whose ledger worker is still non-terminal are ADOPTED (integration can
+        finish what the restart interrupted). Anything else under the home —
+        worktrees of terminal workers, unrecognized directories — is reported
+        as an ORPHAN and never auto-deleted: a deliverable's only copy is not
+        trash (WP-R5.7)."""
+        adopted: list[WorkerWorkspace] = []
+        orphans: list[dict[str, str]] = []
+        seen_worktree_paths: set[Path] = set()
+        listing = _git(self.repo, "worktree", "list", "--porcelain").stdout
+        for entry in listing.split("\n\n"):
+            lines = [line for line in entry.split("\n") if line.strip()]
+            path: Path | None = None
+            branch: str | None = None
+            for line in lines:
+                if line.startswith("worktree "):
+                    path = Path(line[len("worktree "):])
+                elif line.startswith("branch "):
+                    branch = line[len("branch "):].replace("refs/heads/", "")
+            if path is None or branch is None:
+                continue
+            if path.parent != self.home:
+                continue  # external worktrees are not ours to manage
+            seen_worktree_paths.add(path.resolve())
+            if path.name.startswith("integration-"):
+                continue  # the integration tree is coordinator-managed
+            task_id = path.name
+            expected_branch = f"agent/task-{task_id}"
+            if branch != expected_branch:
+                orphans.append({"path": str(path), "reason": f"unexpected branch {branch!r}"})
+                continue
+            rows = [w for w in ledger.list_workers(task_id) if w.get("branch") == branch] if ledger is not None else []
+            worker_row = rows[-1] if rows else None
+            task_row = ledger.get_task(task_id) if ledger is not None else None
+            integration_done = task_row is not None and task_row.get("integration") == "integrated"
+            adoptable = worker_row is not None and (
+                worker_row["status"] not in ("completed", "failed", "cancelled")
+                # completed-but-unintegrated: exactly what a restart interrupted
+                or (worker_row["status"] == "completed" and not integration_done)
+            )
+            if adoptable:
+                base = worker_row.get("base_commit", "")
+                ws = WorkerWorkspace(task_id=task_id, path=path, branch=branch, base_commit=base)
+                self._worktrees[task_id] = ws
+                adopted.append(ws)
+            else:
+                orphans.append(
+                    {
+                        "path": str(path),
+                        "reason": "worktree of a terminal/integrated worker; inspect before deleting",
+                    }
+                )
+        # plain directories under the home are not git worktrees, so the
+        # porcelain listing never shows them — scan them too (report only)
+        if self.home.exists():
+            for child in self.home.iterdir():
+                if child.name.startswith("integration-"):
+                    continue
+                if child.resolve() in seen_worktree_paths:
+                    continue
+                if child.name.startswith("task_"):
+                    orphans.append(
+                        {
+                            "path": str(child),
+                            "reason": "unrecognized directory (not a registered worktree); inspect before deleting",
+                        }
+                    )
+        return {"adopted": adopted, "orphans": orphans}
+
     # ------------------------------------------------------------------ sandbox plumbing (WP-R2)
 
     def make_sandbox(self, workspace: Path | str) -> Any:

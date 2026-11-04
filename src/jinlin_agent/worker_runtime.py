@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .errors import (
+    APPROVAL_REQUIRED,
     TASK_ALREADY_EXISTS,
     TASK_NOT_FOUND,
     TASK_TRANSITION_INVALID,
@@ -58,8 +59,10 @@ from .session import SessionManager
 from .taskmodel import (
     SESSION_TO_TASK_STATUS,
     DEFAULT_ROLE_SPECS,
+    TaskMessage,
     WorkerRecord,
     can_transition,
+    new_message_id,
     new_worker_id,
 )
 
@@ -183,8 +186,25 @@ class WorkerRuntime:
                 self.ledger.set_worker_status(worker_id, "cancelled", reason=reason or "cancelled before start")
                 self._advance_task(current["task_id"], "cancelled", reason=reason or "cancelled before start")
 
-    def resume_worker(self, worker_id: str, answer: str = "", role_spec: Any | None = None) -> dict[str, Any]:
-        """Continue a waiting worker's session (v2 §13.3: ask user -> resolve)."""
+    def resume_worker(
+        self,
+        worker_id: str,
+        answer: str = "",
+        role_spec: Any | None = None,
+        approval_decision: str | None = None,
+    ) -> dict[str, Any]:
+        """Continue a waiting worker's session (v2 §13.3).
+
+        WP-R7: `waiting_user` resumes with free TEXT (information); 
+        `waiting_approval` is a PERMISSION decision and cannot be granted by
+        text — it requires an explicit approval_decision:
+
+        * ``denied``        -> the session resumes with the operation denied;
+        * ``approved_once`` -> NOT supported through the headless worker path:
+          the kernel already fail-closed that approval, and a worker-runtime
+          re-grant would be a policy bypass. Interactive CLI approval is the
+          only grant path (recorded honestly; an HTTP approval queue with a
+          persisted approval registry is future work)."""
         with self._mu:
             row = self.ledger.get_worker(worker_id)
             if row is None:
@@ -195,12 +215,29 @@ class WorkerRuntime:
                     f"worker {worker_id} is {row['status']}; only waiting workers can be resumed",
                     source="runtime",
                 )
+            if row["status"] == "waiting_approval":
+                if approval_decision not in ("approved_once", "denied"):
+                    raise AgentError(
+                        APPROVAL_REQUIRED,
+                        "resuming a worker waiting on APPROVAL requires an explicit "
+                        "approval_decision ('approved_once' or 'denied'); free text cannot "
+                        "grant permissions",
+                        source="runtime",
+                    )
+                if approval_decision == "approved_once":
+                    raise AgentError(
+                        APPROVAL_REQUIRED,
+                        "worker-runtime approval grants are not supported: the approval was "
+                        "fail-closed by the kernel and can only be granted through the "
+                        "interactive CLI approval path",
+                        source="runtime",
+                    )
             spec = task_spec_from_row(self.ledger.require_task(row["task_id"]))
             role = role_spec if role_spec is not None else DEFAULT_ROLE_SPECS.get(spec.role)
             record = WorkerRecord.from_dict(row)
             self._cancel_flags[worker_id] = threading.Event()
             self._futures[worker_id] = self._executor.submit(
-                self._run_resume, spec, record, role, self._cancel_flags[worker_id], answer
+                self._run_resume, spec, record, role, self._cancel_flags[worker_id], answer, approval_decision
             )
         return self.wait_worker(worker_id)
 
@@ -248,7 +285,15 @@ class WorkerRuntime:
             if session is not None:
                 session.close()
 
-    def _run_resume(self, spec: Any, row: WorkerRecord, role: Any, cancel_flag: threading.Event, answer: str) -> None:
+    def _run_resume(
+        self,
+        spec: Any,
+        row: WorkerRecord,
+        role: Any,
+        cancel_flag: threading.Event,
+        answer: str,
+        approval_decision: str | None = None,
+    ) -> None:
         workspace = Path(row.workspace_path)
         session = None
         try:
@@ -257,6 +302,12 @@ class WorkerRuntime:
                 self._advance_task(row.task_id, "running", reason="worker resumed")
                 sandbox = self.sandbox_factory(workspace)
                 session = SessionManager.open(self.config, row.session_id, sandbox)
+                if approval_decision == "denied":
+                    # the explicit permission decision: the operation stays denied
+                    session.emit(
+                        "approval.resolved",
+                        {"decision": "denied", "note": "denied from the workbench/task resume path"},
+                    )
                 if answer.strip():
                     session.emit("session.user_input", {"text": answer.strip()})
                 harness = self._build_harness(session, role, spec, cancel_flag)
@@ -388,6 +439,21 @@ class WorkerRuntime:
             # exhausted; a retryable failure leaves the task running
         else:
             self._advance_task(record.task_id, task_status, reason=reason)
+            if status == "waiting_approval" and (pending := getattr(state, "pending_approval", None)):
+                try:
+                    self.ledger.record_message(
+                        TaskMessage(
+                            message_id=new_message_id(),
+                            root_task_id=row.root_task_id or task_id,
+                            task_id=record.task_id,
+                            worker_id=record.worker_id,
+                            attempt=record.attempt,
+                            message_type="task.approval_required",
+                            payload={"approval": session_state_pending},
+                        )
+                    )
+                except Exception:
+                    pass  # visibility best-effort; the session events hold the truth
         self._store_outcome(
             record,
             status=outcome_status,
@@ -461,3 +527,87 @@ class WorkerRuntime:
                 "error_code": error_code,
                 "result": task_row.get("result"),
             }
+
+
+def recover_interrupted(config: Any, ledger: TaskLedger, log: Any = None) -> dict[str, int]:
+    """WP-R5: reconcile worker attempts that were in flight when a process
+    died. The SESSION EVENT LOG is the truth for what actually happened:
+
+    * session terminal (completed/failed) -> the worker row is reconciled to
+      match and the deliverable/result recorded (integration still enforced
+      by the normal gates);
+    * session missing or non-terminal (crashed mid-run) -> the worker becomes
+      failed(RECOVERY_UNCERTAIN) and its task is BLOCKED for adjudication —
+      an unknown state is never promoted to success, and there is never an
+      automatic retry (ADR-009);
+    * queued/waiting workers are preserved (reschedulable / waiting);
+    * cancelled workers are never revived."""
+    from pathlib import Path as _Path
+
+    from .errors import RECOVERY_UNCERTAIN, AgentError
+    from .events import read_events
+    from .state import recover as fold_events
+    from .taskmodel import SESSION_TO_TASK_STATUS, can_transition
+
+    log = log or (lambda msg: None)
+    report = {"failed_recovered": 0, "completed_reconciled": 0, "preserved": 0}
+    for row in ledger.list_workers():
+        if row["status"] != "running":
+            continue
+        worker_id = row["worker_id"]
+        task_id = row["task_id"]
+        sid = row.get("session_id") or ""
+        session_status = ""
+        session_state = None
+        if sid:
+            session_dir = _Path(config.sessions_dir) / sid
+            if (session_dir / "events.jsonl").exists():
+                try:
+                    session_state = fold_events(read_events(session_dir))
+                    session_status = session_state.status
+                except AgentError as exc:
+                    log(f"[recovery] {worker_id}: session {sid} unreadable ({exc.code}); treating as uncertain")
+        task_row = ledger.get_task(task_id) or {}
+
+        def _task_advance(new_status: str, reason: str) -> None:
+            if task_row and can_transition(task_row["status"], new_status):
+                ledger.set_task_status(task_id, new_status, reason=reason)
+
+        if session_status == "completed":
+            ledger.set_worker_status(worker_id, "completed", reason="recovered: session completed")
+            completion = session_state.completion or {}
+            result = {
+                "status": "completed",
+                "summary": str(completion.get("summary", "")) or "recovered completed session",
+                "changed_files": session_state.diff_paths(),
+                "commit": "",
+                "tests": [],
+                "known_risks": ["recovered after restart; verification state carried over from the session log"],
+                "follow_up": [],
+            }
+            try:
+                ledger.record_result(task_id, result)
+            except Exception:
+                pass  # a task whose contract rejects this result stays for adjudication
+            _task_advance("completed", "recovered: session completed")
+            report["completed_reconciled"] += 1
+            continue
+
+        reasons = {
+            "failed": "recovered: session recorded a failure",
+        }
+        if session_status == "failed":
+            ledger.set_worker_status(worker_id, "failed", reason=reasons["failed"])
+            report["failed_recovered"] += 1
+            continue
+
+        # crashed mid-run (or session unreadable): uncertain, fail closed
+        ledger.set_worker_status(
+            worker_id,
+            "failed",
+            reason=f"recovery: {RECOVERY_UNCERTAIN} — the session shows no terminal state; "
+            "adjudicate the workspace before any retry",
+        )
+        _task_advance("blocked", reason=f"worker {worker_id} interrupted mid-run; adjudication required")
+        report["failed_recovered"] += 1
+    return report

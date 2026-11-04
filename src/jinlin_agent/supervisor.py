@@ -322,10 +322,21 @@ class Supervisor:
                                 "conflicts": integration.get("conflicts", []),
                                 "replans": replans,
                             }
+                        if integration["status"] == "recovery_failed":
+                            reason = "integration recovery failed: " + "; ".join(
+                                f"{f['task_id']} ({f['reason']})" for f in integration.get("failures", [])
+                            )
+                            self._advance_task(root_id, "blocked", reason=reason)
+                            return {"status": "blocked", "task_id": root_id, "reason": reason, "replans": replans}
                         if integration["status"] != "integrated":
                             reason = f"integration failed: {integration['status']}"
                             self._advance_task(root_id, "failed", reason=reason)
                             return {"status": "failed", "task_id": root_id, "reason": reason, "replans": replans}
+                    # manager-less runs are direct-edit by definition: the
+                    # deliverables already live in the user workspace, so
+                    # there is nothing to "integrate" (result_recorded marks
+                    # those tasks integration=not_needed / pending-with-direct-
+                    # edit, which the root gate accepts as resolved)
                     self._advance_task(root_id, "completed", "all subtasks resolved")
                     return {"status": "completed", "task_id": root_id, "replans": replans}
                 self._advance_task(root_id, "failed", "no runnable subtasks and the set is not fully resolved")
@@ -400,25 +411,46 @@ class Supervisor:
         """Merge every completed worker's worktree into the integration branch,
         attach the commits to the task results, release the worker worktrees.
         The integration worktree itself is kept as the deliverable staging
-        until the owner merges/releases."""
+        until the owner merges/releases. A completed task with changes whose
+        worktree is unrecoverable is a RECOVERY FAILURE — never silently
+        skipped (WP-R6)."""
         assert self.workspace_manager is not None
         conflicts: list[dict[str, Any]] = []
+        recovery_failures: list[dict[str, Any]] = []
         for row in self.ledger.list_tasks(root_id):
             if row["task_id"] == root_id or row["status"] != "completed":
                 continue
-            if self.workspace_manager.get(row["task_id"]) is None:
-                continue  # task ran without a worktree (read-only replan leftover)
-            outcome = self.workspace_manager.integrate(row["task_id"], root_id)
-            if outcome["status"] == "conflict":
-                conflicts.append({"task_id": row["task_id"], "conflict_files": outcome.get("conflict_files", [])})
+            if self.workspace_manager.get(row["task_id"]) is not None:
+                outcome = self.workspace_manager.integrate(row["task_id"], root_id)
+                if outcome["status"] == "conflict":
+                    conflicts.append({"task_id": row["task_id"], "conflict_files": outcome.get("conflict_files", [])})
+                    continue
+                if outcome["status"] != "integrated":
+                    return {"status": outcome["status"], "task_id": row["task_id"], "detail": outcome}
+                if outcome.get("commit") and row.get("result"):
+                    workers = [w for w in self.ledger.list_workers(row["task_id"]) if w["status"] == "completed"]
+                    self.ledger.attach_commit(row["task_id"], outcome["commit"], worker_id=workers[-1]["worker_id"] if workers else "")
+                self.workspace_manager.cleanup_worker_workspace(row["task_id"])
                 continue
-            if outcome["status"] != "integrated":
-                return {"status": outcome["status"], "task_id": row["task_id"], "detail": outcome}
-            if outcome.get("commit") and row.get("result"):
-                self.ledger.attach_commit(row["task_id"], outcome["commit"])
-            self.workspace_manager.cleanup_worker_workspace(row["task_id"])
+            # no worktree in the (possibly restarted) manager: acceptable only
+            # when there is nothing to integrate or it is already integrated
+            result = row.get("result") or {}
+            if row.get("integration") == "integrated" or result.get("commit"):
+                continue
+            if not result.get("changed_files"):
+                continue  # nothing to integrate: the result_recorded replay
+                # already recorded integration="not_needed" for these
+            recovery_failures.append(
+                {
+                    "task_id": row["task_id"],
+                    "title": row.get("title", ""),
+                    "reason": "completed task has changes but no recoverable worktree to integrate",
+                }
+            )
         if conflicts:
             return {"status": "conflict", "conflicts": conflicts}
+        if recovery_failures:
+            return {"status": "recovery_failed", "failures": recovery_failures}
         return {"status": "integrated"}
 
     # ------------------------------------------------------------------ review gate (WP-V2.0-4)
