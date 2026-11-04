@@ -12,7 +12,9 @@ not display fake realtime state).
 
 from __future__ import annotations
 
+import hmac
 import json
+import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,6 +27,7 @@ _INDEX_HTML = """<!doctype html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
+<meta name="workbench-token" content="{{TOKEN}}">
 <title>jinlin-agent workbench</title>
 <style>
   body { font-family: -apple-system, "Segoe UI", sans-serif; margin: 24px; background: #111; color: #ddd; }
@@ -44,40 +47,55 @@ _INDEX_HTML = """<!doctype html>
 </tr></thead><tbody></tbody></table>
 <div id="detail"></div>
 <script>
+// WP-R3: untrusted task data is rendered with textContent-only DOM
+// construction — hostile task titles or messages can never execute
+// script in this page (guarded by tests). The per-start token gates every /api call.
+const TOKEN = document.querySelector('meta[name="workbench-token"]').content;
 const BAD = new Set(["failed", "cancelled", "blocked"]);
 const WAIT = new Set(["waiting_user", "waiting_approval", "queued", "review_pending"]);
 function cls(s) { return BAD.has(s) ? "bad" : WAIT.has(s) ? "wait" : "ok"; }
+function cell(text) { const td = document.createElement("td"); td.textContent = String(text); return td; }
+function api(path, options) {
+  options = options || {};
+  options.headers = Object.assign({ "Authorization": "Bearer " + TOKEN }, options.headers || {});
+  return fetch(path, options);
+}
 async function load() {
-  const data = await (await fetch("/api/tasks")).json();
+  const data = await (await api("/api/tasks")).json();
   const tb = document.querySelector("#tasks tbody");
-  tb.innerHTML = "";
+  tb.textContent = "";
   for (const t of data.tasks) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${t.task_id}</td><td>${t.title}</td>
-      <td class="status ${cls(t.status)}">${t.status}</td><td>${t.root_task_id}</td>
-      <td>${(t.dependencies || []).join(", ")}</td><td>${t.verification || ""}</td>
-      <td>
-        <button onclick="detail('${t.task_id}')">detail</button>
-        <button onclick="cancel('${t.task_id}')">cancel</button>
-        <input id="ans-${t.task_id}" placeholder="answer..." size="12">
-        <button onclick="answer('${t.task_id}')">answer</button>
-      </td>`;
+    tr.appendChild(cell(t.task_id));
+    tr.appendChild(cell(t.title));
+    const st = cell(t.status); st.className = "status " + cls(t.status); tr.appendChild(st);
+    tr.appendChild(cell(t.root_task_id));
+    tr.appendChild(cell((t.dependencies || []).join(", ")));
+    tr.appendChild(cell(t.verification || ""));
+    const act = document.createElement("td");
+    const bDetail = document.createElement("button"); bDetail.textContent = "detail"; bDetail.dataset.taskId = t.task_id; bDetail.addEventListener("click", function () { detail(t.task_id); });
+    const bCancel = document.createElement("button"); bCancel.textContent = "cancel"; bCancel.addEventListener("click", function () { cancel(t.task_id); });
+    const inp = document.createElement("input"); inp.placeholder = "answer..."; inp.dataset.taskId = t.task_id;
+    const bAnswer = document.createElement("button"); bAnswer.textContent = "answer"; bAnswer.addEventListener("click", function () { answer(t.task_id); });
+    act.appendChild(bDetail); act.appendChild(bCancel); act.appendChild(inp); act.appendChild(bAnswer);
+    tr.appendChild(act);
     tb.appendChild(tr);
   }
   document.querySelector("h1").textContent =
-    `jinlin-agent workbench — ${data.summary.total} task(s), workers=${data.summary.workers}, messages=${data.summary.messages}`;
+    "jinlin-agent workbench — " + data.summary.total + " task(s), workers=" + data.summary.workers + ", messages=" + data.summary.messages;
 }
 async function detail(id) {
-  const d = await (await fetch("/api/tasks/" + id)).json();
+  const d = await (await api("/api/tasks/" + encodeURIComponent(id))).json();
   document.getElementById("detail").textContent = JSON.stringify(d, null, 2);
 }
 async function cancel(id) {
-  await fetch(`/api/tasks/${id}/cancel`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+  await api("/api/tasks/" + encodeURIComponent(id) + "/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
   load();
 }
 async function answer(id) {
-  const answer = document.getElementById("ans-" + id).value;
-  await fetch(`/api/tasks/${id}/answer`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({answer})});
+  const input = document.querySelector('input[data-task-id="' + CSS.escape(id) + '"]');
+  const answer = input ? input.value : "";
+  await api("/api/tasks/" + encodeURIComponent(id) + "/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answer }) });
   setTimeout(load, 300);
 }
 load(); setInterval(load, 3000);
@@ -93,6 +111,51 @@ class _Handler(BaseHTTPRequestHandler):
         return
 
     # ------------------------------------------------------------------ helpers
+
+    # ------------------------------------------------------------------ security (WP-R3)
+
+    def _allowed_origins(self) -> set[str]:
+        port = self.server.workbench._httpd.server_address[1]
+        return {
+            self.server.workbench.base_url,
+            f"http://127.0.0.1:{port}",
+            f"http://localhost:{port}",
+        }
+
+    def _host_ok(self) -> bool:
+        """DNS-rebinding defense: the Host header must name this loopback
+        server, not a hostile domain that resolved to 127.0.0.1."""
+        host = (self.headers.get("Host") or "").lower()
+        port = self.server.workbench._httpd.server_address[1]
+        return host in (f"127.0.0.1:{port}", f"localhost:{port}")
+
+    def _origin_ok(self) -> bool:
+        """CSRF defense for state-changing calls: a browser-sent Origin must
+        be our own origin. Non-browser clients (no Origin) pass, gated by the
+        Bearer token instead."""
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        return origin in self._allowed_origins()
+
+    def _token_ok(self) -> bool:
+        header = self.headers.get("Authorization") or ""
+        expected = f"Bearer {self.server.workbench.token}"
+        return hmac.compare_digest(header, expected)
+
+    def _gate(self, *, state_change: bool) -> bool:
+        """Common gate: Host always; token on every /api call; Origin on
+        state changes. Sends the error response itself."""
+        if not self._host_ok():
+            self._json(403, {"error": "host not allowed"})
+            return False
+        if not self._token_ok():
+            self._json(401, {"error": "missing or invalid bearer token"})
+            return False
+        if state_change and not self._origin_ok():
+            self._json(403, {"error": "origin not allowed"})
+            return False
+        return True
 
     def _send(self, status: int, body: str, content_type: str = "application/json; charset=utf-8") -> None:
         data = body.encode("utf-8")
@@ -119,8 +182,13 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 (http.server API)
         path = self.path.split("?")[0]
+        if not self._host_ok():
+            self._json(403, {"error": "host not allowed"})
+            return
         if path in ("/", "/index.html"):
-            self._send(200, _INDEX_HTML, "text/html; charset=utf-8")
+            self._send(200, _INDEX_HTML.replace("{{TOKEN}}", self.server.workbench.token), "text/html; charset=utf-8")
+            return
+        if not self._gate(state_change=False):
             return
         if path == "/api/tasks":
             rows = self.server.workbench.ledger.list_tasks()
@@ -134,6 +202,11 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?")[0]
+        if not self._host_ok():
+            self._json(403, {"error": "host not allowed"})
+            return
+        if not self._gate(state_change=True):
+            return
         parts = path.strip("/").split("/")
         if len(parts) == 4 and parts[:2] == ["api", "tasks"] and parts[3] in ("cancel", "answer"):
             task_id = parts[2]
@@ -212,6 +285,10 @@ class WorkbenchServer:
         self.config = config
         self.runtime = runtime
         self.ledger = ledger if ledger is not None else TaskLedger(config).open()
+        # WP-R3: random per-start bearer token for /api/*; delivered to the
+        # page via the (same-origin) index HTML meta tag. Not persisted —
+        # a restart mints a new one. Loopback-only binding unchanged.
+        self.token = secrets.token_urlsafe(32)
         self._httpd = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
         self._httpd.workbench = self  # handler access
 

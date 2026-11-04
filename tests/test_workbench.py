@@ -33,9 +33,13 @@ def make_server(tmp_path, runtime=None):
     return server, cfg
 
 
-def http_json(url, payload=None, method=None):
+def http_json(token, url, payload=None, method=None, headers=None):
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(url, data=data, method=method or ("POST" if data else "GET"))
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    for key, value in (headers or {}).items():
+        req.add_header(key, value)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = resp.read().decode("utf-8")
@@ -63,7 +67,7 @@ def test_tasks_endpoint_reflects_the_ledger(tmp_path):
     try:
         spec = make_task(ledger)
         ledger.set_task_status(spec.task_id, "queued")
-        status, data = http_json(f"{server.base_url}/api/tasks")
+        status, data = http_json(server.token, f"{server.base_url}/api/tasks")
         assert status == 200
         assert data["summary"]["total"] >= 1
         row = next(t for t in data["tasks"] if t["task_id"] == spec.task_id)
@@ -91,7 +95,7 @@ def test_task_detail_includes_workers_messages_and_events(tmp_path):
                 payload={"note": "halfway"},
             )
         )
-        status, data = http_json(f"{server.base_url}/api/tasks/{spec.task_id}")
+        status, data = http_json(server.token, f"{server.base_url}/api/tasks/{spec.task_id}")
         assert status == 200
         assert data["task"]["task_id"] == spec.task_id
         assert isinstance(data["workers"], list)
@@ -105,7 +109,7 @@ def test_task_detail_includes_workers_messages_and_events(tmp_path):
 def test_index_page_is_html(tmp_path):
     server, _cfg = make_server(tmp_path)
     try:
-        status, body = http_json(f"{server.base_url}/")
+        status, body = http_json(server.token, f"{server.base_url}/")
         assert status == 200
         assert "jinlin" in body.lower()
     finally:
@@ -136,7 +140,7 @@ def test_cancel_endpoint_stops_a_running_worker(tmp_path):
     try:
         worker_id = runtime.submit_task(spec.task_id, make_ws(tmp_path / "ws"))
         assert wait_for_status(ledger, worker_id, "running")
-        status, data = http_json(f"{server.base_url}/api/tasks/{spec.task_id}/cancel", payload={"reason": "owner"}, method="POST")
+        status, data = http_json(server.token, f"{server.base_url}/api/tasks/{spec.task_id}/cancel", payload={"reason": "owner"}, method="POST")
         assert status == 200, data
         hold.set()
         assert wait_for_status(ledger, worker_id, "cancelled")
@@ -195,7 +199,7 @@ def test_answer_endpoint_resumes_a_waiting_worker(tmp_path):
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline and ledger.get_worker(worker_id)["status"] != "waiting_user":
             time.sleep(0.05)
-        status, data = http_json(f"{server.base_url}/api/tasks/{spec.task_id}/answer", payload={"answer": "use X"}, method="POST")
+        status, data = http_json(server.token, f"{server.base_url}/api/tasks/{spec.task_id}/answer", payload={"answer": "use X"}, method="POST")
         assert status == 200, data
         assert wait_for_status(ledger, worker_id, "completed")
         assert ledger.get_task(spec.task_id)["status"] == "completed"
@@ -210,7 +214,7 @@ def test_control_endpoints_require_a_runtime(tmp_path):
     ledger = TaskLedger(cfg).open()
     try:
         spec = make_task(ledger)
-        status, _data = http_json(f"{server.base_url}/api/tasks/{spec.task_id}/cancel", payload={}, method="POST")
+        status, _data = http_json(server.token, f"{server.base_url}/api/tasks/{spec.task_id}/cancel", payload={}, method="POST")
         assert status == 405
     finally:
         server.shutdown()
@@ -220,7 +224,91 @@ def test_control_endpoints_require_a_runtime(tmp_path):
 def test_unknown_task_is_404(tmp_path):
     server, _cfg = make_server(tmp_path)
     try:
-        status, _data = http_json(f"{server.base_url}/api/tasks/task_nope")
+        status, _data = http_json(server.token, f"{server.base_url}/api/tasks/task_nope")
         assert status == 404
     finally:
         server.shutdown()
+
+
+# --------------------------------------------------------------------------- WP-R3 security
+
+
+def test_index_html_never_embeds_untrusted_data(tmp_path):
+    server, cfg = make_server(tmp_path)
+    ledger = TaskLedger(cfg).open()
+    try:
+        hostile = TaskSpec(
+            task_id=new_task_id(),
+            root_task_id=None,
+            title='<img src=x onerror="alert(1)">',
+        )
+        hostile.root_task_id = hostile.task_id
+        ledger.create_task(hostile)
+        status, body = http_json(server.token, f"{server.base_url}/")
+        assert status == 200
+        # the served page is a static template: no task data is interpolated
+        assert "onerror" not in body
+        assert "<img" not in body.replace("<!doctype", "")
+        assert 'name="workbench-token"' in body  # token bootstrap for the page itself
+        assert "innerHTML" not in body  # rendered exclusively via textContent
+    finally:
+        server.shutdown()
+        ledger.close()
+
+
+def test_post_requires_the_bearer_token(tmp_path):
+    server, cfg = make_server(tmp_path)
+    ledger = TaskLedger(cfg).open()
+    try:
+        spec = make_task(ledger)
+        status, _ = http_json(None, f"{server.base_url}/api/tasks/{spec.task_id}/cancel", payload={}, method="POST")
+        assert status == 401  # missing token
+        status, _ = http_json(
+            None,
+            f"{server.base_url}/api/tasks/{spec.task_id}/cancel",
+            payload={},
+            method="POST",
+            headers={"Authorization": "Bearer wrong"},
+        )
+        assert status == 401  # wrong token
+        status, _ = http_json(None, f"{server.base_url}/api/tasks")
+        assert status == 401  # /api reads are gated too
+    finally:
+        server.shutdown()
+        ledger.close()
+
+
+def test_foreign_origin_is_rejected_for_state_changes(tmp_path):
+    server, cfg = make_server(tmp_path)
+    ledger = TaskLedger(cfg).open()
+    try:
+        spec = make_task(ledger)
+        status, _ = http_json(
+            server.token,
+            f"{server.base_url}/api/tasks/{spec.task_id}/cancel",
+            payload={},
+            method="POST",
+            headers={"Origin": "http://evil.example"},
+        )
+        assert status == 403  # cross-site state change blocked
+    finally:
+        server.shutdown()
+        ledger.close()
+
+
+def test_host_header_must_be_loopback(tmp_path):
+    import http.client
+
+    server, cfg = make_server(tmp_path)
+    ledger = TaskLedger(cfg).open()
+    try:
+        spec = make_task(ledger)
+        port = server.base_url.rsplit(":", 1)[1]
+        conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=10)
+        conn.request("GET", "/api/tasks", headers={"Host": "evil.example", "Authorization": f"Bearer {server.token}"})
+        resp = conn.getresponse()
+        assert resp.status == 403  # DNS-rebinding style Host is rejected
+        conn.close()
+    finally:
+        server.shutdown()
+        ledger.close()
