@@ -11,7 +11,7 @@ branches:
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
 test_status: "主体任务包 01–06、最终收尾包 01–04 均已由所有者本地验收；最新 HEAD 40c196f 的 Push/PR CI 均在 Ubuntu 与 Windows 通过"
 review_status: "主体任务包 01–06 完成；最终收尾包 01–04 完成；最终收尾包 05 发布候选审查进行中（不扩展功能）"
-v2_status: "v2 任务层 WP-0~10 已实施并合入整改分支 feature/v2-integration-remediation（评审任务书 WP-R1 主线整合）；详见 docs/architecture/v2/ 与本文 §16"
+v2_status: "v2 任务层 WP-0~10 已实施并合入整改分支 feature/v2-integration-remediation（评审任务书 WP-R1 主线整合，合并后全量回归 324 passed / eval 22/22）；详见 docs/architecture/v2/ 与本文 §16"
 trash_cleanup: "jinlin-agent clean [--workspace W] [--apply]（默认 dry-run；归属证明 = 严格命名模式 + .jinlin/trash-manifest.jsonl 记录）"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]

@@ -37,7 +37,7 @@ def http_json(url, payload=None, method=None):
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(url, data=data, method=method or ("POST" if data else "GET"))
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             body = resp.read().decode("utf-8")
             try:
                 return resp.status, json.loads(body)
@@ -47,7 +47,7 @@ def http_json(url, payload=None, method=None):
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def wait_for_status(ledger, worker_id, status, timeout=30.0):
+def wait_for_status(ledger, worker_id, status, timeout=90.0):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         row = ledger.get_worker(worker_id)
@@ -192,7 +192,7 @@ def test_answer_endpoint_resumes_a_waiting_worker(tmp_path):
     spec = make_task(ledger)
     try:
         worker_id = runtime.submit_task(spec.task_id, make_ws(tmp_path / "ws"))
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + 90
         while time.monotonic() < deadline and ledger.get_worker(worker_id)["status"] != "waiting_user":
             time.sleep(0.05)
         status, data = http_json(f"{server.base_url}/api/tasks/{spec.task_id}/answer", payload={"answer": "use X"}, method="POST")

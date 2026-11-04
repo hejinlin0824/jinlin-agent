@@ -221,7 +221,23 @@ class WorkbenchServer:
         return f"http://{host}:{port}"
 
     def start(self) -> None:
+        """Serve on a daemon thread and BLOCK until the port actually accepts
+        connections — under a loaded test runner the accept thread may not be
+        scheduled before the first client connects (race caught by CI-order
+        full-suite runs)."""
+        import socket
+        import time as _time
+
         threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+        host, port = self._httpd.server_address[:2]
+        deadline = _time.monotonic() + 10.0
+        while _time.monotonic() < deadline:
+            try:
+                with socket.create_connection((host, port), timeout=0.25):
+                    return
+            except OSError:
+                _time.sleep(0.02)
+        raise RuntimeError(f"workbench server did not become ready on {host}:{port}")
 
     def serve_forever(self) -> None:
         self._httpd.serve_forever()
