@@ -533,6 +533,143 @@ def cmd_serve(args: Any) -> int:
     return 0
 
 
+def _build_task_stack(args: Any, workspace: Path):
+    """Shared construction for the task-level CLI: ledger + runtime +
+    supervisor (+ workspace manager when the workspace is a git repo)."""
+    from .ledger import TaskLedger
+    from .model import create_provider
+    from .supervisor import Supervisor
+    from .worker_runtime import WorkerRuntime
+    from .workspace_manager import WorkspaceManager
+
+    cfg = load_config(workspace)
+    if getattr(args, "model", None):
+        cfg.model.model = args.model
+    if getattr(args, "base_url", None):
+        cfg.model.base_url = args.base_url
+    ledger = TaskLedger(cfg).open()
+    quiet = getattr(args, "quiet", False)
+    log = (lambda msg: None) if quiet else (lambda msg: _print(msg))
+
+    provider_factory = lambda: create_provider(cfg, getattr(args, "mock_script", None))
+    supervisor_provider = None
+    planner_mock = getattr(args, "planner_mock_script", None)
+    if planner_mock:
+        from .model import load_script
+        from .model.mock import MockProvider
+
+        supervisor_provider = MockProvider(load_script(planner_mock))
+    runtime = WorkerRuntime(cfg, ledger, provider_factory=provider_factory, log=log)
+    supervisor = Supervisor(cfg, ledger, runtime, provider=supervisor_provider, log=log)
+    manager = None
+    if WorkspaceManager.is_git_repo(workspace):
+        manager = WorkspaceManager(workspace, cfg, ledger)
+        supervisor.attach_workspace_manager(manager)
+        runtime.sandbox_factory = manager.sandbox_factory()
+    return cfg, ledger, runtime, supervisor, manager
+
+
+def cmd_task(args: Any) -> int:
+    """WP-R8: the task-level product entry (v2). The legacy `run` command is
+    unchanged; `task` adds planning, workers, integration and recovery."""
+    from .ledger import TaskLedger
+    from .supervisor import Supervisor
+    from .taskmodel import Budget, TaskSpec, new_task_id
+
+    workspace = Path(args.workspace or ".").expanduser().resolve()
+    cfg, ledger, runtime, supervisor, manager = _build_task_stack(args, workspace)
+    try:
+        if args.task_cmd == "run":
+            task_text = (getattr(args, "task_text", "") or "").strip()
+            if not task_text:
+                _print("[error] empty task", file=sys.stderr)
+                return 4
+            tid = new_task_id()
+            spec = TaskSpec(
+                task_id=tid,
+                root_task_id=tid,
+                title=task_text.splitlines()[0][:120],
+                description=task_text,
+                capabilities=["READ", "WRITE", "EXECUTE"],
+                budget=Budget(max_attempts=2),
+            )
+            ledger.create_task(spec)
+            outcome = supervisor.execute_root(spec, workspace)
+            _print(f"[task] {tid} -> {outcome['status']}")
+            if outcome["status"] in ("waiting_user", "waiting_approval", "blocked") and outcome.get("worker_id"):
+                _print(f"[next] jinlin-agent task resume {tid} --answer \"...\"")
+            return 0 if outcome["status"] in ("completed",) else (2 if outcome["status"] in ("waiting_user", "waiting_approval", "blocked") else 1)
+        if args.task_cmd == "status":
+            row = ledger.get_task(args.task_id)
+            if row is None:
+                _print(f"[error] unknown task: {args.task_id}", file=sys.stderr)
+                return 4
+            _print(json.dumps(
+                {
+                    "task": row,
+                    "subtasks": ledger.list_tasks(args.task_id),
+                    "workers": ledger.list_workers(args.task_id),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ))
+            return 0
+        if args.task_cmd == "resume":
+            from .worker_runtime import recover_interrupted
+
+            recover_interrupted(cfg, ledger, log=lambda m: _print(m))
+            row = ledger.get_task(args.task_id)
+            if row is None:
+                print(f"[error] unknown task: {args.task_id}", file=sys.stderr)
+                return 4
+            waiting = [w for w in ledger.list_workers(args.task_id) if w["status"] in ("waiting_user", "waiting_approval")]
+            if waiting:
+                runtime.resume_worker(waiting[-1]["worker_id"], answer=str(args.answer or ""))
+            root = ledger.get_task(args.task_id)
+            from .ledger import task_spec_from_row
+
+            outcome = supervisor.execute_root(task_spec_from_row(root), workspace)
+            _print(f"[task] {args.task_id} -> {outcome['status']}")
+            return 0 if outcome["status"] == "completed" else (2 if outcome["status"] in ("waiting_user", "waiting_approval", "blocked") else 1)
+        if args.task_cmd == "cancel":
+            from .worker_runtime import recover_interrupted
+
+            recover_interrupted(cfg, ledger, log=lambda m: _print(m))
+            active = [w for w in ledger.list_workers(args.task_id) if w["status"] not in ("completed", "failed", "cancelled")]
+            for w in active:
+                if w["status"] == "queued":
+                    ledger.set_worker_status(w["worker_id"], "cancelled", reason="cancelled via CLI")
+            row = ledger.get_task(args.task_id)
+            if row is None:
+                return 4
+            from .taskmodel import can_transition
+
+            if can_transition(row["status"], "cancelled"):
+                ledger.set_task_status(args.task_id, "cancelled", reason=str(args.reason or "cancelled via CLI"))
+                _print(f"[task] {args.task_id} cancelled")
+                return 0
+            print(f"[task] {args.task_id} is {row['status']}; cannot cancel a terminal task", file=sys.stderr)
+            return 1
+        if args.task_cmd == "trace":
+            from .events import read_events
+
+            log_dir = cfg.tasks_dir / args.task_id
+            events = list(read_events(log_dir))
+            if args.tail:
+                events = events[-args.tail:]
+            for evt in events:
+                if args.json:
+                    _print(json.dumps(evt, ensure_ascii=False))
+                else:
+                    _print(f"{evt.get('seq'):>4} {evt.get('ts', '')[11:19]} {evt.get('type', ''):<28} {json.dumps(evt.get('payload', {}), ensure_ascii=False)[:110]}")
+            return 0
+        _print("[error] unknown task subcommand", file=sys.stderr)
+        return 4
+    finally:
+        runtime.shutdown()
+        ledger.close()
+
+
 # --------------------------------------------------------------------------- main
 
 
@@ -634,6 +771,46 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--workspace", default=None, help="optional base dir to keep probe fixtures (default: temp)")
     ev.add_argument("--quiet", action="store_true")
     ev.set_defaults(func=cmd_eval)
+
+    task_p = sub.add_parser("task", help="task-level entry (v2): planning, workers, integration, recovery")
+    task_sub = task_p.add_subparsers(dest="task_cmd", required=True)
+
+    def _task_common(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--workspace", default=".")
+        p.add_argument("--mock-script", default=None, help="worker script for deterministic runs")
+        p.add_argument("--planner-mock-script", default=None, help="assessment/planner script for deterministic runs")
+        p.add_argument("--model", default=None)
+        p.add_argument("--base-url", default=None)
+        p.add_argument("--quiet", action="store_true")
+
+    task_run = task_sub.add_parser("run", help="create a root task and drive it to a deliverable")
+    task_run.add_argument("-t", "--task", dest="task_text", default="")
+    _task_common(task_run)
+    task_run.set_defaults(func=cmd_task)
+
+    task_status = task_sub.add_parser("status", help="task ledger detail (task + subtasks + workers)")
+    task_status.add_argument("task_id")
+    _task_common(task_status)
+    task_status.set_defaults(func=cmd_task)
+
+    task_resume = task_sub.add_parser("resume", help="resume a waiting task (and finish its schedule)")
+    task_resume.add_argument("task_id")
+    task_resume.add_argument("--answer", default="")
+    _task_common(task_resume)
+    task_resume.set_defaults(func=cmd_task)
+
+    task_cancel = task_sub.add_parser("cancel", help="cancel a task (recovers interrupted workers first)")
+    task_cancel.add_argument("task_id")
+    task_cancel.add_argument("--reason", default="")
+    _task_common(task_cancel)
+    task_cancel.set_defaults(func=cmd_task)
+
+    task_trace = task_sub.add_parser("trace", help="print the task event stream")
+    task_trace.add_argument("task_id")
+    task_trace.add_argument("--tail", type=int, default=0)
+    task_trace.add_argument("--json", action="store_true")
+    _task_common(task_trace)
+    task_trace.set_defaults(func=cmd_task)
 
     lg = sub.add_parser("ledger", help="task ledger summary (v2 task layer); --rebuild re-derives it from task event logs")
     lg.add_argument("--rebuild", action="store_true", help="drop and rebuild the sqlite projection from <home>/tasks/*/events.jsonl")

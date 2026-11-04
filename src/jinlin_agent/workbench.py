@@ -215,6 +215,9 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._answer(task_id)
             return
+        if path == "/api/tasks":
+            self._create_task()
+            return
         self._json(404, {"error": "not found"})
 
     # ------------------------------------------------------------------ handlers
@@ -231,15 +234,59 @@ class _Handler(BaseHTTPRequestHandler):
             events = list(read_events(log_dir))[-50:]
         except Exception as exc:  # a torn/corrupt task log must not kill the page
             events = [{"type": "log.unreadable", "payload": {"error": str(exc)}}]
+        decisions = [
+            {
+                "type": e.get("type"),
+                "ts": e.get("ts"),
+                "payload": e.get("payload"),
+            }
+            for e in events
+            if e.get("type") in ("task.strategy_selected", "task.replanned", "phase.changed")
+        ]
         self._json(
             200,
             {
                 "task": row,
                 "workers": wb.ledger.list_workers(task_id),
                 "messages": wb.ledger.list_messages(task_id),
+                "decisions": decisions,
                 "events": events,
             },
         )
+
+    def _create_task(self) -> None:
+        """WP-R9: create a root task and drive it on a background thread.
+        Requires a supervisor attachment (a provider + config); without one
+        the workbench stays read-only."""
+        wb = self.server.workbench
+        if wb.supervisor is None:
+            self._json(405, {"error": "read-only workbench: no supervisor attached"})
+            return
+        body = self._body()
+        title = str(body.get("title", "")).strip()
+        if not title:
+            self._json(400, {"error": "title must not be empty"})
+            return
+        description = str(body.get("description", "")).strip()
+        workspace = str(body.get("workspace") or wb.config.workspace_root_default)
+        from .taskmodel import TaskSpec, new_task_id
+
+        tid = new_task_id()
+        spec = TaskSpec(task_id=tid, root_task_id=tid, title=title, description=description, capabilities=["READ", "WRITE", "EXECUTE"])
+        ledger = wb.ledger
+        ledger.create_task(spec)
+
+        def drive():
+            try:
+                wb.supervisor.execute_root(spec, Path(workspace))
+            except Exception as exc:  # a crashed driver must leave the task visible
+                try:
+                    ledger.set_task_status(tid, "failed", reason=f"driver crashed: {type(exc).__name__}: {exc}")
+                except Exception:
+                    pass
+
+        threading.Thread(target=drive, daemon=True).start()
+        self._json(201, {"task_id": tid, "status": "created"})
 
     def _active_worker(self, task_id: str) -> dict[str, Any] | None:
         terminal = {"completed", "failed", "cancelled"}
@@ -281,9 +328,17 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class WorkbenchServer:
-    def __init__(self, config: Any, runtime: Any | None = None, port: int = 0, ledger: TaskLedger | None = None) -> None:
+    def __init__(
+        self,
+        config: Any,
+        runtime: Any | None = None,
+        port: int = 0,
+        ledger: TaskLedger | None = None,
+        supervisor: Any | None = None,
+    ) -> None:
         self.config = config
         self.runtime = runtime
+        self.supervisor = supervisor  # required for POST /api/tasks (task creation)
         self.ledger = ledger if ledger is not None else TaskLedger(config).open()
         # WP-R3: random per-start bearer token for /api/*; delivered to the
         # page via the (same-origin) index HTML meta tag. Not persisted —

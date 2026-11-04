@@ -312,3 +312,112 @@ def test_host_header_must_be_loopback(tmp_path):
     finally:
         server.shutdown()
         ledger.close()
+
+
+# --------------------------------------------------------------------------- WP-R9: task creation + decisions view
+
+
+def _make_server_with_supervisor(tmp_path, worker_scripts, supervisor_script):
+    from jinlin_agent.ledger import TaskLedger
+    from jinlin_agent.model.mock import MockProvider
+    from jinlin_agent.supervisor import Supervisor
+    from jinlin_agent.worker_runtime import WorkerRuntime
+    from test_worker_runtime import make_task as _unused  # noqa: F401
+
+    cfg = load_config(home=tmp_path / "home")
+    ledger = TaskLedger(cfg).open()
+    worker_iter = iter(worker_scripts)
+    runtime = WorkerRuntime(
+        cfg, ledger,
+        provider_factory=lambda: MockProvider(next(worker_iter)),
+        sandbox_factory=lambda w: NullSandbox(str(w)),
+        log=lambda m: None,
+    )
+    supervisor = Supervisor(cfg, ledger, runtime, provider=MockProvider(supervisor_script), log=lambda m: None)
+    server = WorkbenchServer(cfg, runtime=runtime, supervisor=supervisor, port=0, ledger=ledger)
+    server.start()
+    return server, ledger, runtime, ws_dir(tmp_path)
+
+
+def ws_dir(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / "README.md").write_text("# demo\n\nEntry point: app.main()\n", encoding="utf-8")
+    return ws
+
+
+def test_create_task_endpoint_drives_the_supervisor(tmp_path):
+    plan = {"text": "```json\n" + json.dumps({"subtasks": [
+        {"title": "analyze", "description": "analyze", "depends_on": [], "role": "worker",
+         "capabilities": ["READ"], "acceptance_criteria": ["done"], "verification": "analysis"}
+    ]}) + "\n```"}
+    assess = {"text": json.dumps({"strategy": "plan_then_execute", "reasons": ["scripted"]})}
+    finish = [
+        {"tool_calls": [{"name": "read_file", "arguments": {"path": "README.md"}}]},
+        {"tool_calls": [{"name": "update_plan", "arguments": {"plan": {"objective": "analyze", "steps": [{"description": "read", "status": "completed", "evidence": ["README.md"]}]}}}]},
+        {"tool_calls": [{"name": "propose_completion", "arguments": {"summary": "read-only analysis finished", "claims": [{"statement": "entry is app.main", "evidence_refs": ["README.md"]}]}}]},
+    ]
+    from jinlin_agent.model.mock import MockProvider
+    from jinlin_agent.supervisor import Supervisor
+    from jinlin_agent.worker_runtime import WorkerRuntime
+
+    cfg = load_config(home=tmp_path / "home")
+    ledger = TaskLedger(cfg).open()
+    worker_iter = iter([finish])
+    runtime = WorkerRuntime(cfg, ledger, provider_factory=lambda: MockProvider(next(worker_iter)), sandbox_factory=lambda w: NullSandbox(str(w)), log=lambda m: None)
+    supervisor = Supervisor(cfg, ledger, runtime, provider=MockProvider([assess, plan]), log=lambda m: None)
+    server = WorkbenchServer(cfg, runtime=runtime, supervisor=supervisor, port=0, ledger=ledger)
+    server.start()
+    ws = ws_dir(tmp_path)
+    try:
+        status, data = http_json(
+            server.token,
+            f"{server.base_url}/api/tasks",
+            payload={"title": "analyze the demo", "workspace": str(ws)},
+            method="POST",
+        )
+        assert status == 201, data
+        task_id = data["task_id"]
+        deadline = time.monotonic() + 60
+        row = None
+        while time.monotonic() < deadline:
+            row = ledger.get_task(task_id)
+            if row and row["status"] in ("completed", "failed", "blocked"):
+                break
+            time.sleep(0.1)
+        assert row["status"] == "completed", row
+    finally:
+        server.shutdown()
+        runtime.shutdown()
+        ledger.close()
+
+
+def test_create_task_requires_supervisor(tmp_path):
+    server, cfg = make_server(tmp_path)
+    ledger = TaskLedger(cfg).open()
+    try:
+        status, _ = http_json(
+            server.token,
+            f"{server.base_url}/api/tasks",
+            payload={"title": "x"},
+            method="POST",
+        )
+        assert status == 405  # read-only workbench
+    finally:
+        server.shutdown()
+        ledger.close()
+
+
+def test_detail_includes_decisions_timeline(tmp_path):
+    server, cfg = make_server(tmp_path)
+    ledger = TaskLedger(cfg).open()
+    try:
+        spec = make_task(ledger)
+        ledger.set_task_status(spec.task_id, "queued")
+        ledger.emit(spec.task_id, "task.strategy_selected", {"root_task_id": spec.task_id, "strategy": "direct", "reasons": ["x"]})
+        status, data = http_json(server.token, f"{server.base_url}/api/tasks/{spec.task_id}")
+        assert status == 200
+        assert any(d["type"] == "task.strategy_selected" for d in data["decisions"])
+    finally:
+        server.shutdown()
+        ledger.close()

@@ -213,6 +213,12 @@ class Config:
         """Task ledger sqlite projection; home-derived (ADR-008), no separate config key."""
         return self.home / "ledger.db"
 
+    @property
+    def workspace_root_default(self) -> str:
+        """Default workspace for tasks created without an explicit one (the
+        invocation directory when known; otherwise the user's home)."""
+        return str(Path.home())
+
     def api_key(self) -> str | None:
         return os.environ.get(self.model.api_key_env)
 
