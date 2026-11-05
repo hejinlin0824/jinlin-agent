@@ -67,8 +67,8 @@ provider）。HTTP 审批（approval）有意不暴露。
 
 ## 7. 完整测试报告
 - `python -m pytest -q` → 收尾轮时点 **368 passed + 3 skipped**；第三轮整改（WP-C1~C3，分支
-  `feature/v2-benchmark-integrity-fixes`）后为 **396 passed + 3 skipped**（新增：验证证据语义
-  8 + token 记账 10 + Ledger integration 语义 5 + benchmark 矩阵 6→12）/ 0 failed
+  `feature/v2-benchmark-integrity-fixes`）后 **396 + 3**；第四轮收尾修复（WP-R4-01~06）后为
+  **407 passed + 3 skipped**（再增：token 根聚合 7 + 未知 profile fail-closed 4）/ 0 failed
 - `python -m jinlin_agent eval --suite all` → **22/22**（18 v1 + 4 v2：P7 并行重叠 / P8 依赖顺序 / P9 能力越界拒绝 / P10 预算不重试）
 - 新增专项测试：WP-R1 就绪竞态、WP-R2 六个（经 sandbox/拒绝 fail-closed/构造失败/超时回滚/cwd 正确/Windows 恶意外逃）、WP-R3 四个（XSS/Token/Origin/Host）、WP-R4 七个（交集语义/两向扩张/system 覆盖/空集硬拒绝/集成）、WP-R5/6/7 十一个（领养/孤儿/中断 fail-closed/会话回填/queued 存活/重启集成/blocked 根/审批三态）、WP-R8 五个 CLI。
 - CI：推送后自动触发（`feature/**` 已在触发列表）；结果见分支 Actions 页。

@@ -116,7 +116,9 @@ python scripts/benchmark_matrix.py \
 - `analyze-demo`（只读分析，fixtures/demo）
 - `fix-add`（单文件修复 + 测试验收，fixtures/bench-calc：`add()` 有 `a - b` 缺陷，`test_add` 失败）
 
-**重算后的结果（逐 run 见 `benchmark/real/*.json`，重算记录与对照表见 `benchmark/recomputed/`）：**
+**重算后的结果（逐 run 见 `benchmark/real/*.json`，重算记录与对照表见 `benchmark/recomputed/`；
+第四轮修复（WP-R4-01/05）后根任务级补充了 `tokens_total_actual`（= in + out）与
+`usage_missing_sessions`/`usage_expected_sessions` 字段，下表 in+out 数值不变）：**
 
 | 运行 | status | verification_status / passed | 必需→已执行等级 | tokens 实际 (in+out) | tokens 估算 | attempts | human_interventions |
 |---|---|---|---|---|---|---|---|

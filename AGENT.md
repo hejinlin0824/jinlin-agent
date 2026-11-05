@@ -11,7 +11,7 @@ branches:
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
 test_status: "主体任务包 01–06、最终收尾包 01–04 均已由所有者本地验收；最新 HEAD 40c196f 的 Push/PR CI 均在 Ubuntu 与 Windows 通过"
 review_status: "主体任务包 01–06 完成；最终收尾包 01–04 完成；最终收尾包 05 发布候选审查进行中（不扩展功能）"
-v2_status: "整改（WP-R1~R10）+ 最终收尾（WP-F1~F5）+ 第三轮整改（WP-C1~C4：验证证据语义、token 实际/估算拆分、六条真实事件流重算、Ledger/benchmark 回归补齐）完成：396 passed + 3 skipped / eval 22/22。真实模型评测（Ark deepseek-v4-flash）重算后为 5/6 验证通过（analyze×planner 无验证记录 = not_run，旧报告误报 true 已更正）；证据与机器生成的对照表在 docs/architecture/v2/benchmark/{real,recomputed}/。第三轮报告见 docs/architecture/v2/ROUND3-REMEDIATION-REPORT.md。真实规划路径与外部基准（WP-B1）未启动；不宣称多 Agent 优劣结论"
+v2_status: "整改（WP-R1~R10）+ 收尾（WP-F1~F5）+ 第三轮整改（WP-C1~C4）+ 第四轮收尾修复（WP-R4-01~06）完成：407 passed + 3 skipped / eval 22/22。真实模型评测重算后 5/6 验证通过（analyze×planner = not_run，非通过）；token 实际/估算/完整性语义经第四轮修复（根级 total、缺失会话可追溯、null 不折算 0）；gitleaks 8.28.0 全工作树+全历史扫描零真实凭证。报告链：ROUND3-REMEDIATION-REPORT.md → round4/ROUND4-FINAL-FIX-REPORT.md。外部基准（WP-B1）未启动；不宣称多 Agent 优劣结论"
 trash_cleanup: "jinlin-agent clean [--workspace W] [--apply]（默认 dry-run；归属证明 = 严格命名模式 + .jinlin/trash-manifest.jsonl 记录）"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]
