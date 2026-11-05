@@ -1,16 +1,22 @@
 [
   {
-    "tokens_out_actual": 7789,
-    "tokens_in_actual": 71082,
-    "started_at": "2026-11-05T05:12:42Z",
-    "human_interventions": 0,
-    "ledger_task": true,
     "wall_seconds": 417.1,
-    "status": "completed",
+    "usage_expected_sessions": 1,
+    "human_interventions": 0,
+    "tokens_out_actual": 7789,
+    "task_id": "analyze-demo",
     "conflicts": 0,
+    "tokens_usage_missing_calls": 0,
+    "changed_files": [
+      "_verify_main.py"
+    ],
+    "ledger_task": true,
+    "subtask_integration": [],
+    "tool_calls": 16,
+    "verification_status": "passed",
+    "started_at": "2026-11-05T05:12:42Z",
     "usage_complete": true,
-    "strategy": "multi",
-    "error_summary": "attempt 1 completed",
+    "tokens_in_actual": 71082,
     "verification_evidence": {
       "status": "passed",
       "passed": true,
@@ -31,35 +37,35 @@
       ],
       "components": 2
     },
-    "tokens_out": 7789,
-    "changed_files": [
-      "_verify_main.py"
-    ],
-    "verification_passed": true,
-    "subtask_integration": [],
-    "task_id": "analyze-demo",
-    "model_attempts": 13,
-    "verification_status": "passed",
-    "tokens_total_actual": null,
+    "error_summary": "attempt 1 completed",
+    "replans": 0,
     "tokens_in": 88173,
-    "tool_calls": 16,
-    "tokens_usage_missing_calls": 0,
-    "tokens_estimated_context": 17091,
+    "strategy": "multi",
+    "verification_passed": true,
+    "usage_missing_sessions": 0,
+    "tokens_total_actual": 78871,
     "model_calls": 13,
-    "replans": 0
+    "tokens_out": 7789,
+    "status": "completed",
+    "model_attempts": 13,
+    "tokens_estimated_context": 17091
   },
   {
-    "tokens_out_actual": 5591,
-    "tokens_in_actual": 52408,
-    "started_at": "2026-11-05T05:10:49Z",
-    "human_interventions": 0,
-    "ledger_task": true,
     "wall_seconds": 104.4,
-    "status": "completed",
+    "usage_expected_sessions": 1,
+    "human_interventions": 0,
+    "tokens_out_actual": 5591,
+    "task_id": "analyze-demo",
     "conflicts": 0,
+    "tokens_usage_missing_calls": 0,
+    "changed_files": [],
+    "ledger_task": true,
+    "subtask_integration": [],
+    "tool_calls": 10,
+    "verification_status": "not_run",
+    "started_at": "2026-11-05T05:10:49Z",
     "usage_complete": true,
-    "strategy": "planner",
-    "error_summary": "attempt 1 completed",
+    "tokens_in_actual": 52408,
     "verification_evidence": {
       "status": "not_run",
       "passed": false,
@@ -75,33 +81,36 @@
       ],
       "components": 2
     },
-    "tokens_out": 5591,
-    "changed_files": [],
-    "verification_passed": false,
-    "subtask_integration": [],
-    "task_id": "analyze-demo",
-    "model_attempts": 10,
-    "verification_status": "not_run",
-    "tokens_total_actual": null,
+    "error_summary": "attempt 1 completed",
+    "replans": 0,
     "tokens_in": 65085,
-    "tool_calls": 10,
-    "tokens_usage_missing_calls": 0,
-    "tokens_estimated_context": 12677,
+    "strategy": "planner",
+    "verification_passed": false,
+    "usage_missing_sessions": 0,
+    "tokens_total_actual": 57999,
     "model_calls": 10,
-    "replans": 0
+    "tokens_out": 5591,
+    "status": "completed",
+    "model_attempts": 10,
+    "tokens_estimated_context": 12677
   },
   {
-    "tokens_out_actual": 5482,
-    "tokens_in_actual": 71266,
-    "started_at": "2026-11-05T04:59:08Z",
-    "human_interventions": 3,
-    "ledger_task": false,
     "wall_seconds": 100.3,
-    "status": "completed",
+    "usage_expected_sessions": 1,
+    "human_interventions": 3,
+    "tokens_out_actual": 5482,
+    "task_id": "analyze-demo",
     "conflicts": 0,
+    "tokens_usage_missing_calls": 0,
+    "changed_files": [
+      "_verify_entry.py"
+    ],
+    "ledger_task": false,
+    "tool_calls": 16,
+    "verification_status": "passed",
+    "started_at": "2026-11-05T04:59:08Z",
     "usage_complete": true,
-    "strategy": "single",
-    "error_summary": "",
+    "tokens_in_actual": 71266,
     "verification_evidence": {
       "status": "passed",
       "passed": true,
@@ -121,136 +130,142 @@
       ],
       "components": 1
     },
-    "tokens_out": 5482,
-    "changed_files": [
-      "_verify_entry.py"
-    ],
-    "verification_passed": true,
-    "task_id": "analyze-demo",
-    "model_attempts": 13,
-    "verification_status": "passed",
-    "tokens_total_actual": 76748,
-    "tokens_in": 88405,
-    "tool_calls": 16,
-    "tokens_usage_missing_calls": 0,
-    "tokens_estimated_context": 17139,
-    "model_calls": 13,
-    "replans": 0
-  },
-  {
-    "tokens_out_actual": 6636,
-    "tokens_in_actual": 53182,
-    "started_at": "2026-11-05T05:23:21Z",
-    "human_interventions": 0,
-    "ledger_task": true,
-    "wall_seconds": 412.6,
-    "status": "completed",
-    "conflicts": 0,
-    "usage_complete": true,
-    "strategy": "multi",
-    "error_summary": "attempt 1 completed",
-    "verification_evidence": {
-      "status": "passed",
-      "passed": true,
-      "required_levels": [
-        "L0",
-        "L1",
-        "L3"
-      ],
-      "executed_levels": [
-        "L0",
-        "L1",
-        "L2",
-        "L3",
-        "L5"
-      ],
-      "failed_levels": [],
-      "skipped_levels": [],
-      "notes": [
-        "[1] no subtask delivered changes; integration verification not applicable"
-      ],
-      "components": 2
-    },
-    "tokens_out": 6636,
-    "changed_files": [
-      "calc.py"
-    ],
-    "verification_passed": true,
-    "subtask_integration": [],
-    "task_id": "fix-add",
-    "model_attempts": 9,
-    "verification_status": "passed",
-    "tokens_total_actual": null,
-    "tokens_in": 65661,
-    "tool_calls": 13,
-    "tokens_usage_missing_calls": 0,
-    "tokens_estimated_context": 12479,
-    "model_calls": 9,
-    "replans": 0
-  },
-  {
-    "tokens_out_actual": 2016,
-    "tokens_in_actual": 41651,
-    "started_at": "2026-11-05T05:22:03Z",
-    "human_interventions": 0,
-    "ledger_task": true,
-    "wall_seconds": 52.3,
-    "status": "completed",
-    "conflicts": 0,
-    "usage_complete": true,
-    "strategy": "planner",
-    "error_summary": "attempt 1 completed",
-    "verification_evidence": {
-      "status": "passed",
-      "passed": true,
-      "required_levels": [
-        "L0",
-        "L1",
-        "L3"
-      ],
-      "executed_levels": [
-        "L0",
-        "L1",
-        "L2",
-        "L3",
-        "L5"
-      ],
-      "failed_levels": [],
-      "skipped_levels": [],
-      "notes": [
-        "[1] no subtask delivered changes; integration verification not applicable"
-      ],
-      "components": 2
-    },
-    "tokens_out": 2016,
-    "changed_files": [
-      "calc.py"
-    ],
-    "verification_passed": true,
-    "subtask_integration": [],
-    "task_id": "fix-add",
-    "model_attempts": 8,
-    "verification_status": "passed",
-    "tokens_total_actual": null,
-    "tokens_in": 51807,
-    "tool_calls": 11,
-    "tokens_usage_missing_calls": 0,
-    "tokens_estimated_context": 10156,
-    "model_calls": 8,
-    "replans": 0
-  },
-  {
-    "tokens_out_actual": 24683,
-    "tokens_in_actual": 120964,
-    "started_at": "2026-11-05T05:00:49Z",
-    "human_interventions": 0,
-    "ledger_task": false,
-    "wall_seconds": 342.9,
-    "status": "completed",
-    "conflicts": 0,
-    "usage_complete": true,
-    "strategy": "single",
     "error_summary": "",
+    "replans": 0,
+    "tokens_in": 88405,
+    "strategy": "single",
+    "verification_passed": true,
+    "usage_missing_sessions": 0,
+    "tokens_total_actual": 76748,
+    "model_calls": 13,
+    "tokens_out": 5482,
+    "status": "completed",
+    "model_attempts": 13,
+    "tokens_estimated_context": 17139
+  },
+  {
+    "wall_seconds": 412.6,
+    "usage_expected_sessions": 1,
+    "human_interventions": 0,
+    "tokens_out_actual": 6636,
+    "task_id": "fix-add",
+    "conflicts": 0,
+    "tokens_usage_missing_calls": 0,
+    "changed_files": [
+      "calc.py"
+    ],
+    "ledger_task": true,
+    "subtask_integration": [],
+    "tool_calls": 13,
+    "verification_status": "passed",
+    "started_at": "2026-11-05T05:23:21Z",
+    "usage_complete": true,
+    "tokens_in_actual": 53182,
+    "verification_evidence": {
+      "status": "passed",
+      "passed": true,
+      "required_levels": [
+        "L0",
+        "L1",
+        "L3"
+      ],
+      "executed_levels": [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L5"
+      ],
+      "failed_levels": [],
+      "skipped_levels": [],
+      "notes": [
+        "[1] no subtask delivered changes; integration verification not applicable"
+      ],
+      "components": 2
+    },
+    "error_summary": "attempt 1 completed",
+    "replans": 0,
+    "tokens_in": 65661,
+    "strategy": "multi",
+    "verification_passed": true,
+    "usage_missing_sessions": 0,
+    "tokens_total_actual": 59818,
+    "model_calls": 9,
+    "tokens_out": 6636,
+    "status": "completed",
+    "model_attempts": 9,
+    "tokens_estimated_context": 12479
+  },
+  {
+    "wall_seconds": 52.3,
+    "usage_expected_sessions": 1,
+    "human_interventions": 0,
+    "tokens_out_actual": 2016,
+    "task_id": "fix-add",
+    "conflicts": 0,
+    "tokens_usage_missing_calls": 0,
+    "changed_files": [
+      "calc.py"
+    ],
+    "ledger_task": true,
+    "subtask_integration": [],
+    "tool_calls": 11,
+    "verification_status": "passed",
+    "started_at": "2026-11-05T05:22:03Z",
+    "usage_complete": true,
+    "tokens_in_actual": 41651,
+    "verification_evidence": {
+      "status": "passed",
+      "passed": true,
+      "required_levels": [
+        "L0",
+        "L1",
+        "L3"
+      ],
+      "executed_levels": [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L5"
+      ],
+      "failed_levels": [],
+      "skipped_levels": [],
+      "notes": [
+        "[1] no subtask delivered changes; integration verification not applicable"
+      ],
+      "components": 2
+    },
+    "error_summary": "attempt 1 completed",
+    "replans": 0,
+    "tokens_in": 51807,
+    "strategy": "planner",
+    "verification_passed": true,
+    "usage_missing_sessions": 0,
+    "tokens_total_actual": 43667,
+    "model_calls": 8,
+    "tokens_out": 2016,
+    "status": "completed",
+    "model_attempts": 8,
+    "tokens_estimated_context": 10156
+  },
+  {
+    "wall_seconds": 342.9,
+    "usage_expected_sessions": 1,
+    "human_interventions": 0,
+    "tokens_out_actual": 24683,
+    "task_id": "fix-add",
+    "conflicts": 0,
+    "tokens_usage_missing_calls": 0,
+    "changed_files": [
+      "calc.py"
+    ],
+    "ledger_task": false,
+    "tool_calls": 21,
+    "verification_status": "passed",
+    "started_at": "2026-11-05T05:00:49Z",
+    "usage_complete": true,
+    "tokens_in_actual": 120964,
     "verification_evidence": {
       "status": "passed",
       "passed": true,
@@ -271,20 +286,17 @@
       "notes": [],
       "components": 1
     },
-    "tokens_out": 24683,
-    "changed_files": [
-      "calc.py"
-    ],
-    "verification_passed": true,
-    "task_id": "fix-add",
-    "model_attempts": 17,
-    "verification_status": "passed",
-    "tokens_total_actual": 145647,
+    "error_summary": "",
+    "replans": 0,
     "tokens_in": 143867,
-    "tool_calls": 21,
-    "tokens_usage_missing_calls": 0,
-    "tokens_estimated_context": 22903,
+    "strategy": "single",
+    "verification_passed": true,
+    "usage_missing_sessions": 0,
+    "tokens_total_actual": 145647,
     "model_calls": 17,
-    "replans": 0
+    "tokens_out": 24683,
+    "status": "completed",
+    "model_attempts": 17,
+    "tokens_estimated_context": 22903
   }
 ]

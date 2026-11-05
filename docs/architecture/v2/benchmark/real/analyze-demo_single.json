@@ -1,15 +1,20 @@
 {
-  "tokens_out_actual": 5482,
-  "tokens_in_actual": 71266,
-  "started_at": "2026-11-05T04:59:08Z",
-  "human_interventions": 3,
-  "ledger_task": false,
   "wall_seconds": 100.3,
-  "status": "completed",
+  "usage_expected_sessions": 1,
+  "human_interventions": 3,
+  "tokens_out_actual": 5482,
+  "task_id": "analyze-demo",
   "conflicts": 0,
+  "tokens_usage_missing_calls": 0,
+  "changed_files": [
+    "_verify_entry.py"
+  ],
+  "ledger_task": false,
+  "tool_calls": 16,
+  "verification_status": "passed",
+  "started_at": "2026-11-05T04:59:08Z",
   "usage_complete": true,
-  "strategy": "single",
-  "error_summary": "",
+  "tokens_in_actual": 71266,
   "verification_evidence": {
     "status": "passed",
     "passed": true,
@@ -29,19 +34,16 @@
     ],
     "components": 1
   },
-  "tokens_out": 5482,
-  "changed_files": [
-    "_verify_entry.py"
-  ],
-  "verification_passed": true,
-  "task_id": "analyze-demo",
-  "model_attempts": 13,
-  "verification_status": "passed",
-  "tokens_total_actual": 76748,
+  "error_summary": "",
+  "replans": 0,
   "tokens_in": 88405,
-  "tool_calls": 16,
-  "tokens_usage_missing_calls": 0,
-  "tokens_estimated_context": 17139,
+  "strategy": "single",
+  "verification_passed": true,
+  "usage_missing_sessions": 0,
+  "tokens_total_actual": 76748,
   "model_calls": 13,
-  "replans": 0
+  "tokens_out": 5482,
+  "status": "completed",
+  "model_attempts": 13,
+  "tokens_estimated_context": 17139
 }

@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 RECOMPUTED_FIELDS = (
     "tokens_in_actual", "tokens_out_actual", "tokens_total_actual",
     "tokens_estimated_context", "tokens_usage_missing_calls", "usage_complete",
+    "usage_missing_sessions", "usage_expected_sessions",
     "model_calls", "model_attempts", "tool_calls",
     "verification_status", "verification_passed", "verification_evidence",
     "changed_files", "human_interventions", "replans",
