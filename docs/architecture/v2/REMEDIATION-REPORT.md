@@ -1,6 +1,10 @@
 # v2.0 整改报告（REMEDIATION REPORT）
 
 > 对应《评审任务书》(2026-11-03/04)。结论先行：**P0（R1–R4）与 P1（R5–R9）全部完成并有测试与 CI 证据；P2（R10）交付了评测骨架与示例任务集，真实运行需 API key，未执行——不虚构任何数字。** 建议合并前由所有者完成一次真实任务集试运行。
+>
+> **收尾轮（最终验收任务书 WP-F1~F5）已在其后执行**：三策略代码层真实区分、MockProvider
+> 真实管线 dry-run（证据入库 `benchmark/dryrun/`）、14 项指标独立统计、文档与 CLI 行为核对。
+> 最终验收结论以 `FINAL-ACCEPTANCE-REPORT.md` 为准；本报告的 §6/§7/§8 已按收尾轮更新。
 
 ## 1. 整改前后的 Git 基线
 
@@ -51,19 +55,26 @@ jinlin-agent task trace <task_id> --tail 50
 jinlin-agent run --workspace ./project -t "..."
 
 # 可观测
-jinlin-agent serve --port 7800        # 127.0.0.1 Workbench（只读 + cancel/answer/create*）
+jinlin-agent serve --port 7800        # 127.0.0.1 Workbench（纯只读：见下方说明）
 jinlin-agent ledger [--rebuild] [--metrics]
 ```
-*create 仅在 Workbench 附着 Supervisor（provider 可用）时开放；HTTP 审批有意不暴露。*
+**`serve` 的只读边界（与实现一致，WP-F4 核对）**：CLI `serve` 以 ledger-only 模式启动
+（`WorkbenchServer(cfg, runtime=None, supervisor=None)`），只提供 GET 观测端点
+（任务/Worker 列表与详情、决策时间线）；所有变更端点（POST 创建任务、cancel、answer）
+在无附着 Runtime/Supervisor 时一律返回 405。创建/取消/回答**只能**通过库内嵌使用：
+`WorkbenchServer(cfg, runtime=<WorkerRuntime>, supervisor=<Supervisor>)`（需要可用的
+provider）。HTTP 审批（approval）有意不暴露。
 
 ## 7. 完整测试报告
-- `python -m pytest -q` → **357 passed + 3 skipped**（平台守卫）/ 0 failed（总集 = main 全量 + 95 个 v2 测试；v1 既有测试一个未删未弱化）
+- `python -m pytest -q` → **368 passed + 3 skipped**（平台守卫）/ 0 failed（总集 = main 全量 + v2 任务层测试；v1 既有测试一个未删未弱化。收尾轮新增：benchmark 矩阵 7 个 + `is_git_repo` 根目录语义 1 个）
 - `python -m jinlin_agent eval --suite all` → **22/22**（18 v1 + 4 v2：P7 并行重叠 / P8 依赖顺序 / P9 能力越界拒绝 / P10 预算不重试）
 - 新增专项测试：WP-R1 就绪竞态、WP-R2 六个（经 sandbox/拒绝 fail-closed/构造失败/超时回滚/cwd 正确/Windows 恶意外逃）、WP-R3 四个（XSS/Token/Origin/Host）、WP-R4 七个（交集语义/两向扩张/system 覆盖/空集硬拒绝/集成）、WP-R5/6/7 十一个（领养/孤儿/中断 fail-closed/会话回填/queued 存活/重启集成/blocked 根/审批三态）、WP-R8 五个 CLI。
 - CI：推送后自动触发（`feature/**` 已在触发列表）；结果见分支 Actions 页。
 
 ## 8. Windows 和 Ubuntu CI 结果
-最近一次代码提交的 CI：双平台绿（run 41628012675 与后续修复提交均绿；最终 HEAD 的 run 见分支 Actions 页）。注：WP-R2 期间 CI 曾抓出 ubuntu 独有的"PATH 缺失导致验证命令无法执行"缺陷，已修复并留档（wp-v2.0-5-report §6.1）。
+整改轮 CI 曾双平台绿（run 41628012675）。**最终 HEAD 的 CI 以最终验收报告为准**：
+`docs/architecture/v2/FINAL-ACCEPTANCE-REPORT.md` 记录最终 commit 的双平台 run ID。
+注：WP-R2 期间 CI 曾抓出 ubuntu 独有的"PATH 缺失导致验证命令无法执行"缺陷，已修复并留档（wp-v2.0-5-report §6.1）。
 
 ## 9. 仍然存在的问题
 1. **真实任务集评测未执行**（P2/R10）：需要所有者提供 DEEPSEEK_API_KEY 并确认任务集；多 Worker 是否转默认策略**必须**等该评测结果（任务书 §一.8）。

@@ -349,7 +349,10 @@ git pull --ff-only origin review/followup-fixes
 - **规划与调度**：混合复杂度评估（**默认直接执行，简单任务永不规划**）→ 模型驱动 Planner（坏输出 fail-closed）→ Supervisor 按依赖调度 DAG、有界局部重规划（`runtime.max_replans`）、冲突即暂停。
 - **安全边界**：TaskSpec 能力集（READ/WRITE/EXECUTE/NETWORK/DELETE）+ workspace_scope 路径范围在 PolicyEngine **代码强制**（先于审批与 intent）；每 Worker 独立 git worktree（`agent/task-<id>`），集成协调器合并/过期 rebase/冲突暂停/验证失败回滚，稳定分支绝不自动触碰。
 - **验收门下沉**：会话完成 ≠ 任务完成——TaskSpec 验证档案（code/config/docs/tests/analysis）的必需等级未过，任务即失败（未验证绝不冒充成功）。
-- **可观测**：`jinlin-agent serve`（127.0.0.1 只读 Workbench + cancel/answer；HTTP 审批有意不暴露）。
+- **可观测**：`jinlin-agent serve`（127.0.0.1 Workbench）。CLI `serve` 是**纯只读**观测
+  （ledger-only 模式，无附着 Runtime/Supervisor）：变更端点（任务创建/取消/回答）一律 405，
+  仅 GET 任务、Worker 与决策时间线；创建/取消/回答需通过库内嵌 `WorkbenchServer(cfg,
+  runtime=..., supervisor=...)` 提供。HTTP 审批有意不暴露。
 
 ```bash
 python -m jinlin_agent eval --suite v2   # 任务层 4 探针
