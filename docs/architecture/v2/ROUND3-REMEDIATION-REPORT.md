@@ -126,9 +126,9 @@ Windows 10.0.26200；完整日志与 JUnit 在 `docs/architecture/v2/round3/logs
 
 dry-run 证据（`benchmark/dryrun/`）已用该次干净复验的输出刷新，与 C1/C2 语义一致。
 
-**CI**：本轮全部提交触发 GitHub Actions；最终整改 HEAD 的 Windows + Ubuntu 双平台 run 见
-本提交推送后回填（占位：Run ID 待 CI 完成后由随后的文档提交回填——与既往轮次同一模式）。
-JUnit 的 tests/failures/errors/skipped 四数直接引用，未做混算。
+**CI**：本轮全部提交触发 GitHub Actions；最终整改 HEAD `c31b61f` 的双平台 run
+**`41995235743`**：`ubuntu-latest / py3.13` ✅、`windows-latest / py3.13` ✅（Job 名、HEAD
+SHA 如实记录；JUnit 的 tests/failures/errors/skipped 四数直接引用，未做混算）。
 
 **密钥扫描**（gitleaks 未安装——如实记录；以等效规则手工扫描，工具与命令如下）：
 - `git grep -n -I -E 'ark-[A-Za-z0-9]{8,}|sk-[A-Za-z0-9_-]{16,}' HEAD -- docs src scripts tests fixtures`
