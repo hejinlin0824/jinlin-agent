@@ -294,3 +294,43 @@ def test_narrowing_with_existing_records_is_not_applicable_not_pass():
     assert ev["status"] == "not_applicable"
     assert ev["passed"] is False
     assert any("not applicable" in note for note in ev["notes"])
+
+
+# --------------------------------------------------------------------------- WP-R4-02: unknown profile fails closed everywhere
+
+
+def test_unknown_profile_never_benchmark_passes():
+    """A profile the system does not know must not pass the benchmark path
+    even when its code-fallback levels all 'passed'."""
+    ev = verification_evidence(
+        [_run("L0", "passed"), _run("L1", "passed"), _run("L3", "passed")],
+        profile="mystery", has_test_command=True, changed=True,
+    )
+    assert ev["status"] == "error"
+    assert ev["passed"] is False
+    assert any("mystery" in note for note in ev["notes"])
+
+
+def test_unknown_profile_empty_runs_is_not_not_applicable():
+    ev = verification_evidence([], profile="mystery")
+    assert ev["status"] == "error"
+    assert ev["passed"] is False
+    assert ev["status"] != "not_applicable"
+    assert ev["status"] != "not_run"
+
+
+def test_unknown_profile_fails_task_gate_and_benchmark_consistently():
+    spec = TaskSpec(
+        task_id=new_task_id(), root_task_id=new_task_id(),
+        title="t", verification="mystery",
+    )
+    gate_reasons = check_task_verification(
+        spec, {"status": "completed", "summary": "s", "changed_files": ["a.py"], "tests": []},
+        has_test_command=True,
+    )
+    assert gate_reasons, "the completion gate must reject an unknown profile"
+    ev = verification_evidence(
+        [_run("L0", "passed"), _run("L1", "passed"), _run("L3", "passed")],
+        profile="mystery", has_test_command=True, changed=True,
+    )
+    assert ev["passed"] is False

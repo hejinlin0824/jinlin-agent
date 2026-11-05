@@ -348,3 +348,21 @@ def test_sequential_mode_runs_subtasks_serially(tmp_path):
         assert a_done_seq < b_registered_seq, "B must be registered only after A completed"
     finally:
         ledger.close()
+
+
+# --------------------------------------------------------------------------- WP-R4-02: aggregation propagates errors
+
+
+def test_aggregate_verification_propagates_error_over_sibling_pass():
+    from benchmark_matrix import _aggregate_verification
+
+    def comp(status):
+        return {
+            "verification_status": status,
+            "verification_passed": status == "passed",
+            "verification_evidence": {"status": status, "required_levels": ["L0"], "executed_levels": [], "failed_levels": [], "skipped_levels": [], "notes": []},
+        }
+
+    root = _aggregate_verification([comp("passed"), comp("error")])
+    assert root["verification_status"] == "error"
+    assert root["verification_passed"] is False

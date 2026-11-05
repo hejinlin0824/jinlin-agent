@@ -606,9 +606,23 @@ def verification_evidence(
     exist (rule 4: non-applicability must be explicit and reasoned).
     When a level ran more than once (retry after a fix), the LAST run for
     that level decides."""
-    required, notes, _known = required_verification_levels(profile, has_test_command, changed)
+    required, notes, known = required_verification_levels(profile, has_test_command, changed)
     profile_norm = (profile or "code").strip().lower()
     profile_declares_none = PROFILE_LEVELS.get(profile_norm) == ()
+    if not known:
+        # WP-R4-02: an unknown profile must fail closed here exactly like the
+        # completion gate does — falling back to the code levels would let a
+        # benchmark verdict say `passed` for a profile the gate rejects.
+        return {
+            "status": "error",
+            "passed": False,
+            "required_levels": required,
+            "executed_levels": [],
+            "failed_levels": [],
+            "skipped_levels": [],
+            "notes": notes + [f"unknown verification profile {profile_norm!r} — benchmark verdict is error, never passed"],
+            "profile": profile,
+        }
     runs = list(runs or [])
     if not runs and not profile_declares_none:
         return {
