@@ -162,12 +162,21 @@ class Supervisor:
         runtime: Any,
         provider: Any = None,
         log: Any = None,
+        execution_mode: str = "multi",
     ) -> None:
+        """`execution_mode` (WP-F1): "multi" schedules the planned DAG with
+        bounded parallel workers; "sequential" keeps the PLANNER but forces
+        the subtasks into a strict linear chain so exactly one worker executes
+        them in order — the planner-vs-multi benchmark distinction is real
+        code, not a label."""
+        if execution_mode not in ("multi", "sequential"):
+            raise AgentError("CONFIG_INVALID", f"unknown execution_mode {execution_mode!r}", source="supervisor")
         self.config = config
         self.ledger = ledger
         self.runtime = runtime
         self.provider = provider
         self.log = log or (lambda msg: None)
+        self.execution_mode = execution_mode
         self.workspace_manager: Any | None = None
 
     def attach_workspace_manager(self, manager: Any) -> None:
@@ -226,6 +235,17 @@ class Supervisor:
             context=json.dumps(scan, ensure_ascii=False),
             root_id=root_spec.task_id,
         )
+        if self.execution_mode == "sequential":
+            # planner keeps its decomposition, but execution is strictly one
+            # worker in plan order: chain every subtask onto its predecessor
+            ordered = sorted(specs, key=lambda s: 0 if s.is_root() else 1)
+            previous: TaskSpec | None = None
+            for spec in ordered:
+                if spec.is_root():
+                    continue
+                if previous is not None:
+                    spec.dependencies = [previous.task_id]
+                previous = spec
         for spec in specs:
             self.ledger.create_task(spec)
             self.ledger.set_task_status(spec.task_id, "queued", reason="planned")
@@ -401,6 +421,14 @@ class Supervisor:
         errors = validate_dependency_graph(specs)
         if errors:
             raise AgentError("MODEL_INVALID_RESPONSE", "replan produced an invalid DAG: " + "; ".join(errors), source="supervisor")
+        if self.execution_mode == "sequential":
+            previous: TaskSpec | None = None
+            for spec in specs:
+                if spec.is_root():
+                    continue
+                if previous is not None:
+                    spec.dependencies = [previous.task_id]
+                previous = spec
         for spec in specs:
             self.ledger.create_task(spec)
             self.ledger.set_task_status(spec.task_id, "queued", reason="replanned")
@@ -424,6 +452,11 @@ class Supervisor:
                 outcome = self.workspace_manager.integrate(row["task_id"], root_id)
                 if outcome["status"] == "conflict":
                     conflicts.append({"task_id": row["task_id"], "conflict_files": outcome.get("conflict_files", [])})
+                    continue
+                if outcome["status"] == "not_needed":
+                    # empty deliverable: release the worktree without merging
+                    # or re-verifying (the unchanged tree has nothing to test)
+                    self.workspace_manager.cleanup_worker_workspace(row["task_id"])
                     continue
                 if outcome["status"] != "integrated":
                     return {"status": outcome["status"], "task_id": row["task_id"], "detail": outcome}

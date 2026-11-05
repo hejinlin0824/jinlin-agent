@@ -128,14 +128,29 @@ class WorkspaceManager:
 
     @staticmethod
     def is_git_repo(path: Path | str) -> bool:
+        """True only when ``path`` IS a repository/worktree root — not merely
+        a directory inside someone else's repo. Attaching the manager to a
+        subdirectory would create ``agent/*`` branches and worktrees on the
+        OUTER repository (a checkout we do not own); the WP-F2 dry-run caught
+        exactly that against the harness's own checkout."""
+        try:
+            root = Path(path).resolve(strict=True)
+        except OSError:
+            return False
         res = subprocess.run(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=str(path),
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(root),
             capture_output=True,
             text=True,
             timeout=30,
         )
-        return res.returncode == 0 and res.stdout.strip() == "true"
+        if res.returncode != 0:
+            return False
+        try:
+            toplevel = Path(res.stdout.strip()).resolve()
+        except OSError:
+            return False
+        return toplevel == root
 
     def create_worker_workspace(self, task_id: str, base_commit: str | None = None) -> WorkerWorkspace:
         path = self.home / task_id
@@ -357,6 +372,17 @@ class IntegrationCoordinator:
 
     def integrate(self, task_id: str, ws: WorkerWorkspace) -> dict[str, Any]:
         commit_id = self._commit_worker_worktree(ws)
+        if commit_id == ws.base_commit:
+            # The worker delivered nothing (worktree still at base): there is
+            # no diff to merge, and re-verifying the unchanged tree with the
+            # project suite would test work nobody did.
+            return {
+                "status": "not_needed",
+                "task_id": task_id,
+                "commit": commit_id,
+                "rebased": False,
+                "verification": None,
+            }
         int_head = _git(self._path, "rev-parse", "HEAD").stdout.strip()
 
         rebased = False

@@ -1,0 +1,22 @@
+{
+  "task_id": "analyze-demo",
+  "strategy": "multi",
+  "started_at": "2026-11-05T04:34:26Z",
+  "status": "completed",
+  "verification_passed": true,
+  "changed_files": [],
+  "wall_seconds": 6.8,
+  "tokens_in": 9332,
+  "tokens_out": 160,
+  "model_calls": 8,
+  "tool_calls": 8,
+  "replans": 0,
+  "conflicts": 0,
+  "human_interventions": 0,
+  "error_summary": "",
+  "ledger_task": true,
+  "subtask_integration": [
+    "not_needed",
+    "not_needed"
+  ]
+}

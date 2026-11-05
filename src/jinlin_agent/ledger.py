@@ -334,9 +334,11 @@ class TaskLedger:
                     source="ledger",
                 )
             self._emit(task_id_root(row), "task.result_recorded", {"task_id": task_id, "result": result})
+            # integration mirrors the replay rule: no changes -> nothing to integrate
+            integration = "not_needed" if not result.get("changed_files") else "pending"
             conn.execute(
-                "UPDATE tasks SET result = ?, updated_at = ? WHERE task_id = ?",
-                (_json(result), _now(), task_id),
+                "UPDATE tasks SET result = ?, integration = ?, updated_at = ? WHERE task_id = ?",
+                (_json(result), integration, _now(), task_id),
             )
             conn.commit()
             return self.get_task(task_id)  # type: ignore[return-value]

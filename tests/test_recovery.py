@@ -259,6 +259,9 @@ def test_restart_with_adopted_worktrees_still_integrates(tmp_path):
         wid = runtime.submit_task(sub_spec.task_id, ws.path, branch=ws.branch, base_commit=ws.base_commit)
         outcome = runtime.wait_worker(wid)
         assert outcome["status"] == "completed", outcome
+        # the deliverable lands in the worktree (integration-time commit); an
+        # empty worktree is not_needed and must not be merged
+        (ws.path / "delivered.py").write_text("VALUE = 1\n", encoding="utf-8")
         manager._worktrees.clear()  # RESTART: in-memory map lost
 
         report = manager.recover(ledger, tid)

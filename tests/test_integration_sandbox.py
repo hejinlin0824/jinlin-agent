@@ -110,6 +110,7 @@ def no_subprocess_fallback():
 def test_verification_executes_through_the_sandbox(tmp_path):
     coordinator, manager, ledger, ws, cfg = make_coordinator(tmp_path, lambda path: RecordingSandbox(str(path)))
     try:
+        (ws.path / "delivered.py").write_text("VALUE = 1\n", encoding="utf-8")
         outcome = coordinator.integrate("task_r2", ws)
         assert outcome["status"] == "integrated", outcome
         fake = coordinator._sandbox_factory.__self__ if hasattr(coordinator._sandbox_factory, "__self__") else None
@@ -137,6 +138,7 @@ def test_sandbox_refusal_is_fail_closed_without_subprocess_fallback(tmp_path):
 
     coordinator, manager, ledger, ws, cfg = make_coordinator(tmp_path, refusing_factory)
     try:
+        (ws.path / "delivered.py").write_text("VALUE = 1\n", encoding="utf-8")
         with no_subprocess_fallback():
             outcome = coordinator.integrate("task_r2", ws)
         assert outcome["status"] == "verification_failed"
@@ -153,6 +155,7 @@ def test_sandbox_construction_failure_is_fail_closed(tmp_path):
 
     coordinator, manager, ledger, ws, cfg = make_coordinator(tmp_path, broken_factory)
     try:
+        (ws.path / "delivered.py").write_text("VALUE = 1\n", encoding="utf-8")
         with no_subprocess_fallback():
             outcome = coordinator.integrate("task_r2", ws)
         assert outcome["status"] == "verification_failed"
@@ -188,10 +191,26 @@ def test_verify_runs_in_the_integration_tree(tmp_path):
 
     coordinator, manager, ledger, ws, cfg = make_coordinator(tmp_path, lambda path: Capture(str(path)))
     try:
+        (ws.path / "delivered.py").write_text("VALUE = 1\n", encoding="utf-8")
         with no_subprocess_fallback():
             outcome = coordinator.integrate("task_r2", ws)
         assert outcome["status"] == "integrated"
         assert Path(recorded["cwd"]).resolve() == coordinator.integration_path().resolve()
+    finally:
+        manager.cleanup_all()
+        ledger.close()
+
+
+def test_empty_deliverable_is_not_needed_and_never_verified(tmp_path):
+    """A worktree with no deliverable is neither merged nor re-verified: a
+    merge would create an empty commit and run the project suite over work
+    nobody did (surfaced by the WP-F1 dry-run against a real checkout)."""
+    coordinator, manager, ledger, ws, cfg = make_coordinator(tmp_path, lambda path: RecordingSandbox(str(path)))
+    try:
+        outcome = coordinator.integrate("task_r2", ws)
+        assert outcome["status"] == "not_needed"
+        assert outcome["verification"] is None
+        assert not (coordinator.integration_path() / "delivered.py").exists()
     finally:
         manager.cleanup_all()
         ledger.close()
@@ -207,6 +226,7 @@ def test_malicious_integration_test_cannot_escape_the_worktree(tmp_path):
     rolls back."""
     coordinator, manager, ledger, ws, cfg = make_coordinator(tmp_path, None, repo=make_git_repo(tmp_path / "repo"))
     try:
+        (ws.path / "delivered.py").write_text("VALUE = 1\n", encoding="utf-8")
         evil = coordinator.integration_path() / "tests" / "test_escape.py"
         evil.parent.mkdir(parents=True, exist_ok=True)
         escape_target = tmp_path / "outside.txt"

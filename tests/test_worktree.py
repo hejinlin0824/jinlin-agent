@@ -117,6 +117,15 @@ def sub(title, depends_on=None, capabilities=None):
 # --------------------------------------------------------------------------- workspace manager
 
 
+def test_is_git_repo_requires_a_repo_root_not_a_subdirectory(tmp_path):
+    repo = make_git_repo(tmp_path / "repo")
+    assert WorkspaceManager.is_git_repo(repo)
+    # a directory INSIDE a repo is not a repo the manager may attach to:
+    # branches and worktrees would land on the outer checkout
+    assert not WorkspaceManager.is_git_repo(repo / "tests")
+    assert not WorkspaceManager.is_git_repo(tmp_path / "plain")
+
+
 def test_create_worker_worktree_records_branch_and_base(tmp_path):
     repo = make_git_repo(tmp_path / "repo")
     cfg = load_config(home=tmp_path / "home")
