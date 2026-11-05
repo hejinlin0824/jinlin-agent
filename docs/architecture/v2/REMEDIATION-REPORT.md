@@ -77,7 +77,10 @@ provider）。HTTP 审批（approval）有意不暴露。
 注：WP-R2 期间 CI 曾抓出 ubuntu 独有的"PATH 缺失导致验证命令无法执行"缺陷，已修复并留档（wp-v2.0-5-report §6.1）。
 
 ## 9. 仍然存在的问题
-1. **真实任务集评测未执行**（P2/R10）：需要所有者提供 DEEPSEEK_API_KEY 并确认任务集；多 Worker 是否转默认策略**必须**等该评测结果（任务书 §一.8）。
+1. **真实任务集评测：初步真实评测已执行**（所有者提供 Ark deepseek-v4-flash 凭证，2 简单任务 ×
+   3 策略 = 6/6 完成并通过独立验证，证据与发现见 `FINAL-ACCEPTANCE-REPORT.md` §4b）。
+   **仍未做**：含真实复杂度、能让评估器选择 plan/multi 的任务集（本轮两任务均被判 direct，
+   真实规划路径未被触发）；多 Worker 是否转默认策略仍**不得**据此下定论（任务书 §一.8）。
 2. 协作式取消为步边界（进行中调用先完成）；进程级硬杀仅存在于沙箱命令层。
 3. HTTP 审批队列（持久化审批注册表）未实现；headless worker 审批 fail-closed，`approved_once` 仅交互 CLI 可授。
 4. Windows 更强沙箱后端（Job Objects 之外的 Hyper-V/WSL2/ACL 矩阵）与资源配额未评估/实现。
@@ -85,7 +88,9 @@ provider）。HTTP 审批（approval）有意不暴露。
 6. 事件 hash chain、跨文件崩溃事务、递归脱敏（v1 遗留延后项）继续延后。
 
 ## 10. 未完成事项（明确声明，不用文档代替实现）
-- R10 的真实运行（含三种策略 × 30–50 任务的数字）：**未执行**。`scripts/benchmark_matrix.py` 与 `benchmark_tasks.example.json` 是可用骨架（`--dry-run` 已验证管道），真实运行前不得宣称多 Agent 优于单 Agent。
+- R10 的扩大真实运行（三种策略 × 30–50 任务、含能触发规划/多 Worker 的复杂任务）：**未执行**。
+  已完成的是初步真实评测（2 简单任务 × 3 策略，6/6 通过，见 FINAL-ACCEPTANCE-REPORT §4b）；
+  在复杂任务集评测完成前不得宣称多 Agent 优于单 Agent。
 - R9 中"查看代码变更 Diff / 查看审批请求详情"的 Workbench 视图未做（数据已在 API 中：diff 在任务事件、审批在 approval_required 消息）。
 
 ## 11. 是否建议合并

@@ -1,0 +1,30 @@
+{
+  "response_id": "02179385485076627412d2b56652b4ea3ae682b9da5d5c5855eef",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_tggp6vyv9x2lfk5uw0yomlvq",
+      "name": "get_project_summary",
+      "arguments": "{}",
+      "parsed": {},
+      "parse_error": null
+    },
+    {
+      "id": "call_5f824351osf71flvb8iqxdac",
+      "name": "get_file_info",
+      "arguments": "{\"path\": \"calc.py\"}",
+      "parsed": {
+        "path": "calc.py"
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 3895,
+    "completion_tokens": 180,
+    "total_tokens": 4075
+  },
+  "raw_artifact_id": null,
+  "model": "deepseek-v4-flash"
+}

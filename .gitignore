@@ -11,3 +11,7 @@ dist/
 
 reports/
 
+
+# benchmark fixtures carry their own nested git repos (worktree/integration
+# exercises at run time); never track their object stores
+fixtures/*/.git/

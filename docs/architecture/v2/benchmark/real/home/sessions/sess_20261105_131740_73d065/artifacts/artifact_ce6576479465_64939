@@ -1,0 +1,32 @@
+{
+  "response_id": "021793855862770841fc2298faf73f2fc5d524f9c961e71abfe46",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_ft3uoiuzk2w9z2gz2ho7xvdi",
+      "name": "read_file",
+      "arguments": "{\"path\": \"app.py\"}",
+      "parsed": {
+        "path": "app.py"
+      },
+      "parse_error": null
+    },
+    {
+      "id": "call_rynj4w1b0l4h7m4o3xynxku5",
+      "name": "read_file",
+      "arguments": "{\"path\": \"README.md\"}",
+      "parsed": {
+        "path": "README.md"
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 4069,
+    "completion_tokens": 96,
+    "total_tokens": 4165
+  },
+  "raw_artifact_id": null,
+  "model": "deepseek-v4-flash"
+}

@@ -1,0 +1,29 @@
+{
+  "multi": {
+    "tasks": 2,
+    "success_rate": 1.0,
+    "verification_pass_rate": 1.0,
+    "avg_wall_seconds": 414.9,
+    "avg_tokens": 84129.5,
+    "replans": 0,
+    "human_interventions": 0
+  },
+  "planner": {
+    "tasks": 2,
+    "success_rate": 1.0,
+    "verification_pass_rate": 1.0,
+    "avg_wall_seconds": 78.3,
+    "avg_tokens": 62249.5,
+    "replans": 0,
+    "human_interventions": 0
+  },
+  "single": {
+    "tasks": 2,
+    "success_rate": 1.0,
+    "verification_pass_rate": 1.0,
+    "avg_wall_seconds": 221.6,
+    "avg_tokens": 131218.5,
+    "replans": 0,
+    "human_interventions": 3
+  }
+}

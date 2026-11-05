@@ -1,0 +1,4 @@
+[
+  {"id": "analyze-demo", "kind": "code_explain", "workspace": "fixtures/demo", "prompt": "阅读本工作区，说明入口函数与其行为。给出结论与证据。"},
+  {"id": "fix-add", "kind": "single_file_fix", "workspace": "fixtures/bench-calc", "prompt": "tests/test_calc.py 失败：修复 calc.py 使全部测试通过。除修复外不要改动其他文件。", "expected": {"test_command": "python -m pytest -q"}}
+]

@@ -1,0 +1,26 @@
+{
+  "response_id": "021793854766882e0d15f89dc5eb44ad1ad600579228b79e43feb",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_nf4x68l8ksa6rhwqlgon3ktc",
+      "name": "run_command",
+      "arguments": "{\"command\": [\"python\", \"_verify_entry.py\"]}",
+      "parsed": {
+        "command": [
+          "python",
+          "_verify_entry.py"
+        ]
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 5158,
+    "completion_tokens": 76,
+    "total_tokens": 5234
+  },
+  "raw_artifact_id": null,
+  "model": "deepseek-v4-flash"
+}

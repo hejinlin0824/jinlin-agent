@@ -1,21 +1,22 @@
 # v2.0 最终验收报告（FINAL ACCEPTANCE REPORT）
 
-> 对应《Jinlin Agent v2.0 最终收尾任务书：R10 修复与 Runtime 验收》（WP-F1~F5）。
-> 结论先行：**三策略在代码层真实不同且全部经真实管线完成；Mock dry-run 实际执行并留有可追溯
-> 记录；验证通过率独立于 status 统计；文档与 CLI 实际行为一致；最终代码 HEAD `caf7e8c` 的
-> Windows/Ubuntu CI 均通过（run 41969534706，§5）。真实模型评测仍未执行（§6），因此不宣称
-> 任何"多 Agent 优于单 Agent"结论。**
+> 对应《Jinlin Agent v2.0 最终收尾任务书：R10 修复与 Runtime 验收》（WP-F1~F5）+ 所有者提供
+> 真实 provider 凭证后的真实模型评测补充（§4b）。
+> 结论先行：**三策略在代码层真实不同且全部经真实管线完成；Mock dry-run 与真实模型评测（6/6）
+> 都实际执行并留有可追溯记录；验证通过率独立于 status 统计；文档与 CLI 实际行为一致；收尾轮
+> 代码 HEAD `caf7e8c` 的 Windows/Ubuntu CI 通过（run 41969534706），真实评测轮的 CI 见 §5
+> 补充行。n=2 的简单任务集不构成策略优劣结论——事实上 multi 在其上更慢（§4b.2）。**
 
 ## 1. 基线与最终 Commit
 
 | 项 | 值 |
 |---|---|
 | 本轮基线（任务书下发时 HEAD） | `3d4c0e4`（test(workbench): poll the task row） |
-| 最终代码 Commit（CI 所在提交） | `caf7e8c` |
-| 本报告提交 | 见 §2 表格最后一行（纯文档提交，不含代码变更） |
+| 收尾轮最终代码 Commit（CI run 41969534706 所在提交） | `caf7e8c` |
+| 真实评测轮提交 | 本提交（fixtures + 真实评测证据 + benchmark_matrix.py direct 模式聚合修复 + 本报告更新；其 CI Run ID 在提交后回填于 §5） |
 | 分支 | `feature/v2-integration-remediation`（main 未改动，遵守任务书禁令） |
 
-## 2. 修改文件与 Commit 列表（`3d4c0e4..caf7e8c`，共 2 个提交 / 16 个文件）
+## 2. 修改文件与 Commit 列表（`3d4c0e4` 起）
 
 **`2bec1de` feat(benchmark): WP-F1/F2/F3** — 代码与证据：
 
@@ -34,7 +35,12 @@
 **`caf7e8c` docs: WP-F4** — `README.md`（可观测条目重写）、`docs/architecture/v2/REMEDIATION-REPORT.md`
 （§6 serve 只读边界如实改写；§7 测试数字更新为 368+3；§8 指向本报告；顶部加收尾轮说明）。
 
-**本报告提交**：`docs/architecture/v2/FINAL-ACCEPTANCE-REPORT.md`（新增）+ `AGENT.md`（状态数字更新）。
+**`ba4ebaf` docs: 验收报告** — `docs/architecture/v2/FINAL-ACCEPTANCE-REPORT.md`（新增）+ `AGENT.md`（状态数字更新）。
+
+**真实评测轮（本提交）** — `fixtures/demo`、`fixtures/bench-calc`（评测任务的工作区状态，含故意缺陷）；
+`docs/architecture/v2/benchmark/real/`（tasks.json、6 个逐 run JSON、records/summary、home/ 全部
+任务与 Worker 事件流 2.9MB）；`scripts/benchmark_matrix.py`（direct 模式指标聚合修复：worker 也可挂在根任务上）；
+本报告 §1/§2/§4b/§5/§6 更新。
 
 ## 3. 三策略真实执行路径（WP-F1：代码层不同，非名称不同）
 
@@ -94,6 +100,45 @@ python scripts/benchmark_matrix.py \
 4. **一次未复现的 flake**：连续三次全量回归中，第二次出现 1 个失败（未及捕获用例名即清理了
    junit），第一/三次及最终以 junitxml 计数的一次均为 0 失败。判定：负载相关偶发，CI 为准（§5）。
 
+## 4b. 真实模型评测（所有者提供凭证后执行，2026-11-05）
+
+**Provider**：Volcano Ark OpenAI 兼容端点（`ark.cn-beijing.volces.com/api/coding/v3`，模型
+`deepseek-v4-flash`，key 经 `DEEPSEEK_API_KEY` 环境变量注入，**不落盘、不入库**）。
+**任务集**（`benchmark/real/tasks.json`，fixture 已入库、每轮运行前 `git reset` 复位到同一初始状态）：
+- `analyze-demo`（只读分析，fixtures/demo）
+- `fix-add`（单文件修复 + 测试验收，fixtures/bench-calc：`add()` 有 `a - b` 缺陷，`test_add` 失败）
+
+**结果（6/6 完成，6/6 verification_passed=True，逐 run JSON + 全部会话/任务事件流入库 `benchmark/real/`）：**
+
+| 指标（analyze-demo / fix-add） | single | planner | multi |
+|---|---|---|---|
+| status / verification_passed | completed / True | completed / True | completed / True |
+| wall_seconds | 100.3 / 342.9 | 104.4 / 52.3 | 417.1 / 412.6 |
+| tokens 实际 usage（in+out 合计） | 93,887 / 168,550 | 70,676 / 53,823 | 95,962 / 72,297 |
+| model_calls | 13 / 17 | 10 / 8 | 13 / 9 |
+| tool_calls | 16 / 21 | 10 / 11 | 16 / 13 |
+| human_interventions | 3 / 0 | 0 / 0 | 0 / 0 |
+
+（汇总聚合见 `benchmark/real/summary.json`：三策略 2 任务 success_rate=1.0、
+verification_pass_rate=1.0。）
+
+**核验（独立于 benchmark 自报）：** `fix-add` 三策略均真实修复 `add()`（工作区 `a + b`），
+`python -m pytest -q` 2/2 通过；`analyze-demo` 三策略工作区净变更均为零。
+
+**如实发现（不夸大、不外推）：**
+1. **复杂度评估器把两个任务都判为 direct**（简单任务永不规划——设计行为）：planner/multi 与
+   single 的差异落在"评估 + 任务账本 + 策略选择"，而非"多 Worker 并行"。**带真实规划的
+   plan/multi 路径需要真正复杂的任务集**（见 §6）。
+2. **n=2 且任务简单：不构成任何策略优劣结论。** 本表唯一支持的事实陈述是：三条路径在真实
+   provider 上全部端到端可用且全部通过独立验证。事实上 multi 在这两个简单任务上更慢
+   （均值 414.9s vs planner 78.3s）——直接反证了"多 Agent 必然更好"。
+3. **审批语义差异（真实观察）**：single（v1 会话路径）出现 3 次 approval 等待；受监督路径的
+   execute 类请求被任务层策略直接拒绝（不等待）。两者都是 fail-closed，但行为不同，已如实记录。
+4. **真实会话质量样例**（analyze × multi，`sess_20261105_131740_73d065`）：模型写了一个临时
+   验证脚本 → `run_command` 两次被 fail-closed 拒绝 → 自行 `apply_patch` 删除临时脚本 →
+   `git status` 确认干净 → 携带证据引用 propose_completion → L0/L1 验证通过。README 与代码
+   不一致（声称 prints，实际 returns）也被三策略一致发现。
+
 ## 5. 测试与 CI 证据（WP-F5）
 
 **本机（Windows 10.0.26200，Python 3.13，最终代码 HEAD `caf7e8c`，junitxml 精确计数）：**
@@ -107,17 +152,20 @@ python scripts/benchmark_matrix.py \
 
 | Run ID | HEAD | 结果 |
 |---|---|---|
-| `41969534706` | `caf7e8c`（本轮最终代码提交） | **成功（双平台绿）**：`ubuntu-latest / py3.13` ✅、`windows-latest / py3.13` ✅ |
+| `41969534706` | `caf7e8c`（收尾轮最终代码提交） | **成功（双平台绿）**：`ubuntu-latest / py3.13` ✅、`windows-latest / py3.13` ✅ |
 | `41773135089` | `3d4c0e4`（本轮基线，前轮收尾） | 成功（历史参照） |
+| 真实评测轮 | 本提交（含 benchmark_matrix.py 聚合修复与 fixtures） | ⏳ 推送后执行；Run ID 在其随后的文档提交中回填 |
 
-（CI 在 `caf7e8c` 上执行；本报告与其后的 AGENT.md 状态更新为纯文档提交，不含代码变更。）
+（收尾轮 CI 在 `caf7e8c` 上执行；真实评测轮 CI 在其自身提交上执行，结果由后续文档提交回填。）
 
 ## 6. 尚未完成的工作（如实清单，不虚构）
 
-1. **真实模型评测未执行**（任务书 P2/R10 的原始目标）：需要所有者提供 `DEEPSEEK_API_KEY` 并
-   确认任务集。**因此本轮不给出、也不允许评审采信任何"多 Agent 优于单 Agent"的结论**——
-   dry-run 三策略数据只证明"路径真实不同且都能跑通"，不构成性能/质量对比。
-2. **Worker tokens 为估算值**（见 §4.1）：mock provider 无 usage；真实运行才有精确 tokens。
+1. **含真实规划的复杂任务集评测**：§4b 的真实评测中，复杂度评估器把两个简单任务都判为
+   direct（设计行为：简单任务永不规划），因此 plan/multi 的**真实模型规划/多 Worker 并行/
+   worktree 集成全链路**仍未被真实任务触发（机制层面由 dry-run §4 与测试覆盖）。需要所有者
+   确认一个含真实复杂度的任务集后执行；在那之前**不给出任何策略优劣结论**（§4b 已用数据
+   反证"多 Agent 必然更好"）。
+2. **dry-run 的 tokens 为估算值**（mock 无 usage）；真实评测（§4b）已使用真实 usage 统计。
 3. **`conflicts` 指标恒为 0**：代码注释已声明按事件统计是后续工作（冲突当前表现为 blocked）。
 4. **审批持久化注册表 / HTTP 审批队列未实现**（整改报告 §10 遗留，如实保留）。
 5. **集成验证的"affected-only"定向测试**：当前对集成树跑项目测试命令全文（`--confcutdir`

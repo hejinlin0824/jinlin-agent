@@ -1,0 +1,21 @@
+{
+  "task_id": "fix-add",
+  "strategy": "planner",
+  "started_at": "2026-11-05T05:22:03Z",
+  "status": "completed",
+  "verification_passed": true,
+  "changed_files": [
+    "calc.py"
+  ],
+  "wall_seconds": 52.3,
+  "tokens_in": 51807,
+  "tokens_out": 2016,
+  "model_calls": 8,
+  "tool_calls": 11,
+  "replans": 0,
+  "conflicts": 0,
+  "human_interventions": 0,
+  "error_summary": "Investigated tests/test_calc.py and calc.py: the only bug was add() returning a - b instead of a + b. Applied a one-line fix in calc.py, then ran the project's test command `pytest -q`, which reported \"2 passed in 0.02s\" with exit code 0 (L3 tests passed: 2 passed, 0 failed, 0 errors; L5 regression confirmed test_add went from failing to passing). calc.py is the only file changed this session.",
+  "ledger_task": true,
+  "subtask_integration": []
+}

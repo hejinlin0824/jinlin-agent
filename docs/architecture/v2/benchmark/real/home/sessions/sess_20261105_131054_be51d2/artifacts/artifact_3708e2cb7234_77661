@@ -1,0 +1,26 @@
+{
+  "response_id": "0217938554650795c7f85291e6ad850e47f0b8bb356de2f9d394a",
+  "text": "内联 `python -c` 被策略拒绝（不透明代码）。改用直接执行模块文件来验证（app.py 无 `__main__` 块，应无输出、退出码 0）：\n\n",
+  "tool_calls": [
+    {
+      "id": "call_60fuoage4lz5fsc8xurk7k2l",
+      "name": "run_command",
+      "arguments": "{\"command\": [\"python\", \"app.py\"]}",
+      "parsed": {
+        "command": [
+          "python",
+          "app.py"
+        ]
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 4825,
+    "completion_tokens": 618,
+    "total_tokens": 5443
+  },
+  "raw_artifact_id": null,
+  "model": "deepseek-v4-flash"
+}

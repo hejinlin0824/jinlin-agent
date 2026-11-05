@@ -233,14 +233,14 @@ def run_supervised(task: dict[str, Any], workspace: Path, dry_run: bool, mode: s
 
             events = list(read_events(log_dir))
         # aggregate session metrics across every worker attempt under this
-        # root (workers belong to the subtasks, not to the root itself)
+        # root — including the root itself, which carries the worker in
+        # direct mode (the assessor may classify the task as simple and
+        # never plan); subtasks carry workers in plan mode
         agg = {"tokens_in": 0, "tokens_out": 0, "model_calls": 0, "tool_calls": 0}
         verification_passed = outcome["status"] == "completed"
         failed_verifications = 0
         changed: set[str] = set()
         for sub in ledger.list_tasks(tid):
-            if sub["task_id"] == tid:
-                continue
             for w in ledger.list_workers(sub["task_id"]):
                 sid = w.get("session_id") or ""
                 sdir = Path(cfg.sessions_dir) / sid

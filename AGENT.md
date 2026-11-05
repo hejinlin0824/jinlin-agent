@@ -11,7 +11,7 @@ branches:
 ci: .github/workflows/ci.yml  # windows-latest + ubuntu-latest, Python 3.13
 test_status: "主体任务包 01–06、最终收尾包 01–04 均已由所有者本地验收；最新 HEAD 40c196f 的 Push/PR CI 均在 Ubuntu 与 Windows 通过"
 review_status: "主体任务包 01–06 完成；最终收尾包 01–04 完成；最终收尾包 05 发布候选审查进行中（不扩展功能）"
-v2_status: "整改（WP-R1~R10）与最终收尾（WP-F1~F5）完成：368 passed + 3 skipped / eval 22/22；三策略 benchmark + MockProvider 真实管线 dry-run 证据入库 docs/architecture/v2/benchmark/dryrun/；最终验收（含 CI Run ID）见 docs/architecture/v2/FINAL-ACCEPTANCE-REPORT.md。真实模型评测未执行（待 DEEPSEEK_API_KEY），不宣称多 Agent 优劣结论"
+v2_status: "整改（WP-R1~R10）与最终收尾（WP-F1~F5）完成：368 passed + 3 skipped / eval 22/22；三策略 benchmark + MockProvider 真实管线 dry-run 证据入库 docs/architecture/v2/benchmark/dryrun/；真实模型评测（Ark deepseek-v4-flash，所有者凭证）6/6 完成并通过独立验证，证据入库 docs/architecture/v2/benchmark/real/；最终验收见 docs/architecture/v2/FINAL-ACCEPTANCE-REPORT.md。注意：真实评测中评估器将简单任务判 direct，plan/multi 的真实规划路径需复杂任务集（未做），不宣称多 Agent 优劣结论"
 trash_cleanup: "jinlin-agent clean [--workspace W] [--apply]（默认 dry-run；归属证明 = 严格命名模式 + .jinlin/trash-manifest.jsonl 记录）"
 primary_goal: "让每一个『完成』都由真实修改 + 验证记录 + 可复查证据决定"
 non_goals: [multi-agent, IDE/Web UI, network isolation, auto-git-commit]

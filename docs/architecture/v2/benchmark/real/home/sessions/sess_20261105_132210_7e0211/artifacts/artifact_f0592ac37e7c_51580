@@ -1,0 +1,23 @@
+{
+  "response_id": "021793856149906dfda270f226adba1bf628b57be6483cf3a93a3",
+  "text": "Tests pass (2 passed, exit code 0). Let me confirm the working tree only contains the intended change.\n\n",
+  "tool_calls": [
+    {
+      "id": "call_j6rtq51zy12vc5fejz905zv7",
+      "name": "get_git_diff",
+      "arguments": "{\"stat_only\": true}",
+      "parsed": {
+        "stat_only": true
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 5427,
+    "completion_tokens": 108,
+    "total_tokens": 5535
+  },
+  "raw_artifact_id": null,
+  "model": "deepseek-v4-flash"
+}

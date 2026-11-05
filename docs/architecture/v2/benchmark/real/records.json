@@ -1,0 +1,124 @@
+[
+  {
+    "task_id": "analyze-demo",
+    "strategy": "multi",
+    "started_at": "2026-11-05T05:12:42Z",
+    "status": "completed",
+    "verification_passed": true,
+    "changed_files": [
+      "_verify_main.py"
+    ],
+    "wall_seconds": 417.1,
+    "tokens_in": 88173,
+    "tokens_out": 7789,
+    "model_calls": 13,
+    "tool_calls": 16,
+    "replans": 0,
+    "conflicts": 0,
+    "human_interventions": 0,
+    "error_summary": "已阅读工作区（app.py、README.md），确定入口函数为 app.main()，其真实行为是返回字符串 \"served\" 而非打印；README 描述与实际代码不符。运行验证被沙箱拒绝（python/py 未获批准，fail-closed），行为由源码静态分析确定；临时验证脚本已删除，工作区干净（git status 无变更）。",
+    "ledger_task": true,
+    "subtask_integration": []
+  },
+  {
+    "task_id": "analyze-demo",
+    "strategy": "planner",
+    "started_at": "2026-11-05T05:10:49Z",
+    "status": "completed",
+    "verification_passed": true,
+    "changed_files": [],
+    "wall_seconds": 104.4,
+    "tokens_in": 65085,
+    "tokens_out": 5591,
+    "model_calls": 10,
+    "tool_calls": 10,
+    "replans": 0,
+    "conflicts": 0,
+    "human_interventions": 0,
+    "error_summary": "入口函数为 app.py 中的 `main()`。其行为是：无参数、无副作用（无 print、无 I/O、无外部依赖），调用时返回字符串字面量 `\"served\"`。README.md 声称它 \"prints a served banner\"，但源码并无任何打印输出，属于文档与实现不一致；且 app.py 没有 `if __name__ == \"__main__\"` 块，直接 `python app.py` 不会产生任何输出。由于本任务沙箱拒绝执行 python/py/python3（无审批人、可执行文件不可识别），无法做运行时验证，结论基于对全部源码（共 2 行）的静态审读，确定性高。整个分析为只读，未修改任何文件。",
+    "ledger_task": true,
+    "subtask_integration": []
+  },
+  {
+    "task_id": "analyze-demo",
+    "strategy": "single",
+    "started_at": "2026-11-05T04:59:08Z",
+    "status": "completed",
+    "verification_passed": true,
+    "changed_files": [
+      "_verify_entry.py"
+    ],
+    "wall_seconds": 100.3,
+    "tokens_in": 88405,
+    "tokens_out": 5482,
+    "model_calls": 13,
+    "tool_calls": 16,
+    "replans": 0,
+    "conflicts": 0,
+    "human_interventions": 3,
+    "error_summary": "",
+    "ledger_task": false
+  },
+  {
+    "task_id": "fix-add",
+    "strategy": "multi",
+    "started_at": "2026-11-05T05:23:21Z",
+    "status": "completed",
+    "verification_passed": true,
+    "changed_files": [
+      "calc.py"
+    ],
+    "wall_seconds": 412.6,
+    "tokens_in": 65661,
+    "tokens_out": 6636,
+    "model_calls": 9,
+    "tool_calls": 13,
+    "replans": 0,
+    "conflicts": 0,
+    "human_interventions": 0,
+    "error_summary": "修复 calc.py 中 add() 的错误实现（a - b → a + b），使全部测试通过。L3 tests 验证：2 passed, 0 failed, exit_code 0。仅修改 calc.py，其他文件未改动。",
+    "ledger_task": true,
+    "subtask_integration": []
+  },
+  {
+    "task_id": "fix-add",
+    "strategy": "planner",
+    "started_at": "2026-11-05T05:22:03Z",
+    "status": "completed",
+    "verification_passed": true,
+    "changed_files": [
+      "calc.py"
+    ],
+    "wall_seconds": 52.3,
+    "tokens_in": 51807,
+    "tokens_out": 2016,
+    "model_calls": 8,
+    "tool_calls": 11,
+    "replans": 0,
+    "conflicts": 0,
+    "human_interventions": 0,
+    "error_summary": "Investigated tests/test_calc.py and calc.py: the only bug was add() returning a - b instead of a + b. Applied a one-line fix in calc.py, then ran the project's test command `pytest -q`, which reported \"2 passed in 0.02s\" with exit code 0 (L3 tests passed: 2 passed, 0 failed, 0 errors; L5 regression confirmed test_add went from failing to passing). calc.py is the only file changed this session.",
+    "ledger_task": true,
+    "subtask_integration": []
+  },
+  {
+    "task_id": "fix-add",
+    "strategy": "single",
+    "started_at": "2026-11-05T05:00:49Z",
+    "status": "completed",
+    "verification_passed": true,
+    "changed_files": [
+      "calc.py"
+    ],
+    "wall_seconds": 342.9,
+    "tokens_in": 143867,
+    "tokens_out": 24683,
+    "model_calls": 17,
+    "tool_calls": 21,
+    "replans": 0,
+    "conflicts": 0,
+    "human_interventions": 0,
+    "error_summary": "",
+    "ledger_task": false
+  }
+]

@@ -1,0 +1,21 @@
+{
+  "response_id": "0217938548043306fd7a792898c90d4d2724113d22df8fc7fd155",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_nkubga94lmnkp96noi6spcgg",
+      "name": "get_git_status",
+      "arguments": "{}",
+      "parsed": {},
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 6339,
+    "completion_tokens": 119,
+    "total_tokens": 6458
+  },
+  "raw_artifact_id": null,
+  "model": "deepseek-v4-flash"
+}

@@ -1,0 +1,26 @@
+{
+  "response_id": "02179385588995909b5057e6c5823bee4bfc995e78b34ae18055c",
+  "text": "`python` 未被批准系统识别。尝试 Windows 常见的 `py` 启动器运行验证脚本：\n\n",
+  "tool_calls": [
+    {
+      "id": "call_trmpcvi3r5yyfv3th8if6rsr",
+      "name": "run_command",
+      "arguments": "{\"command\": [\"py\", \"_verify_main.py\"]}",
+      "parsed": {
+        "command": [
+          "py",
+          "_verify_main.py"
+        ]
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 5462,
+    "completion_tokens": 218,
+    "total_tokens": 5680
+  },
+  "raw_artifact_id": null,
+  "model": "deepseek-v4-flash"
+}

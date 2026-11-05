@@ -1,0 +1,41 @@
+{
+  "response_id": "0217938547528612a2bed297ad64eae2b89e2702342ef97e93361",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_8gkea9f8dx0owy21qpjfpe82",
+      "name": "read_file",
+      "arguments": "{\"path\": \"app.py\"}",
+      "parsed": {
+        "path": "app.py"
+      },
+      "parse_error": null
+    },
+    {
+      "id": "call_xrd2zmg3eqdmmc4mejwmvf4c",
+      "name": "read_file",
+      "arguments": "{\"path\": \"README.md\"}",
+      "parsed": {
+        "path": "README.md"
+      },
+      "parse_error": null
+    },
+    {
+      "id": "call_7n9ec1x8wt6kd63w1ygq24cl",
+      "name": "read_file",
+      "arguments": "{\"path\": \".gitignore\"}",
+      "parsed": {
+        "path": ".gitignore"
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 4038,
+    "completion_tokens": 121,
+    "total_tokens": 4159
+  },
+  "raw_artifact_id": null,
+  "model": "deepseek-v4-flash"
+}

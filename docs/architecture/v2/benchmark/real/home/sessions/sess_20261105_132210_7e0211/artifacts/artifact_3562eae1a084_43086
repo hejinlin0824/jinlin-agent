@@ -1,0 +1,25 @@
+{
+  "response_id": "021793856139779dc6263e9e52ba05a43f20bd75063a4f8d73d38",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_z5nopci8314a7rzw9934uzw4",
+      "name": "edit_file",
+      "arguments": "{\"path\": \"calc.py\", \"old_string\": \"def add(a, b):\\n    \\\"\\\"\\\"Return the sum of a and b.\\\"\\\"\\\"\\n    return a - b\", \"new_string\": \"def add(a, b):\\n    \\\"\\\"\\\"Return the sum of a and b.\\\"\\\"\\\"\\n    return a + b\"}",
+      "parsed": {
+        "path": "calc.py",
+        "old_string": "def add(a, b):\n    \"\"\"Return the sum of a and b.\"\"\"\n    return a - b",
+        "new_string": "def add(a, b):\n    \"\"\"Return the sum of a and b.\"\"\"\n    return a + b"
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 4841,
+    "completion_tokens": 119,
+    "total_tokens": 4960
+  },
+  "raw_artifact_id": null,
+  "model": "deepseek-v4-flash"
+}

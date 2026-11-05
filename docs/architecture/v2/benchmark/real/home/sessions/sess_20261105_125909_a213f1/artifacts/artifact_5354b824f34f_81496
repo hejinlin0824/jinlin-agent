@@ -1,0 +1,30 @@
+{
+  "response_id": "021793854771897dfda270f226adba1bf628b57be6483cf4d7d55",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_wsf9qss6f2xwtfh7xqamx0j4",
+      "name": "get_git_status",
+      "arguments": "{}",
+      "parsed": {},
+      "parse_error": null
+    },
+    {
+      "id": "call_w5013qgj4eh1azfwaw5z97oq",
+      "name": "get_git_log",
+      "arguments": "{\"max_entries\": 5}",
+      "parsed": {
+        "max_entries": 5
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 5342,
+    "completion_tokens": 595,
+    "total_tokens": 5937
+  },
+  "raw_artifact_id": null,
+  "model": "deepseek-v4-flash"
+}

@@ -1,0 +1,30 @@
+{
+  "response_id": "02179385474987473b8dfe497f31d2aa905b6fe2ab6c681c4df7d",
+  "text": "",
+  "tool_calls": [
+    {
+      "id": "call_bahdm5phm8488bqhvmpkrqd2",
+      "name": "get_project_summary",
+      "arguments": "{}",
+      "parsed": {},
+      "parse_error": null
+    },
+    {
+      "id": "call_s04en37vio4kxvo8lfnh0d77",
+      "name": "list_dir",
+      "arguments": "{\"path\": \".\"}",
+      "parsed": {
+        "path": "."
+      },
+      "parse_error": null
+    }
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+    "prompt_tokens": 3804,
+    "completion_tokens": 79,
+    "total_tokens": 3883
+  },
+  "raw_artifact_id": null,
+  "model": "deepseek-v4-flash"
+}

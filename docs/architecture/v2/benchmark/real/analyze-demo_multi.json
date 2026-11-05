@@ -1,0 +1,21 @@
+{
+  "task_id": "analyze-demo",
+  "strategy": "multi",
+  "started_at": "2026-11-05T05:12:42Z",
+  "status": "completed",
+  "verification_passed": true,
+  "changed_files": [
+    "_verify_main.py"
+  ],
+  "wall_seconds": 417.1,
+  "tokens_in": 88173,
+  "tokens_out": 7789,
+  "model_calls": 13,
+  "tool_calls": 16,
+  "replans": 0,
+  "conflicts": 0,
+  "human_interventions": 0,
+  "error_summary": "已阅读工作区（app.py、README.md），确定入口函数为 app.main()，其真实行为是返回字符串 \"served\" 而非打印；README 描述与实际代码不符。运行验证被沙箱拒绝（python/py 未获批准，fail-closed），行为由源码静态分析确定；临时验证脚本已删除，工作区干净（git status 无变更）。",
+  "ledger_task": true,
+  "subtask_integration": []
+}

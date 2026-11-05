@@ -1,0 +1,20 @@
+{
+  "task_id": "fix-add",
+  "strategy": "single",
+  "started_at": "2026-11-05T05:00:49Z",
+  "status": "completed",
+  "verification_passed": true,
+  "changed_files": [
+    "calc.py"
+  ],
+  "wall_seconds": 342.9,
+  "tokens_in": 143867,
+  "tokens_out": 24683,
+  "model_calls": 17,
+  "tool_calls": 21,
+  "replans": 0,
+  "conflicts": 0,
+  "human_interventions": 0,
+  "error_summary": "",
+  "ledger_task": false
+}

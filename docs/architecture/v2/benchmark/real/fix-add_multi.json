@@ -1,0 +1,21 @@
+{
+  "task_id": "fix-add",
+  "strategy": "multi",
+  "started_at": "2026-11-05T05:23:21Z",
+  "status": "completed",
+  "verification_passed": true,
+  "changed_files": [
+    "calc.py"
+  ],
+  "wall_seconds": 412.6,
+  "tokens_in": 65661,
+  "tokens_out": 6636,
+  "model_calls": 9,
+  "tool_calls": 13,
+  "replans": 0,
+  "conflicts": 0,
+  "human_interventions": 0,
+  "error_summary": "修复 calc.py 中 add() 的错误实现（a - b → a + b），使全部测试通过。L3 tests 验证：2 passed, 0 failed, exit_code 0。仅修改 calc.py，其他文件未改动。",
+  "ledger_task": true,
+  "subtask_integration": []
+}
