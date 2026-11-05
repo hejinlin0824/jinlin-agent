@@ -134,32 +134,31 @@ def recompute_key(
     if entry["kind"] == "sessions":
         from jinlin_agent.events import read_events
 
-        states = []
+        metrics_list = []
         human = 0
         for sid in entry["sessions"]:
             sdir = Path(cfg.sessions_dir) / sid
             events = list(read_events(sdir))
-            states.append(fold_events(events))
+            st = fold_events(events)
+            metrics_list.append(bm._session_metrics(st, profile="code", has_test_command=has_test_command))
             human += bm._human_interventions([dict(e) for e in events])
         agg = {
-            "tokens_in_actual": None, "tokens_out_actual": None, "tokens_total_actual": None,
             "tokens_estimated_context": 0, "tokens_usage_missing_calls": 0,
             "model_calls": 0, "model_attempts": 0, "tool_calls": 0,
         }
-        metrics_list = [
-            bm._session_metrics(st, profile="code", has_test_command=has_test_command) for st in states
-        ]
+        actual_in: int | None = None
+        actual_out: int | None = None
+        changed: set[str] = set()
         for m in metrics_list:
             for f in ("tokens_estimated_context", "tokens_usage_missing_calls", "model_calls", "model_attempts", "tool_calls"):
                 agg[f] += m[f] or 0
-        seen = [m for m in metrics_list if m["usage_complete"] or m["tokens_usage_missing_calls"] != m["model_attempts"]]
-        if metrics_list and all(m["tokens_in_actual"] is not None for m in metrics_list):
-            agg["tokens_in_actual"] = sum(m["tokens_in_actual"] for m in metrics_list)
-            agg["tokens_out_actual"] = sum(m["tokens_out_actual"] for m in metrics_list)
-            agg["tokens_total_actual"] = agg["tokens_in_actual"] + agg["tokens_out_actual"]
-        changed: set[str] = set()
-        for m in metrics_list:
+            if m["tokens_in_actual"] is not None:
+                actual_in = (actual_in or 0) + m["tokens_in_actual"]
+            if m["tokens_out_actual"] is not None:
+                actual_out = (actual_out or 0) + m["tokens_out_actual"]
             changed.update(m["changed_files"])
+        usage_observed = actual_in is not None or actual_out is not None
+        changed_files = sorted(changed)
         root = bm._aggregate_verification(metrics_list) if metrics_list else {
             "verification_status": "not_run", "verification_passed": False,
             "verification_evidence": {"status": "not_run", "required_levels": [], "executed_levels": [],
@@ -167,8 +166,13 @@ def recompute_key(
                                       "notes": ["no session event log matched"], "components": 0},
         }
         recomputed.update(agg)
+        recomputed["tokens_in_actual"] = actual_in if usage_observed else None
+        recomputed["tokens_out_actual"] = actual_out if usage_observed else None
+        recomputed["tokens_total_actual"] = (actual_in + actual_out) if usage_observed else None
         recomputed["usage_complete"] = bool(metrics_list) and all(m["usage_complete"] for m in metrics_list)
-        recomputed["changed_files"] = sorted(changed)
+        recomputed["usage_missing_sessions"] = len(entry["sessions"]) - len(metrics_list)
+        recomputed["usage_expected_sessions"] = len(entry["sessions"])
+        recomputed["changed_files"] = changed_files
         recomputed.update(root)
         recomputed["human_interventions"] = human
         recomputed["replans"] = 0  # single creates no ledger tasks: no replans possible

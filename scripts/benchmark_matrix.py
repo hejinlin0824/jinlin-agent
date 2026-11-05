@@ -196,7 +196,11 @@ def _aggregate_verification(components: list[dict[str, Any]]) -> dict[str, Any]:
     statuses = [c.get("verification_status") for c in components]
     if any(s == "failed" for s in statuses):
         status = "failed"
-    elif any(s in ("not_run", "error") for s in statuses):
+    elif any(s == "error" for s in statuses):
+        # WP-R4-02: an error component (e.g. unknown verification profile)
+        # propagates as error — never overridden by a sibling's pass
+        status = "error"
+    elif any(s == "not_run" for s in statuses):
         status = "not_run"
     elif any(s == "passed" for s in statuses):
         status = "passed"
@@ -389,29 +393,44 @@ def root_record_fields(
     root's verification verdict is layered aggregation over every worker's
     independent evidence plus the integration phase — outcome status never
     initializes it. Workers attached directly to the root (direct mode) are
-    included; subtasks carry workers in plan mode."""
+    included; subtasks carry workers in plan mode.
+
+    WP-R4-01 token semantics:
+    * actual values are summed ONLY from observed provider usage — a worker
+      whose session has no usage contributes ``None``-ness, never a 0;
+    * ``tokens_total_actual`` is computed at root level and is ``null``
+      unless at least one usage observation exists;
+    * ``usage_complete`` is true only when every expected worker session was
+      read AND every recorded attempt carried usage — a missing session log
+      fails completeness and is counted in ``usage_missing_sessions``
+      (the attempt count of an unreadable session is unknowable, so it is
+      NOT folded into tokens_usage_missing_calls)."""
     from jinlin_agent.verify import detect_project
 
     has_test_command = bool(detect_project(workspace, cfg).test_commands)
     agg = {
-        "tokens_in_actual": 0,
-        "tokens_out_actual": 0,
         "tokens_estimated_context": 0,
         "tokens_usage_missing_calls": 0,
         "model_calls": 0,
         "model_attempts": 0,
         "tool_calls": 0,
     }
+    actual_in: int | None = None
+    actual_out: int | None = None
     components: list[dict[str, Any]] = []
     changed: set[str] = set()
     worker_metrics: list[dict[str, Any]] = []
+    expected_workers = 0
+    missing_sessions = 0
     subtasks = [r for r in ledger.list_tasks(root_id) if r["task_id"] != root_id]
     for sub in ledger.list_tasks(root_id):
         profile = (sub.get("verification") or "code").strip().lower()
         for w in ledger.list_workers(sub["task_id"]):
+            expected_workers += 1
             sid = w.get("session_id") or ""
             sdir = Path(cfg.sessions_dir) / sid
             if not (sdir / "events.jsonl").exists():
+                missing_sessions += 1
                 components.append(_missing_session_component(sid, profile, has_test_command))
                 continue
             from jinlin_agent.state import recover as fold_events
@@ -421,17 +440,33 @@ def root_record_fields(
             worker_metrics.append(sm)
             for key in agg:
                 agg[key] += sm[key] or 0
+            if sm["tokens_in_actual"] is not None:
+                actual_in = (actual_in or 0) + sm["tokens_in_actual"]
+            if sm["tokens_out_actual"] is not None:
+                actual_out = (actual_out or 0) + sm["tokens_out_actual"]
             changed.update(sm["changed_files"])
             components.append(sm)
     integration_states = [r.get("integration", "") for r in subtasks]
     integration_required = any(s == "pending" for s in integration_states)
     components.append(_integration_evidence(events, required=integration_required))
     root_verification = _aggregate_verification(components)
+    usage_observed = actual_in is not None or actual_out is not None
+    usage_complete = (
+        expected_workers > 0
+        and missing_sessions == 0
+        and bool(worker_metrics)
+        and all(m["usage_complete"] for m in worker_metrics)
+    )
     return {
+        "tokens_in_actual": actual_in if usage_observed else None,
+        "tokens_out_actual": actual_out if usage_observed else None,
+        "tokens_total_actual": (actual_in + actual_out) if usage_observed else None,
         **agg,
-        # usage is complete only when EVERY folded session reported
-        # provider usage for all of its model attempts
-        "usage_complete": bool(worker_metrics) and all(m["usage_complete"] for m in worker_metrics),
+        # usage is complete only when every expected worker session was read
+        # and every recorded model attempt carried provider usage
+        "usage_complete": usage_complete,
+        "usage_missing_sessions": missing_sessions,
+        "usage_expected_sessions": expected_workers,
         "changed_files": sorted(changed),
         **root_verification,
         "human_interventions": _human_interventions(events),
@@ -467,6 +502,8 @@ def run_one(task: dict[str, Any], strategy: str, dry_run: bool, out_dir: Path) -
         "tokens_total_actual": None,
         "tokens_estimated_context": 0,
         "tokens_usage_missing_calls": 0,
+        "usage_missing_sessions": 0,
+        "usage_expected_sessions": 1,
         "usage_complete": False,
         "model_calls": 0,
         "model_attempts": 0,
@@ -487,7 +524,8 @@ def run_one(task: dict[str, Any], strategy: str, dry_run: bool, out_dir: Path) -
         else:
             raise SystemExit(f"unknown strategy {strategy}")
         for key in ("status", "tokens_in_actual", "tokens_out_actual", "tokens_total_actual",
-                    "tokens_estimated_context", "tokens_usage_missing_calls", "usage_complete",
+                    "tokens_estimated_context", "tokens_usage_missing_calls", "usage_missing_sessions",
+                    "usage_expected_sessions", "usage_complete",
                     "model_calls", "model_attempts", "tool_calls", "changed_files",
                     "verification_status", "verification_passed", "verification_evidence",
                     "human_interventions", "error_summary", "ledger_task", "subtask_integration"):
@@ -513,20 +551,33 @@ def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
         total = len(rows)
         completed = sum(1 for r in rows if r["status"] == "completed")
         verified = sum(1 for r in rows if r["verification_passed"] is True)
-        # WP-C2: only provider-reported usage is summed; runs with missing
-        # usage (None actuals) are counted separately, never folded in as 0
-        actual_rows = [r for r in rows if r.get("tokens_in_actual") is not None]
-        usage_complete = sum(1 for r in rows if r.get("usage_complete") is True)
+        # WP-R4-01: distinguish null (no provider usage observed at all) from
+        # a legitimate numeric 0. A run counts as "with usage" when at least
+        # one provider usage observation exists — not when a token number is
+        # merely non-zero.
+        with_usage = [
+            r for r in rows
+            if r.get("tokens_in_actual") is not None or r.get("tokens_out_actual") is not None
+        ]
+        complete_runs = [r for r in with_usage if r.get("usage_complete") is True]
+        partial_runs = [r for r in with_usage if r.get("usage_complete") is not True]
+        totals = [
+            r.get("tokens_total_actual") for r in with_usage
+            if r.get("tokens_total_actual") is not None
+        ]
         summary[strategy] = {
             "tasks": total,
             "success_rate": round(completed / total, 3) if total else None,
             "verification_pass_rate": round(verified / total, 3) if total else None,
             "avg_wall_seconds": round(sum(r["wall_seconds"] or 0 for r in rows) / total, 1) if total else None,
-            "tokens_in_actual_total": sum(r["tokens_in_actual"] for r in actual_rows) if actual_rows else None,
-            "tokens_out_actual_total": sum(r["tokens_out_actual"] for r in actual_rows) if actual_rows else None,
+            "tokens_in_actual_total": sum(r["tokens_in_actual"] for r in with_usage if r["tokens_in_actual"] is not None) if with_usage else None,
+            "tokens_out_actual_total": sum(r["tokens_out_actual"] for r in with_usage if r["tokens_out_actual"] is not None) if with_usage else None,
+            "tokens_total_actual_total": sum(totals) if totals else None,
             "tokens_estimated_context_total": sum(r.get("tokens_estimated_context") or 0 for r in rows),
-            "runs_with_usage": len(actual_rows),
-            "usage_complete_runs": usage_complete,
+            "runs_with_usage": len(with_usage),
+            "usage_complete_runs": len(complete_runs),
+            "runs_with_partial_usage": len(partial_runs),
+            "runs_without_usage": total - len(with_usage),
             "model_calls": sum(r.get("model_calls") or 0 for r in rows),
             "replans": sum(r["replans"] for r in rows),
             "human_interventions": sum(r["human_interventions"] for r in rows),
