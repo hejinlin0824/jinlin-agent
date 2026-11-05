@@ -374,3 +374,100 @@ def test_worker_session_binding_survives_rebuild(tmp_path):
     lg2.rebuild()
     assert lg2.get_worker(w.worker_id)["session_id"] == "sess_20261103_120000_abc123"
     lg2.close()
+
+
+# --------------------------------------------------------------------------- WP-C3: integration state semantics
+
+
+def test_record_result_sets_pending_for_changed_files(tmp_path):
+    """A deliverable WITH changes must be integration=pending at record time
+    (live SQLite write, not only on replay)."""
+    lg = make_ledger(tmp_path)
+    root = root_spec()
+    lg.create_task(root)
+    lg.record_result(
+        root.task_id,
+        {"status": "completed", "summary": "did the work", "changed_files": ["x.py"]},
+    )
+    assert lg.get_task(root.task_id)["integration"] == "pending"
+    lg.close()
+
+
+def test_record_result_sets_not_needed_for_empty_deliverable(tmp_path):
+    lg = make_ledger(tmp_path)
+    root = root_spec()
+    lg.create_task(root)
+    lg.record_result(
+        root.task_id,
+        {"status": "completed", "summary": "read-only analysis", "changed_files": []},
+    )
+    assert lg.get_task(root.task_id)["integration"] == "not_needed"
+    lg.close()
+
+
+def test_rebuild_restores_pending_integration_state(tmp_path):
+    cfg = make_cfg(tmp_path)
+    lg = make_ledger(tmp_path)
+    root = root_spec()
+    lg.create_task(root)
+    lg.record_result(
+        root.task_id,
+        {"status": "completed", "summary": "did the work", "changed_files": ["x.py"]},
+    )
+    lg.close()
+    # delete the projection entirely: rebuild() must restore it from events
+    import os
+
+    os.remove(tmp_path / "ledger.db")
+    lg2 = TaskLedger(cfg).open()
+    counts = lg2.rebuild()
+    assert counts.get("tasks", 0) >= 1 or any(isinstance(v, int) and v >= 1 for v in counts.values())
+    assert lg2.get_task(root.task_id)["integration"] == "pending"
+    lg2.close()
+
+
+def test_rebuild_restores_not_needed_integration_state(tmp_path):
+    cfg = make_cfg(tmp_path)
+    lg = make_ledger(tmp_path)
+    root = root_spec()
+    lg.create_task(root)
+    lg.record_result(
+        root.task_id,
+        {"status": "completed", "summary": "read-only", "changed_files": []},
+    )
+    lg.close()
+    import os
+
+    os.remove(tmp_path / "ledger.db")
+    lg2 = TaskLedger(cfg).open()
+    lg2.rebuild()
+    assert lg2.get_task(root.task_id)["integration"] == "not_needed"
+    lg2.close()
+
+
+def test_integration_state_is_event_sourced_not_projection_only(tmp_path):
+    """The result_recorded event in the append-only stream carries the result
+    payload; the live UPDATE and the rebuild must land on the SAME state."""
+    cfg = make_cfg(tmp_path)
+    lg = make_ledger(tmp_path)
+    root = root_spec()
+    lg.create_task(root)
+    lg.record_result(
+        root.task_id,
+        {"status": "completed", "summary": "did the work", "changed_files": ["x.py"]},
+    )
+    live_row = lg.get_task(root.task_id)
+    events = list(read_events(cfg.tasks_dir / root.task_id))
+    recorded = [e for e in events if e["type"] == "task.result_recorded"]
+    assert recorded and recorded[-1]["payload"]["result"]["changed_files"] == ["x.py"]
+    lg.close()
+
+    import os
+
+    os.remove(tmp_path / "ledger.db")
+    lg2 = TaskLedger(cfg).open()
+    lg2.rebuild()
+    replayed = lg2.get_task(root.task_id)
+    assert replayed["integration"] == live_row["integration"] == "pending"
+    assert replayed["result"]["summary"] == live_row["result"]["summary"]
+    lg2.close()

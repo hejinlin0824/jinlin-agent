@@ -239,3 +239,112 @@ def test_root_verification_requires_all_required_worker_and_integration_evidence
     assert _aggregate_verification([comp("passed"), comp("not_run")])["verification_status"] == "not_run"
     assert _aggregate_verification([comp("passed"), comp("passed")])["verification_passed"] is True
     assert _aggregate_verification([comp("not_applicable"), comp("not_applicable")])["verification_status"] == "not_applicable"
+
+
+def test_multi_strategy_integrates_non_empty_deliverable_via_worktree(tmp_path, monkeypatch):
+    """WP-C3 positive path: a CHANGING deliverable on a git repo must really
+    create a worker worktree, commit the diff, run IntegrationCoordinator,
+    merge into the integration branch, bind the commit, and pass integration
+    verification — asserted from the repo, the ledger and the event stream."""
+    import json
+    import subprocess
+
+    from jinlin_agent.config import load_config
+    from jinlin_agent.ledger import TaskLedger
+    from jinlin_agent.model import mock as mock_module
+    from jinlin_agent.model.mock import MockProvider as RealMockProvider
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "README.md").write_text("# bench\n", encoding="utf-8")
+    for argv in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "init"]):
+        subprocess.run(["git", "-c", "user.email=t@e.com", "-c", "user.name=t", *argv], cwd=str(ws), capture_output=True)
+
+    worker_script = [
+        {"tool_calls": [{"name": "get_project_summary", "arguments": {}}]},
+        {"tool_calls": [{"name": "write_file", "arguments": {"path": "delivered.md", "content": "# deliverable\n"}}]},
+        # the completion gate rejects a session with no effective plan, so
+        # record one before proposing
+        {"tool_calls": [{"name": "update_plan", "arguments": {"plan": {"objective": "deliver", "steps": [{"description": "write deliverable", "status": "completed", "evidence": ["delivered.md"]}]}}}]},
+        {"tool_calls": [{"name": "propose_completion", "arguments": {"summary": "delivered", "claims": [{"statement": "delivered.md written", "evidence_refs": ["delivered.md"]}]}}]},
+        # spare propose in case the gate injects a correction turn
+        {"tool_calls": [{"name": "propose_completion", "arguments": {"summary": "delivered", "claims": [{"statement": "delivered.md written", "evidence_refs": ["delivered.md"]}]}}]},
+    ]
+    assess_plan = [
+        {"text": json.dumps({"strategy": "plan_then_execute", "reasons": ["t"]})},
+        {"text": "```json\n" + json.dumps({"subtasks": [
+            {"title": "deliver notes", "description": "write the deliverable", "depends_on": [],
+             "role": "worker", "capabilities": ["READ", "WRITE"],
+             "acceptance_criteria": ["file exists"], "verification": "code"},
+        ]}) + "\n```"},
+    ]
+    nth = {"n": 0}
+
+    def factory(script=None):
+        nth["n"] += 1
+        if nth["n"] == 1:
+            return RealMockProvider(assess_plan)  # supervisor: assess + plan
+        return RealMockProvider(worker_script)  # workers
+
+    monkeypatch.setattr(mock_module, "MockProvider", factory)
+    record = run_one({**TASK, "workspace": str(ws)}, "multi", dry_run=True, out_dir=tmp_path)
+    assert record["status"] == "completed", record
+    assert record["subtask_integration"] == ["integrated"]
+    assert record["verification_status"] == "passed", record["verification_evidence"]
+    assert "delivered.md" in record["changed_files"]
+
+    cfg = load_config(home=tmp_path / "home")
+    ledger = TaskLedger(cfg).open()
+    try:
+        roots = [r for r in ledger.list_tasks() if not r["parent_task_id"]]
+        assert len(roots) == 1
+        root_id = roots[0]["task_id"]
+        subs = [r for r in ledger.list_tasks(root_id) if r["task_id"] != root_id]
+        assert subs[0]["integration"] == "integrated"
+        assert subs[0]["result"]["commit"], "integration must bind the merged commit"
+        events = list((tmp_path / "home" / "tasks" / root_id).glob("events.jsonl"))
+        from jinlin_agent.events import read_events
+
+        verified = [e for e in read_events(events[0].parent) if e["type"] == "integration.verified"]
+        assert verified and verified[-1]["payload"]["passed"] is True
+    finally:
+        ledger.close()
+
+    # the integration branch carries the deliverable; the integration worktree
+    # is kept as staging
+    branch = f"agent/integration-{root_id}"
+    shown = subprocess.run(
+        ["git", "-C", str(ws), "show", f"{branch}:delivered.md"],
+        capture_output=True, text=True,
+    )
+    assert shown.returncode == 0 and "deliverable" in shown.stdout
+    staging = next((tmp_path / "ws").joinpath(".jinlin", "worktrees").glob(f"integration-{root_id}"))
+    assert (staging / "delivered.md").exists()
+
+
+def test_sequential_mode_runs_subtasks_serially(tmp_path):
+    """planner mode chains subtasks; the event stream must prove B's worker
+    registered only AFTER A's completion (serialization, not just config)."""
+    from jinlin_agent.config import load_config
+    from jinlin_agent.events import read_events
+    from jinlin_agent.ledger import TaskLedger
+
+    record = run_one(TASK, "planner", dry_run=True, out_dir=tmp_path)
+    assert record["status"] == "completed"
+    cfg = load_config(home=tmp_path / "home")
+    ledger = TaskLedger(cfg).open()
+    try:
+        roots = [r for r in ledger.list_tasks() if not r["parent_task_id"]]
+        root_id = roots[0]["task_id"]
+        subs = {r["title"]: r["task_id"] for r in ledger.list_tasks(root_id) if r["task_id"] != root_id}
+        a_done_seq = b_registered_seq = None
+        for e in read_events(tmp_path / "home" / "tasks" / root_id):
+            payload = e.get("payload", {})
+            if e["type"] == "task.status_changed" and payload.get("task_id") == subs["analyze part A"] and payload.get("to") == "completed":
+                a_done_seq = e["seq"]
+            if e["type"] == "worker.registered" and payload.get("worker", {}).get("task_id") == subs["analyze part B"]:
+                b_registered_seq = e["seq"]
+        assert a_done_seq is not None and b_registered_seq is not None
+        assert a_done_seq < b_registered_seq, "B must be registered only after A completed"
+    finally:
+        ledger.close()

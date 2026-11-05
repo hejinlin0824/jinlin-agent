@@ -26,7 +26,7 @@
 | `src/jinlin_agent/supervisor.py` | `execution_mode="sequential"`（计划链式串行、单 Worker）；`_integrate_all` 对空交付物 `not_needed` 跳过合并与重验证 |
 | `src/jinlin_agent/workspace_manager.py` | 空交付物不合并（`commit==base` → `not_needed`，协调器层）；`is_git_repo` 改为**必须是仓库根**（修复挂到外层仓库的事故类缺陷） |
 | `src/jinlin_agent/ledger.py` | `record_result` 实Whether路径补 `tasks.integration` 更新（此前只有 replay 会写） |
-| `tests/test_benchmark_matrix.py` | 新增 7 个测试（无账本任务 / 链式串行 / DAG 保持 / worktree 集成 / 三策略账本足迹不同 / 14 指标齐全） |
+| `tests/test_benchmark_matrix.py` | 新增策略差异回归测试（当时 6 个——初版报告误写 7，第三轮整改 WP-C3 更正并补齐至 12 个） |
 | `tests/test_integration_sandbox.py` | 5 个 worktree 测试改为先写入真实交付物再集成；新增空交付物 `not_needed` 回归测试 |
 | `tests/test_recovery.py` | 重启集成测试补真实交付物（空 worktree 不再被合并） |
 | `tests/test_worktree.py` | 新增 `is_git_repo` 根目录语义测试 |
