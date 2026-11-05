@@ -54,10 +54,14 @@ def _make_junction(link: Path, target: Path) -> bool:
     if sys.platform != "win32":
         return False
     target.mkdir(parents=True, exist_ok=True)
+    # WP-R4-03: byte mode on purpose — cmd.exe writes in the OEM console
+    # code page (e.g. cp936 on zh-CN Windows), and a text-mode read decodes
+    # that as UTF-8, which can raise UnicodeDecodeError inside the reader
+    # thread (PytestUnhandledThreadExceptionWarning). Only returncode and
+    # link existence are consumed here; no decoded output is needed.
     proc = subprocess.run(
         ["cmd", "/c", "mklink", "/J", str(link), str(target)],
         capture_output=True,
-        text=True,
         timeout=30,
     )
     return proc.returncode == 0 and link.exists()
