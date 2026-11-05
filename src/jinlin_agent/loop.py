@@ -283,7 +283,10 @@ class Harness:
             {
                 "response_id": response.response_id,
                 "finish_reason": response.finish_reason,
-                "usage": response.usage.to_dict(),
+                # usage is None when the provider did not report any (mock, or
+                # an OpenAI-compatible response without a usage object): the
+                # attempt is then counted as usage-missing (WP-C2), never 0
+                "usage": response.usage.to_dict() if response.usage is not None else None,
             },
         )
         raw_artifact = self.session.artifacts.write_json(

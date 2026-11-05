@@ -1,21 +1,49 @@
 {
-  "task_id": "analyze-demo",
-  "strategy": "multi",
+  "tokens_out_actual": 7789,
+  "tokens_in_actual": 71082,
   "started_at": "2026-11-05T05:12:42Z",
+  "human_interventions": 0,
+  "ledger_task": true,
+  "wall_seconds": 417.1,
   "status": "completed",
-  "verification_passed": true,
+  "conflicts": 0,
+  "usage_complete": true,
+  "strategy": "multi",
+  "error_summary": "attempt 1 completed",
+  "verification_evidence": {
+    "status": "passed",
+    "passed": true,
+    "required_levels": [
+      "L0",
+      "L1"
+    ],
+    "executed_levels": [
+      "L0",
+      "L1",
+      "L2"
+    ],
+    "failed_levels": [],
+    "skipped_levels": [],
+    "notes": [
+      "[0] L3 not applicable: no test command in this project",
+      "[1] no subtask delivered changes; integration verification not applicable"
+    ],
+    "components": 2
+  },
+  "tokens_out": 7789,
   "changed_files": [
     "_verify_main.py"
   ],
-  "wall_seconds": 417.1,
+  "verification_passed": true,
+  "subtask_integration": [],
+  "task_id": "analyze-demo",
+  "model_attempts": 13,
+  "verification_status": "passed",
+  "tokens_total_actual": null,
   "tokens_in": 88173,
-  "tokens_out": 7789,
-  "model_calls": 13,
   "tool_calls": 16,
-  "replans": 0,
-  "conflicts": 0,
-  "human_interventions": 0,
-  "error_summary": "已阅读工作区（app.py、README.md），确定入口函数为 app.main()，其真实行为是返回字符串 \"served\" 而非打印；README 描述与实际代码不符。运行验证被沙箱拒绝（python/py 未获批准，fail-closed），行为由源码静态分析确定；临时验证脚本已删除，工作区干净（git status 无变更）。",
-  "ledger_task": true,
-  "subtask_integration": []
+  "tokens_usage_missing_calls": 0,
+  "tokens_estimated_context": 17091,
+  "model_calls": 13,
+  "replans": 0
 }

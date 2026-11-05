@@ -20,11 +20,22 @@ the ledger, real workers/sessions, real verification ladder and completion
 gate, real integration. Only the model responses are scripted, so no tokens
 are consumed.
 
-WP-F3: every run records task_id, strategy, status, verification_passed,
-changed_files, wall_seconds, tokens_in/out, model_calls, tool_calls, replans,
-conflicts, human_interventions and error_summary. `status` is the EXECUTION
-outcome; `verification_passed` is computed independently from the recorded
-verification runs (never inferred from status alone).
+WP-F3: every run records the full metric set (task_id, strategy, status,
+verification_status/verification_passed/verification_evidence, changed_files,
+wall_seconds, actual + estimated tokens, model_calls/attempts, tool_calls,
+replans, conflicts, human_interventions, error_summary).
+
+WP-C1 (third-round remediation): `verification_passed` comes ONLY from
+verification run records evaluated against the profile's required levels
+(`verify.verification_evidence`); empty records are `not_run` and therefore
+False; `status` never participates; supervised roots aggregate worker +
+integration evidence in layers.
+
+WP-C2 (third-round remediation): provider usage (`tokens_*_actual`) and
+local estimates (`tokens_estimated_context`) are separate fields; missing
+provider usage is reported via `tokens_usage_missing_calls` /
+`usage_complete` and `None` actuals — never a fake 0. `conflicts` is
+`null` (not measured) until event-level counting exists.
 """
 
 from __future__ import annotations
@@ -122,21 +133,138 @@ def _ensure_workspace(task: dict[str, Any], dry_run: bool, out_dir: Path) -> Pat
     return workspace
 
 
-def _session_metrics(state: Any) -> dict[str, Any]:
-    runs = list(getattr(state, "verification_runs", []) or [])
-    verification_failed = any(r.status == "failed" for r in runs)
-    required_failed = any(
-        r.status in ("failed",) for r in runs if r.level in ("L0", "L1", "L3")
+def _session_metrics(
+    state: Any,
+    profile: str = "code",
+    has_test_command: bool | None = None,
+) -> dict[str, Any]:
+    """Per-session metrics with WP-C1 verification semantics and WP-C2 token
+    accounting.
+
+    Verification: derived ONLY from verification run records against the
+    profile's required levels (`verify.verification_evidence`). Empty run
+    records are `not_run` -> `verification_passed is False`; session/task
+    status never feeds this verdict.
+
+    Tokens: provider-reported usage (`*_actual`) and local estimates
+    (`tokens_estimated_context`) are separate; a session whose model calls
+    returned no usage reports `None` actuals plus `usage_complete=False`,
+    never a fake 0. `model_calls` counts model.requested events (logical
+    calls); `model_attempts` counts model.attempt events, so one retry is
+    one additional attempt."""
+    from jinlin_agent.verify import verification_evidence
+
+    changed = list(state.diff_paths())
+    evidence = verification_evidence(
+        getattr(state, "verification_runs", []) or [],
+        profile=profile,
+        has_test_command=has_test_command,
+        changed=bool(changed),
     )
+    attempts = int(getattr(state, "model_attempts", 0) or 0)
+    missing = int(getattr(state, "tokens_usage_missing_calls", 0) or 0)
+    usage_seen = attempts - missing
+    if attempts == 0 or usage_seen == 0:
+        tokens_in_actual = tokens_out_actual = tokens_total_actual = None
+        usage_complete = False
+    else:
+        tokens_in_actual = int(getattr(state, "tokens_in_actual", 0) or 0)
+        tokens_out_actual = int(getattr(state, "tokens_out_actual", 0) or 0)
+        tokens_total_actual = tokens_in_actual + tokens_out_actual
+        usage_complete = missing == 0
     return {
-        "tokens_in": int(getattr(state, "tokens_in", 0) or 0),
-        "tokens_out": int(getattr(state, "tokens_out", 0) or 0),
+        "tokens_in_actual": tokens_in_actual,
+        "tokens_out_actual": tokens_out_actual,
+        "tokens_total_actual": tokens_total_actual,
+        "tokens_estimated_context": int(getattr(state, "tokens_estimated_context", 0) or 0),
+        "tokens_usage_missing_calls": missing,
+        "usage_complete": usage_complete,
         "model_calls": int(getattr(state, "model_calls", 0) or 0),
+        "model_attempts": attempts,
         "tool_calls": int(getattr(state, "tool_calls_total", 0) or 0),
-        "changed_files": state.diff_paths(),
-        # WP-F3: verification_passed is computed from verification RUNS, never
-        # from the completion status alone
-        "verification_passed": (not verification_failed) and (not required_failed),
+        "changed_files": changed,
+        "verification_status": evidence["status"],
+        "verification_passed": evidence["passed"],
+        "verification_evidence": evidence,
+    }
+
+
+def _aggregate_verification(components: list[dict[str, Any]]) -> dict[str, Any]:
+    """Layered aggregation (WP-C1 rule 6): the root verdict is derived from
+    every component's independent evidence — one worker's pass never upgrades
+    a failed or missing sibling, and status never participates."""
+    statuses = [c.get("verification_status") for c in components]
+    if any(s == "failed" for s in statuses):
+        status = "failed"
+    elif any(s in ("not_run", "error") for s in statuses):
+        status = "not_run"
+    elif any(s == "passed" for s in statuses):
+        status = "passed"
+    else:
+        status = "not_applicable"
+    merged: dict[str, Any] = {
+        "status": status,
+        "passed": status == "passed",
+        "required_levels": sorted({lv for c in components for lv in c.get("verification_evidence", {}).get("required_levels", [])}),
+        "executed_levels": sorted({lv for c in components for lv in c.get("verification_evidence", {}).get("executed_levels", [])}),
+        "failed_levels": sorted({lv for c in components for lv in c.get("verification_evidence", {}).get("failed_levels", [])}),
+        "skipped_levels": sorted({lv for c in components for lv in c.get("verification_evidence", {}).get("skipped_levels", [])}),
+        "notes": [f"[{i}] {n}" for i, c in enumerate(components) for n in c.get("verification_evidence", {}).get("notes", [])],
+        "components": len(components),
+    }
+    return {"verification_status": status, "verification_passed": status == "passed", "verification_evidence": merged}
+
+
+def _integration_evidence(events: list[dict[str, Any]], required: bool) -> dict[str, Any]:
+    """Integration-phase verification component (WP-C1 rule 6): required when
+    at least one subtask carries changes (`integration=pending`); its verdict
+    comes only from `integration.verified` records, never from the merged
+    commit's existence."""
+    verdicts = [e for e in events if e.get("type") == "integration.verified"]
+    if not required:
+        return {
+            "verification_status": "not_applicable",
+            "verification_passed": False,
+            "verification_evidence": {
+                "status": "not_applicable",
+                "required_levels": [],
+                "executed_levels": [],
+                "failed_levels": [],
+                "skipped_levels": [],
+                "notes": ["no subtask delivered changes; integration verification not applicable"],
+                "profile": "integration",
+            },
+        }
+    if not verdicts:
+        return {
+            "verification_status": "not_run",
+            "verification_passed": False,
+            "verification_evidence": {
+                "status": "not_run",
+                "required_levels": ["integration-verify"],
+                "executed_levels": [],
+                "failed_levels": [],
+                "skipped_levels": [],
+                "notes": ["integration required but no integration.verified record"],
+                "profile": "integration",
+            },
+        }
+    if any(not e.get("payload", {}).get("passed", False) for e in verdicts):
+        status = "failed"
+    else:
+        status = "passed"
+    return {
+        "verification_status": status,
+        "verification_passed": status == "passed",
+        "verification_evidence": {
+            "status": status,
+            "required_levels": ["integration-verify"],
+            "executed_levels": ["integration-verify"] if status == "passed" else [],
+            "failed_levels": [] if status == "passed" else ["integration-verify"],
+            "skipped_levels": [],
+            "notes": [],
+            "profile": "integration",
+        },
     }
 
 
@@ -167,7 +295,13 @@ def run_single(task: dict[str, Any], workspace: Path, dry_run: bool, out_dir: Pa
     )
     status = harness.run()
     state = session.state
-    metrics = _session_metrics(state)
+    from jinlin_agent.verify import detect_project
+
+    # WP-C1 rule 8: single has no TaskSpec — the verification verdict is
+    # rebuilt from the SESSION event log against the default 'code' profile;
+    # a session without verification events reports not_run / False.
+    has_tests = bool(detect_project(workspace, cfg).test_commands)
+    metrics = _session_metrics(state, profile="code", has_test_command=has_tests)
     events = list(session.log.iter_events())
     session.close()
     return {
@@ -232,48 +366,88 @@ def run_supervised(task: dict[str, Any], workspace: Path, dry_run: bool, mode: s
             from jinlin_agent.events import read_events
 
             events = list(read_events(log_dir))
-        # aggregate session metrics across every worker attempt under this
-        # root — including the root itself, which carries the worker in
-        # direct mode (the assessor may classify the task as simple and
-        # never plan); subtasks carry workers in plan mode
-        agg = {"tokens_in": 0, "tokens_out": 0, "model_calls": 0, "tool_calls": 0}
-        verification_passed = outcome["status"] == "completed"
-        failed_verifications = 0
-        changed: set[str] = set()
-        for sub in ledger.list_tasks(tid):
-            for w in ledger.list_workers(sub["task_id"]):
-                sid = w.get("session_id") or ""
-                sdir = Path(cfg.sessions_dir) / sid
-                if not (sdir / "events.jsonl").exists():
-                    continue
-                from jinlin_agent.state import recover as fold_events
-
-                st = fold_events(__import__("jinlin_agent.events", fromlist=["read_events"]).read_events(sdir))
-                sm = _session_metrics(st)
-                for key in ("tokens_in", "tokens_out", "model_calls", "tool_calls"):
-                    agg[key] += sm[key]
-                changed.update(sm["changed_files"])
-                if sm["changed_files"] and sm["verification_passed"] is False:
-                    failed_verifications += 1
-        integration_states = [r.get("integration", "") for r in ledger.list_tasks(tid) if r["task_id"] != tid]
-        changed_tasks = [s for s in integration_states if s != "not_needed"]
-        if manager is not None and changed_tasks:
-            verification_passed = verification_passed and all(s == "integrated" for s in changed_tasks)
-        verification_passed = verification_passed and failed_verifications == 0
+        fields = root_record_fields(ledger, cfg, tid, workspace, events)
+        fields["status"] = outcome["status"]
+        fields["error_summary"] = outcome.get("reason") or outcome.get("summary") or ""
         return {
-            "status": outcome["status"],
-            **agg,
-            "changed_files": sorted(changed),
-            "verification_passed": verification_passed,
-            "human_interventions": _human_interventions(events),
-            "replans": sum(1 for e in events if e.get("type") == "task.replanned"),
-            "error_summary": outcome.get("reason") or outcome.get("summary") or "",
+            **fields,
             "ledger_task": True,
-            "subtask_integration": integration_states,
         }
     finally:
         runtime.shutdown()
         ledger.close()
+
+
+def root_record_fields(
+    ledger: Any, cfg: Any, root_id: str, workspace: Path, events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate one supervised root's record fields from the ledger, the
+    worker session event logs and the root task event log.
+
+    Shared by the live runner AND the WP-C2 recompute script, so recomputed
+    records and freshly produced records come from ONE code path. WP-C1: the
+    root's verification verdict is layered aggregation over every worker's
+    independent evidence plus the integration phase — outcome status never
+    initializes it. Workers attached directly to the root (direct mode) are
+    included; subtasks carry workers in plan mode."""
+    from jinlin_agent.verify import detect_project
+
+    has_test_command = bool(detect_project(workspace, cfg).test_commands)
+    agg = {
+        "tokens_in_actual": 0,
+        "tokens_out_actual": 0,
+        "tokens_estimated_context": 0,
+        "tokens_usage_missing_calls": 0,
+        "model_calls": 0,
+        "model_attempts": 0,
+        "tool_calls": 0,
+    }
+    components: list[dict[str, Any]] = []
+    changed: set[str] = set()
+    worker_metrics: list[dict[str, Any]] = []
+    subtasks = [r for r in ledger.list_tasks(root_id) if r["task_id"] != root_id]
+    for sub in ledger.list_tasks(root_id):
+        profile = (sub.get("verification") or "code").strip().lower()
+        for w in ledger.list_workers(sub["task_id"]):
+            sid = w.get("session_id") or ""
+            sdir = Path(cfg.sessions_dir) / sid
+            if not (sdir / "events.jsonl").exists():
+                components.append(_missing_session_component(sid, profile, has_test_command))
+                continue
+            from jinlin_agent.state import recover as fold_events
+
+            st = fold_events(__import__("jinlin_agent.events", fromlist=["read_events"]).read_events(sdir))
+            sm = _session_metrics(st, profile=profile, has_test_command=has_test_command)
+            worker_metrics.append(sm)
+            for key in agg:
+                agg[key] += sm[key] or 0
+            changed.update(sm["changed_files"])
+            components.append(sm)
+    integration_states = [r.get("integration", "") for r in subtasks]
+    integration_required = any(s == "pending" for s in integration_states)
+    components.append(_integration_evidence(events, required=integration_required))
+    root_verification = _aggregate_verification(components)
+    return {
+        **agg,
+        # usage is complete only when EVERY folded session reported
+        # provider usage for all of its model attempts
+        "usage_complete": bool(worker_metrics) and all(m["usage_complete"] for m in worker_metrics),
+        "changed_files": sorted(changed),
+        **root_verification,
+        "human_interventions": _human_interventions(events),
+        "replans": sum(1 for e in events if e.get("type") == "task.replanned"),
+        "subtask_integration": integration_states,
+    }
+
+
+def _missing_session_component(sid: str, profile: str, has_test_command: bool | None) -> dict[str, Any]:
+    """A worker with no session event log contributes `not_run` evidence —
+    a missing record is never a pass (WP-C1 rule 3)."""
+    from jinlin_agent.verify import verification_evidence
+
+    ev = verification_evidence([], profile=profile, has_test_command=has_test_command, changed=False)
+    ev["notes"].append(f"worker session {sid or '<unbound>'} has no event log")
+    return {"verification_status": ev["status"], "verification_passed": False, "verification_evidence": ev}
 
 
 def run_one(task: dict[str, Any], strategy: str, dry_run: bool, out_dir: Path) -> dict[str, Any]:
@@ -283,15 +457,22 @@ def run_one(task: dict[str, Any], strategy: str, dry_run: bool, out_dir: Path) -
         "strategy": strategy,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "status": "not_run",
+        "verification_status": None,
         "verification_passed": None,
+        "verification_evidence": None,
         "changed_files": [],
         "wall_seconds": None,
-        "tokens_in": 0,
-        "tokens_out": 0,
+        "tokens_in_actual": None,
+        "tokens_out_actual": None,
+        "tokens_total_actual": None,
+        "tokens_estimated_context": 0,
+        "tokens_usage_missing_calls": 0,
+        "usage_complete": False,
         "model_calls": 0,
+        "model_attempts": 0,
         "tool_calls": 0,
         "replans": 0,
-        "conflicts": 0,
+        "conflicts": None,  # not measured yet — never reported as a fake 0
         "human_interventions": 0,
         "error_summary": "",
     }
@@ -305,13 +486,17 @@ def run_one(task: dict[str, Any], strategy: str, dry_run: bool, out_dir: Path) -
             result = run_supervised(task, workspace, dry_run, "multi", out_dir)
         else:
             raise SystemExit(f"unknown strategy {strategy}")
-        for key in ("status", "tokens_in", "tokens_out", "model_calls", "tool_calls",
-                    "changed_files", "verification_passed", "human_interventions",
-                    "error_summary", "ledger_task", "subtask_integration"):
+        for key in ("status", "tokens_in_actual", "tokens_out_actual", "tokens_total_actual",
+                    "tokens_estimated_context", "tokens_usage_missing_calls", "usage_complete",
+                    "model_calls", "model_attempts", "tool_calls", "changed_files",
+                    "verification_status", "verification_passed", "verification_evidence",
+                    "human_interventions", "error_summary", "ledger_task", "subtask_integration"):
             if key in result:
                 record[key] = result[key]
         record["replans"] = result.get("replans", 0)
-        record["conflicts"] = 0  # conflicts surface as blocked; counted via events in future runs
+        # conflicts surface as blocked tasks; event-level counting is not
+        # implemented yet, so this stays explicitly unmeasured (never 0)
+        record["conflicts"] = None
     except Exception as exc:
         record["status"] = f"runner_crash: {type(exc).__name__}: {exc}"
         record["error_summary"] = f"{type(exc).__name__}: {exc}"
@@ -328,12 +513,21 @@ def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
         total = len(rows)
         completed = sum(1 for r in rows if r["status"] == "completed")
         verified = sum(1 for r in rows if r["verification_passed"] is True)
+        # WP-C2: only provider-reported usage is summed; runs with missing
+        # usage (None actuals) are counted separately, never folded in as 0
+        actual_rows = [r for r in rows if r.get("tokens_in_actual") is not None]
+        usage_complete = sum(1 for r in rows if r.get("usage_complete") is True)
         summary[strategy] = {
             "tasks": total,
             "success_rate": round(completed / total, 3) if total else None,
             "verification_pass_rate": round(verified / total, 3) if total else None,
             "avg_wall_seconds": round(sum(r["wall_seconds"] or 0 for r in rows) / total, 1) if total else None,
-            "avg_tokens": round(sum((r["tokens_in"] or 0) + (r["tokens_out"] or 0) for r in rows) / total, 1) if total else None,
+            "tokens_in_actual_total": sum(r["tokens_in_actual"] for r in actual_rows) if actual_rows else None,
+            "tokens_out_actual_total": sum(r["tokens_out_actual"] for r in actual_rows) if actual_rows else None,
+            "tokens_estimated_context_total": sum(r.get("tokens_estimated_context") or 0 for r in rows),
+            "runs_with_usage": len(actual_rows),
+            "usage_complete_runs": usage_complete,
+            "model_calls": sum(r.get("model_calls") or 0 for r in rows),
             "replans": sum(r["replans"] for r in rows),
             "human_interventions": sum(r["human_interventions"] for r in rows),
         }
@@ -370,8 +564,9 @@ def main() -> int:
                 json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             print(
-                f"      -> status={record['status']} verification_passed={record['verification_passed']} "
-                f"({record['wall_seconds']}s, tokens={record['tokens_in']}+{record['tokens_out']})",
+                f"      -> status={record['status']} verification_status={record.get('verification_status')} "
+                f"({record['wall_seconds']}s, tokens_actual={record.get('tokens_in_actual')}+{record.get('tokens_out_actual')}, "
+                f"usage_complete={record.get('usage_complete')})",
                 flush=True,
             )
 

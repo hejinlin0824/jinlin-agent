@@ -51,7 +51,11 @@ def test_single_strategy_has_no_ledger_task(tmp_path):
     record = run_one(TASK, "single", dry_run=True, out_dir=tmp_path)
     assert record["status"] == "completed"
     assert record["ledger_task"] is False
-    assert record["verification_passed"] is True
+    # WP-C1: the read-only dry-run session never runs the verification
+    # ladder (nothing changed), so the honest verdict is not_run / False —
+    # the pre-C1 code reported True here via any() over an empty list
+    assert record["verification_status"] == "not_run"
+    assert record["verification_passed"] is False
     # no ledger task was created anywhere
     tasks_dir = tmp_path / "home" / "tasks"
     assert not tasks_dir.exists() or not list(tasks_dir.iterdir())
@@ -111,7 +115,11 @@ def test_multi_strategy_integrates_via_worktree_on_a_git_repo(tmp_path):
     assert record["status"] == "completed", record
     # integration state: analysis tasks have no changes -> not_needed
     assert record["subtask_integration"] == ["not_needed", "not_needed"]
-    assert record["verification_passed"] is True
+    # WP-C1: the subtasks declare the 'analysis' profile (no required
+    # levels) and the run made no changes — the honest verdict is
+    # not_applicable, which is explicitly NOT a pass
+    assert record["verification_status"] == "not_applicable"
+    assert record["verification_passed"] is False
 
 
 def test_strategies_produce_distinct_ledger_footprints(tmp_path):
@@ -138,9 +146,96 @@ def test_strategies_produce_distinct_ledger_footprints(tmp_path):
 
 def test_metrics_are_recorded_per_run(tmp_path):
     record = run_one(TASK, "single", dry_run=True, out_dir=tmp_path)
-    for key in ("task_id", "strategy", "status", "verification_passed", "changed_files",
-                "wall_seconds", "tokens_in", "tokens_out", "model_calls", "tool_calls",
+    for key in ("task_id", "strategy", "status",
+                "verification_status", "verification_passed", "verification_evidence",
+                "changed_files", "wall_seconds",
+                "tokens_in_actual", "tokens_out_actual", "tokens_total_actual",
+                "tokens_estimated_context", "tokens_usage_missing_calls", "usage_complete",
+                "model_calls", "model_attempts", "tool_calls",
                 "replans", "conflicts", "human_interventions", "error_summary"):
         assert key in record, f"missing metric {key}"
     summary = aggregate([record])
-    assert summary["single"]["verification_pass_rate"] == 1.0
+    # WP-C2: dry-run has no provider usage — the aggregate reports that
+    # honestly instead of a token number
+    assert summary["single"]["runs_with_usage"] == 0
+
+
+# --------------------------------------------------------------------------- WP-C1: benchmark-level verification semantics
+
+
+def test_completed_status_does_not_imply_verification_passed(tmp_path):
+    """The third-round defect, at benchmark level: a session that COMPLETED
+    but holds no verification records must report not_run / False."""
+    from types import SimpleNamespace
+
+    from benchmark_matrix import _session_metrics
+
+    state = SimpleNamespace(
+        verification_runs=[],
+        diff_paths=lambda: [],
+        model_attempts=2,
+        tokens_usage_missing_calls=2,
+    )
+    metrics = _session_metrics(state)  # no status input exists at all
+    assert metrics["verification_status"] == "not_run"
+    assert metrics["verification_passed"] is False
+
+
+def test_single_strategy_aggregates_session_verification_events(tmp_path, monkeypatch):
+    """WP-C1 rule 8 with actual records: single has no ledger task, so its
+    verdict is rebuilt from the SESSION event log's verification records.
+    A session that CHANGES a file runs the ladder; a read-only session with
+    no records must stay not_run (see the no-ledger-task test)."""
+    from jinlin_agent.model import mock as mock_module
+    from jinlin_agent.model.mock import MockProvider as RealMockProvider
+
+    writing_script = [
+        {"tool_calls": [{"name": "get_project_summary", "arguments": {}}]},
+        {"tool_calls": [{"name": "read_file", "arguments": {"path": "README.md"}}]},
+        {"tool_calls": [{"name": "write_file", "arguments": {"path": "notes.md", "content": "# analysis notes\n"}}]},
+        {"tool_calls": [{"name": "propose_completion", "arguments": {"summary": "notes written", "claims": [{"statement": "notes.md written", "evidence_refs": ["notes.md"]}]}}]},
+    ]
+    monkeypatch.setattr(mock_module, "MockProvider", lambda script=None: RealMockProvider(writing_script))
+    record = run_one(TASK, "single", dry_run=True, out_dir=tmp_path)
+    evidence = record["verification_evidence"]
+    assert evidence["executed_levels"], "the ladder must have produced verification records"
+    assert record["verification_passed"] == (record["verification_status"] == "passed")
+
+
+def test_supervised_strategy_does_not_infer_verification_from_outcome_status():
+    """A completed outcome plus missing integration evidence aggregates to
+    not_run — the outcome never initializes the root verdict."""
+    from benchmark_matrix import _aggregate_verification, _integration_evidence
+
+    passed_worker = {
+        "verification_status": "passed",
+        "verification_passed": True,
+        "verification_evidence": {
+            "status": "passed", "required_levels": ["L0"], "executed_levels": ["L0"],
+            "failed_levels": [], "skipped_levels": [], "notes": [],
+        },
+    }
+    root = _aggregate_verification([passed_worker, _integration_evidence([], required=True)])
+    assert root["verification_status"] == "not_run"
+    assert root["verification_passed"] is False
+
+
+def test_root_verification_requires_all_required_worker_and_integration_evidence():
+    """WP-C1 rule 6: one worker's pass never upgrades a failed/missing
+    sibling or a failed integration; all-pass upgrades the root."""
+    from benchmark_matrix import _aggregate_verification
+
+    def comp(status):
+        return {
+            "verification_status": status,
+            "verification_passed": status == "passed",
+            "verification_evidence": {
+                "status": status, "required_levels": ["L0"], "executed_levels": ["L0"] if status == "passed" else [],
+                "failed_levels": ["L0"] if status == "failed" else [], "skipped_levels": [], "notes": [],
+            },
+        }
+
+    assert _aggregate_verification([comp("passed"), comp("failed")])["verification_status"] == "failed"
+    assert _aggregate_verification([comp("passed"), comp("not_run")])["verification_status"] == "not_run"
+    assert _aggregate_verification([comp("passed"), comp("passed")])["verification_passed"] is True
+    assert _aggregate_verification([comp("not_applicable"), comp("not_applicable")])["verification_status"] == "not_applicable"

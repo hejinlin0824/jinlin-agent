@@ -555,6 +555,108 @@ def plan_task_verification(spec: Any) -> list[str]:
     return list(PROFILE_LEVELS.get(profile, PROFILE_LEVELS["code"]))
 
 
+def required_verification_levels(
+    profile: str,
+    has_test_command: bool | None = None,
+    changed: bool = True,
+) -> tuple[list[str], list[str], bool]:
+    """Levels this deliverable MUST pass, after applicability narrowing.
+
+    Returns ``(required, notes, known_profile)``. ``notes`` records every
+    narrowing as an explicit, human-readable reason — an empty ``required``
+    list is therefore always explainable and is NEVER silently success
+    (WP-C1 rule 4: only an explicitly declared non-applicability may be
+    reported as ``not_applicable``, and it must carry its reason)."""
+    profile = (profile or "code").strip().lower()
+    known = PROFILE_LEVELS.get(profile) is not None
+    notes: list[str] = []
+    if not known:
+        notes.append(f"unknown verification profile {profile!r}; treated as 'code'")
+        profile = "code"
+    required = list(PROFILE_LEVELS[profile])
+    if has_test_command is False and "L3" in required and profile == "code":
+        required.remove("L3")  # not applicable in this project (recorded honestly)
+        notes.append("L3 not applicable: no test command in this project")
+    if not changed:
+        # Pure-analysis deliverables (v2 §10.2): L0/L1 inspect file changes
+        # and L3 needs a runnable delta — there is nothing for them to
+        # verify. Only a profile that EXPLICITLY demands L3 ("tests") keeps
+        # it, so an unverifiable demand still fails loudly.
+        kept = [lvl for lvl in required if lvl == "L3" and profile == "tests"]
+        dropped = [lvl for lvl in required if lvl not in kept]
+        if dropped:
+            notes.append("no-changes deliverable: " + ", ".join(dropped) + " not applicable")
+        required = kept
+    return required, notes, known
+
+
+def verification_evidence(
+    runs: Any,
+    profile: str = "code",
+    has_test_command: bool | None = None,
+    changed: bool = True,
+) -> dict[str, Any]:
+    """Independent verification verdict from verification RUN records only.
+
+    Never consults session/task status, completion summaries or model text
+    (WP-C1). A session with NO verification records at all is ``not_run`` —
+    never ``passed`` and never laundered into ``not_applicable`` by
+    applicability narrowing; ``not_applicable`` is reserved for profiles
+    that DECLARE no required levels or narrowing applied while records
+    exist (rule 4: non-applicability must be explicit and reasoned).
+    When a level ran more than once (retry after a fix), the LAST run for
+    that level decides."""
+    required, notes, _known = required_verification_levels(profile, has_test_command, changed)
+    profile_norm = (profile or "code").strip().lower()
+    profile_declares_none = PROFILE_LEVELS.get(profile_norm) == ()
+    runs = list(runs or [])
+    if not runs and not profile_declares_none:
+        return {
+            "status": "not_run",
+            "passed": False,
+            "required_levels": required,
+            "executed_levels": [],
+            "failed_levels": [],
+            "skipped_levels": [],
+            "notes": notes + ["no verification records at all — nothing was verified"],
+            "profile": profile,
+        }
+    by_level: dict[str, str] = {}
+    for run in runs:
+        level = str(getattr(run, "level", "") or "").upper()
+        status = str(getattr(run, "status", "") or "").lower()
+        by_level[level] = status  # last run per level wins
+    executed = sorted(by_level)
+    failed = sorted(
+        {lvl for lvl in required if by_level.get(lvl) not in (None, "skipped") and by_level.get(lvl) != "passed"}
+    )
+    skipped = sorted({lvl for lvl in required if by_level.get(lvl) == "skipped"})
+    if failed:
+        status = "failed"
+    elif not required:
+        status = "not_applicable"
+        notes.append("verification profile declares no applicable required levels")
+        if runs:
+            notes.append(f"levels that did run (not required): {', '.join(executed) or 'none'}")
+    elif skipped or any(lvl not in by_level for lvl in required):
+        status = "not_run"
+        for lvl in required:
+            if lvl not in by_level:
+                notes.append(f"required level {lvl} has no verification record")
+    else:
+        status = "passed"
+    return {
+        "status": status,
+        "passed": status == "passed",
+        "required_levels": required,
+        "executed_levels": executed,
+        "failed_levels": sorted(set(failed)),
+        "skipped_levels": sorted(set(skipped)),
+        "notes": notes,
+        "profile": profile,
+    }
+
+
 def check_task_verification(spec: Any, result: dict[str, Any] | None, has_test_command: bool | None = None) -> list[str]:
     """Reasons the deliverable fails its own verification contract.
 
@@ -565,20 +667,12 @@ def check_task_verification(spec: Any, result: dict[str, Any] | None, has_test_c
     silently 'success' (v2 §10.4)."""
     profile = (getattr(spec, "verification", "") or "code").strip().lower()
     reasons: list[str] = []
-    required = list(PROFILE_LEVELS.get(profile, PROFILE_LEVELS["code"]))
-    if PROFILE_LEVELS.get(profile) is None:
-        reasons.append(f"unknown verification profile {profile!r}; treated as 'code'")
-        required = list(PROFILE_LEVELS["code"])
-    if has_test_command is False and "L3" in required and profile == "code":
-        required.remove("L3")  # not applicable in this project (recorded honestly)
+    required, notes, known = required_verification_levels(
+        profile, has_test_command, bool((result or {}).get("changed_files"))
+    )
+    if not known:
+        reasons.extend(notes[:1])  # the unknown-profile note is itself a reason
     tests = [t for t in (result or {}).get("tests", []) if isinstance(t, dict)]
-    changed = bool((result or {}).get("changed_files"))
-    if not changed:
-        # Pure-analysis deliverables (v2 §10.2): L0/L1 inspect file changes
-        # and L3 needs a runnable delta — there is nothing for them to
-        # verify. Only a profile that EXPLICITLY demands L3 ("tests") keeps
-        # it, so an unverifiable demand still fails loudly.
-        required = [lvl for lvl in required if lvl == "L3" and profile == "tests"]
     for level in required:
         if not any(
             str(t.get("level", "")).upper() == level and str(t.get("status", "")) == "passed" for t in tests

@@ -1,21 +1,51 @@
 {
-  "task_id": "fix-add",
-  "strategy": "multi",
+  "tokens_out_actual": 6636,
+  "tokens_in_actual": 53182,
   "started_at": "2026-11-05T05:23:21Z",
+  "human_interventions": 0,
+  "ledger_task": true,
+  "wall_seconds": 412.6,
   "status": "completed",
-  "verification_passed": true,
+  "conflicts": 0,
+  "usage_complete": true,
+  "strategy": "multi",
+  "error_summary": "attempt 1 completed",
+  "verification_evidence": {
+    "status": "passed",
+    "passed": true,
+    "required_levels": [
+      "L0",
+      "L1",
+      "L3"
+    ],
+    "executed_levels": [
+      "L0",
+      "L1",
+      "L2",
+      "L3",
+      "L5"
+    ],
+    "failed_levels": [],
+    "skipped_levels": [],
+    "notes": [
+      "[1] no subtask delivered changes; integration verification not applicable"
+    ],
+    "components": 2
+  },
+  "tokens_out": 6636,
   "changed_files": [
     "calc.py"
   ],
-  "wall_seconds": 412.6,
+  "verification_passed": true,
+  "subtask_integration": [],
+  "task_id": "fix-add",
+  "model_attempts": 9,
+  "verification_status": "passed",
+  "tokens_total_actual": null,
   "tokens_in": 65661,
-  "tokens_out": 6636,
-  "model_calls": 9,
   "tool_calls": 13,
-  "replans": 0,
-  "conflicts": 0,
-  "human_interventions": 0,
-  "error_summary": "修复 calc.py 中 add() 的错误实现（a - b → a + b），使全部测试通过。L3 tests 验证：2 passed, 0 failed, exit_code 0。仅修改 calc.py，其他文件未改动。",
-  "ledger_task": true,
-  "subtask_integration": []
+  "tokens_usage_missing_calls": 0,
+  "tokens_estimated_context": 12479,
+  "model_calls": 9,
+  "replans": 0
 }

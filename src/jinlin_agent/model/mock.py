@@ -91,11 +91,19 @@ class MockProvider:
                 )
             )
         finish = step.get("finish_reason") or ("tool_calls" if calls else "stop")
-        usage = TokenUsage(
-            prompt_tokens=step.get("prompt_tokens", 100),
-            completion_tokens=step.get("completion_tokens", 20),
-            total_tokens=step.get("prompt_tokens", 100) + step.get("completion_tokens", 20),
-        )
+        # WP-C2: a mock response must never fabricate provider usage. Usage
+        # exists only when the script explicitly provides token counts;
+        # otherwise it is None and the attempt is counted as usage-missing.
+        if step.get("prompt_tokens") is not None or step.get("completion_tokens") is not None:
+            prompt = int(step.get("prompt_tokens") or 0)
+            completion = int(step.get("completion_tokens") or 0)
+            usage = TokenUsage(
+                prompt_tokens=prompt,
+                completion_tokens=completion,
+                total_tokens=prompt + completion,
+            )
+        else:
+            usage = None
         return ModelResponse(
             response_id=new_id("resp_mock"),
             text=text,

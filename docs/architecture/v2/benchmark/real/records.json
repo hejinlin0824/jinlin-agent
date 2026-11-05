@@ -1,124 +1,290 @@
 [
   {
-    "task_id": "analyze-demo",
-    "strategy": "multi",
+    "tokens_out_actual": 7789,
+    "tokens_in_actual": 71082,
     "started_at": "2026-11-05T05:12:42Z",
+    "human_interventions": 0,
+    "ledger_task": true,
+    "wall_seconds": 417.1,
     "status": "completed",
-    "verification_passed": true,
+    "conflicts": 0,
+    "usage_complete": true,
+    "strategy": "multi",
+    "error_summary": "attempt 1 completed",
+    "verification_evidence": {
+      "status": "passed",
+      "passed": true,
+      "required_levels": [
+        "L0",
+        "L1"
+      ],
+      "executed_levels": [
+        "L0",
+        "L1",
+        "L2"
+      ],
+      "failed_levels": [],
+      "skipped_levels": [],
+      "notes": [
+        "[0] L3 not applicable: no test command in this project",
+        "[1] no subtask delivered changes; integration verification not applicable"
+      ],
+      "components": 2
+    },
+    "tokens_out": 7789,
     "changed_files": [
       "_verify_main.py"
     ],
-    "wall_seconds": 417.1,
+    "verification_passed": true,
+    "subtask_integration": [],
+    "task_id": "analyze-demo",
+    "model_attempts": 13,
+    "verification_status": "passed",
+    "tokens_total_actual": null,
     "tokens_in": 88173,
-    "tokens_out": 7789,
-    "model_calls": 13,
     "tool_calls": 16,
-    "replans": 0,
-    "conflicts": 0,
-    "human_interventions": 0,
-    "error_summary": "已阅读工作区（app.py、README.md），确定入口函数为 app.main()，其真实行为是返回字符串 \"served\" 而非打印；README 描述与实际代码不符。运行验证被沙箱拒绝（python/py 未获批准，fail-closed），行为由源码静态分析确定；临时验证脚本已删除，工作区干净（git status 无变更）。",
-    "ledger_task": true,
-    "subtask_integration": []
+    "tokens_usage_missing_calls": 0,
+    "tokens_estimated_context": 17091,
+    "model_calls": 13,
+    "replans": 0
   },
   {
-    "task_id": "analyze-demo",
-    "strategy": "planner",
+    "tokens_out_actual": 5591,
+    "tokens_in_actual": 52408,
     "started_at": "2026-11-05T05:10:49Z",
-    "status": "completed",
-    "verification_passed": true,
-    "changed_files": [],
-    "wall_seconds": 104.4,
-    "tokens_in": 65085,
-    "tokens_out": 5591,
-    "model_calls": 10,
-    "tool_calls": 10,
-    "replans": 0,
-    "conflicts": 0,
     "human_interventions": 0,
-    "error_summary": "入口函数为 app.py 中的 `main()`。其行为是：无参数、无副作用（无 print、无 I/O、无外部依赖），调用时返回字符串字面量 `\"served\"`。README.md 声称它 \"prints a served banner\"，但源码并无任何打印输出，属于文档与实现不一致；且 app.py 没有 `if __name__ == \"__main__\"` 块，直接 `python app.py` 不会产生任何输出。由于本任务沙箱拒绝执行 python/py/python3（无审批人、可执行文件不可识别），无法做运行时验证，结论基于对全部源码（共 2 行）的静态审读，确定性高。整个分析为只读，未修改任何文件。",
     "ledger_task": true,
-    "subtask_integration": []
+    "wall_seconds": 104.4,
+    "status": "completed",
+    "conflicts": 0,
+    "usage_complete": true,
+    "strategy": "planner",
+    "error_summary": "attempt 1 completed",
+    "verification_evidence": {
+      "status": "not_run",
+      "passed": false,
+      "required_levels": [],
+      "executed_levels": [],
+      "failed_levels": [],
+      "skipped_levels": [],
+      "notes": [
+        "[0] L3 not applicable: no test command in this project",
+        "[0] no-changes deliverable: L0, L1 not applicable",
+        "[0] no verification records at all — nothing was verified",
+        "[1] no subtask delivered changes; integration verification not applicable"
+      ],
+      "components": 2
+    },
+    "tokens_out": 5591,
+    "changed_files": [],
+    "verification_passed": false,
+    "subtask_integration": [],
+    "task_id": "analyze-demo",
+    "model_attempts": 10,
+    "verification_status": "not_run",
+    "tokens_total_actual": null,
+    "tokens_in": 65085,
+    "tool_calls": 10,
+    "tokens_usage_missing_calls": 0,
+    "tokens_estimated_context": 12677,
+    "model_calls": 10,
+    "replans": 0
   },
   {
-    "task_id": "analyze-demo",
-    "strategy": "single",
+    "tokens_out_actual": 5482,
+    "tokens_in_actual": 71266,
     "started_at": "2026-11-05T04:59:08Z",
+    "human_interventions": 3,
+    "ledger_task": false,
+    "wall_seconds": 100.3,
     "status": "completed",
-    "verification_passed": true,
+    "conflicts": 0,
+    "usage_complete": true,
+    "strategy": "single",
+    "error_summary": "",
+    "verification_evidence": {
+      "status": "passed",
+      "passed": true,
+      "required_levels": [
+        "L0",
+        "L1"
+      ],
+      "executed_levels": [
+        "L0",
+        "L1",
+        "L2"
+      ],
+      "failed_levels": [],
+      "skipped_levels": [],
+      "notes": [
+        "[0] L3 not applicable: no test command in this project"
+      ],
+      "components": 1
+    },
+    "tokens_out": 5482,
     "changed_files": [
       "_verify_entry.py"
     ],
-    "wall_seconds": 100.3,
+    "verification_passed": true,
+    "task_id": "analyze-demo",
+    "model_attempts": 13,
+    "verification_status": "passed",
+    "tokens_total_actual": 76748,
     "tokens_in": 88405,
-    "tokens_out": 5482,
-    "model_calls": 13,
     "tool_calls": 16,
-    "replans": 0,
-    "conflicts": 0,
-    "human_interventions": 3,
-    "error_summary": "",
-    "ledger_task": false
+    "tokens_usage_missing_calls": 0,
+    "tokens_estimated_context": 17139,
+    "model_calls": 13,
+    "replans": 0
   },
   {
-    "task_id": "fix-add",
-    "strategy": "multi",
+    "tokens_out_actual": 6636,
+    "tokens_in_actual": 53182,
     "started_at": "2026-11-05T05:23:21Z",
-    "status": "completed",
-    "verification_passed": true,
-    "changed_files": [
-      "calc.py"
-    ],
+    "human_interventions": 0,
+    "ledger_task": true,
     "wall_seconds": 412.6,
-    "tokens_in": 65661,
+    "status": "completed",
+    "conflicts": 0,
+    "usage_complete": true,
+    "strategy": "multi",
+    "error_summary": "attempt 1 completed",
+    "verification_evidence": {
+      "status": "passed",
+      "passed": true,
+      "required_levels": [
+        "L0",
+        "L1",
+        "L3"
+      ],
+      "executed_levels": [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L5"
+      ],
+      "failed_levels": [],
+      "skipped_levels": [],
+      "notes": [
+        "[1] no subtask delivered changes; integration verification not applicable"
+      ],
+      "components": 2
+    },
     "tokens_out": 6636,
-    "model_calls": 9,
+    "changed_files": [
+      "calc.py"
+    ],
+    "verification_passed": true,
+    "subtask_integration": [],
+    "task_id": "fix-add",
+    "model_attempts": 9,
+    "verification_status": "passed",
+    "tokens_total_actual": null,
+    "tokens_in": 65661,
     "tool_calls": 13,
-    "replans": 0,
-    "conflicts": 0,
-    "human_interventions": 0,
-    "error_summary": "修复 calc.py 中 add() 的错误实现（a - b → a + b），使全部测试通过。L3 tests 验证：2 passed, 0 failed, exit_code 0。仅修改 calc.py，其他文件未改动。",
-    "ledger_task": true,
-    "subtask_integration": []
+    "tokens_usage_missing_calls": 0,
+    "tokens_estimated_context": 12479,
+    "model_calls": 9,
+    "replans": 0
   },
   {
-    "task_id": "fix-add",
-    "strategy": "planner",
+    "tokens_out_actual": 2016,
+    "tokens_in_actual": 41651,
     "started_at": "2026-11-05T05:22:03Z",
+    "human_interventions": 0,
+    "ledger_task": true,
+    "wall_seconds": 52.3,
     "status": "completed",
-    "verification_passed": true,
+    "conflicts": 0,
+    "usage_complete": true,
+    "strategy": "planner",
+    "error_summary": "attempt 1 completed",
+    "verification_evidence": {
+      "status": "passed",
+      "passed": true,
+      "required_levels": [
+        "L0",
+        "L1",
+        "L3"
+      ],
+      "executed_levels": [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L5"
+      ],
+      "failed_levels": [],
+      "skipped_levels": [],
+      "notes": [
+        "[1] no subtask delivered changes; integration verification not applicable"
+      ],
+      "components": 2
+    },
+    "tokens_out": 2016,
     "changed_files": [
       "calc.py"
     ],
-    "wall_seconds": 52.3,
+    "verification_passed": true,
+    "subtask_integration": [],
+    "task_id": "fix-add",
+    "model_attempts": 8,
+    "verification_status": "passed",
+    "tokens_total_actual": null,
     "tokens_in": 51807,
-    "tokens_out": 2016,
-    "model_calls": 8,
     "tool_calls": 11,
-    "replans": 0,
-    "conflicts": 0,
-    "human_interventions": 0,
-    "error_summary": "Investigated tests/test_calc.py and calc.py: the only bug was add() returning a - b instead of a + b. Applied a one-line fix in calc.py, then ran the project's test command `pytest -q`, which reported \"2 passed in 0.02s\" with exit code 0 (L3 tests passed: 2 passed, 0 failed, 0 errors; L5 regression confirmed test_add went from failing to passing). calc.py is the only file changed this session.",
-    "ledger_task": true,
-    "subtask_integration": []
+    "tokens_usage_missing_calls": 0,
+    "tokens_estimated_context": 10156,
+    "model_calls": 8,
+    "replans": 0
   },
   {
-    "task_id": "fix-add",
-    "strategy": "single",
+    "tokens_out_actual": 24683,
+    "tokens_in_actual": 120964,
     "started_at": "2026-11-05T05:00:49Z",
+    "human_interventions": 0,
+    "ledger_task": false,
+    "wall_seconds": 342.9,
     "status": "completed",
-    "verification_passed": true,
+    "conflicts": 0,
+    "usage_complete": true,
+    "strategy": "single",
+    "error_summary": "",
+    "verification_evidence": {
+      "status": "passed",
+      "passed": true,
+      "required_levels": [
+        "L0",
+        "L1",
+        "L3"
+      ],
+      "executed_levels": [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L5"
+      ],
+      "failed_levels": [],
+      "skipped_levels": [],
+      "notes": [],
+      "components": 1
+    },
+    "tokens_out": 24683,
     "changed_files": [
       "calc.py"
     ],
-    "wall_seconds": 342.9,
+    "verification_passed": true,
+    "task_id": "fix-add",
+    "model_attempts": 17,
+    "verification_status": "passed",
+    "tokens_total_actual": 145647,
     "tokens_in": 143867,
-    "tokens_out": 24683,
-    "model_calls": 17,
     "tool_calls": 21,
-    "replans": 0,
-    "conflicts": 0,
-    "human_interventions": 0,
-    "error_summary": "",
-    "ledger_task": false
+    "tokens_usage_missing_calls": 0,
+    "tokens_estimated_context": 22903,
+    "model_calls": 17,
+    "replans": 0
   }
 ]

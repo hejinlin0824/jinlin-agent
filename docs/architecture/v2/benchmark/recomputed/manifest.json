@@ -1,0 +1,8 @@
+{
+  "analyze-demo_single":  {"kind": "sessions", "sessions": ["sess_20261105_125909_a213f1"]},
+  "analyze-demo_planner": {"kind": "root", "root": "task_f27e1b48fb70"},
+  "analyze-demo_multi":   {"kind": "root", "root": "task_9e5559e3c3b6"},
+  "fix-add_single":       {"kind": "sessions", "sessions": ["sess_20261105_130049_50abfd"]},
+  "fix-add_planner":      {"kind": "root", "root": "task_d66abab8e98a"},
+  "fix-add_multi":        {"kind": "root", "root": "task_d7c8cf7076fb"}
+}

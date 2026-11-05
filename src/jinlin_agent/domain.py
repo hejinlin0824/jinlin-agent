@@ -214,7 +214,9 @@ class ModelResponse:
             "text": self.text,
             "tool_calls": [tc.to_dict() for tc in self.tool_calls],
             "finish_reason": self.finish_reason,
-            "usage": self.usage.to_dict(),
+            # usage is None when the provider reported none (mock, or an
+            # OpenAI-compatible response without a usage object)
+            "usage": self.usage.to_dict() if self.usage is not None else None,
             "raw_artifact_id": self.raw_artifact_id,
             "model": self.model,
         }

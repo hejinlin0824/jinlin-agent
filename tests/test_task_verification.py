@@ -204,3 +204,93 @@ def test_supervisor_rejects_deliverable_missing_required_verification(tmp_path):
     finally:
         runtime.shutdown()
         ledger.close()
+
+
+# --------------------------------------------------------------------------- WP-C1: evidence-only verification verdicts
+
+
+from jinlin_agent.verify import verification_evidence
+
+
+def _run(level: str, status: str) -> VerificationRun:
+    return VerificationRun(verification_id=f"v_{level}_{status}", level=level, type="ladder", status=status)
+
+
+def test_empty_verification_runs_never_pass():
+    """The third-round defect: an empty verification record list must never
+    compute to a pass. This is the mandated regression sample."""
+    ev = verification_evidence([], profile="code")
+    assert ev["status"] == "not_run"
+    assert ev["passed"] is False
+
+
+def test_missing_required_verification_level_fails_closed():
+    ev = verification_evidence(
+        [_run("L0", "passed"), _run("L1", "passed")],
+        profile="code", has_test_command=True, changed=True,
+    )
+    assert ev["status"] == "not_run"
+    assert ev["passed"] is False
+    assert ev["required_levels"] == ["L0", "L1", "L3"]
+    assert "L3" not in ev["executed_levels"]
+    assert any("L3" in note for note in ev["notes"])
+
+
+def test_failed_required_verification_fails():
+    ev = verification_evidence(
+        [_run("L0", "passed"), _run("L1", "passed"), _run("L3", "failed")],
+        profile="code", has_test_command=True, changed=True,
+    )
+    assert ev["status"] == "failed"
+    assert ev["passed"] is False
+    assert ev["failed_levels"] == ["L3"]
+
+
+def test_all_required_levels_pass_independently_of_task_status():
+    """verification_evidence() takes no status argument at all: the verdict
+    cannot be influenced by session/task completion state."""
+    ev = verification_evidence(
+        [_run("L0", "passed"), _run("L1", "passed"), _run("L3", "passed")],
+        profile="code", has_test_command=True, changed=True,
+    )
+    assert ev["status"] == "passed"
+    assert ev["passed"] is True
+
+
+def test_skipped_optional_level_does_not_fail():
+    """L2/L5 are optional ladder levels; their skip never fails the required
+    set (and never leaks into required-level skipped evidence)."""
+    ev = verification_evidence(
+        [_run("L0", "passed"), _run("L1", "passed"), _run("L3", "passed"), _run("L2", "skipped")],
+        profile="code", has_test_command=True, changed=True,
+    )
+    assert ev["passed"] is True
+    assert "L2" not in ev["skipped_levels"]
+
+
+def test_level_retry_last_run_decides():
+    """A level that failed then passed (retry after a fix): the LAST run for
+    that level decides. docs profile requires only L0."""
+    ev = verification_evidence([_run("L0", "failed"), _run("L0", "passed")], profile="docs", changed=True)
+    assert ev["passed"] is True
+
+
+def test_profile_declared_not_applicable_is_not_a_pass():
+    """Rule 4: only a profile that DECLARES no levels may be not_applicable —
+    and not_applicable is still not a pass."""
+    ev = verification_evidence([], profile="analysis")
+    assert ev["status"] == "not_applicable"
+    assert ev["passed"] is False
+    assert ev["notes"]
+
+
+def test_narrowing_with_existing_records_is_not_applicable_not_pass():
+    """A no-changes deliverable whose ladder did run: required levels are
+    vacated with explicit reasons — recorded as not_applicable, never True."""
+    ev = verification_evidence(
+        [_run("L0", "passed"), _run("L1", "passed")],
+        profile="code", changed=False,
+    )
+    assert ev["status"] == "not_applicable"
+    assert ev["passed"] is False
+    assert any("not applicable" in note for note in ev["notes"])

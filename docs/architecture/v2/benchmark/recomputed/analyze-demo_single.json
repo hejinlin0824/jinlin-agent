@@ -1,0 +1,47 @@
+{
+  "tokens_out_actual": 5482,
+  "tokens_in_actual": 71266,
+  "started_at": "2026-11-05T04:59:08Z",
+  "human_interventions": 3,
+  "ledger_task": false,
+  "wall_seconds": 100.3,
+  "status": "completed",
+  "conflicts": 0,
+  "usage_complete": true,
+  "strategy": "single",
+  "error_summary": "",
+  "verification_evidence": {
+    "status": "passed",
+    "passed": true,
+    "required_levels": [
+      "L0",
+      "L1"
+    ],
+    "executed_levels": [
+      "L0",
+      "L1",
+      "L2"
+    ],
+    "failed_levels": [],
+    "skipped_levels": [],
+    "notes": [
+      "[0] L3 not applicable: no test command in this project"
+    ],
+    "components": 1
+  },
+  "tokens_out": 5482,
+  "changed_files": [
+    "_verify_entry.py"
+  ],
+  "verification_passed": true,
+  "task_id": "analyze-demo",
+  "model_attempts": 13,
+  "verification_status": "passed",
+  "tokens_total_actual": 76748,
+  "tokens_in": 88405,
+  "tool_calls": 16,
+  "tokens_usage_missing_calls": 0,
+  "tokens_estimated_context": 17139,
+  "model_calls": 13,
+  "replans": 0
+}

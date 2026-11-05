@@ -55,8 +55,22 @@ class SessionState:
 
     tool_calls_total: int = 0
     model_calls: int = 0
+    # LEGACY mixed counters (estimates + usage together): kept because the
+    # budget gate (loop.py) has always enforced against them. Reporting must
+    # use the split fields below — never present these as provider usage
+    # (WP-C2).
     tokens_in: int = 0
     tokens_out: int = 0
+    # WP-C2 split accounting:
+    # tokens_in_actual/out_actual sum ONLY provider-reported usage
+    # (model.attempt payload usage); tokens_estimated_context sums ONLY
+    # local context_built estimates; tokens_usage_missing_calls counts
+    # model attempts that returned no usage at all.
+    tokens_in_actual: int = 0
+    tokens_out_actual: int = 0
+    tokens_estimated_context: int = 0
+    tokens_usage_missing_calls: int = 0
+    model_attempts: int = 0
     compactions: int = 0
     consecutive_tool_failures: int = 0
     loop_events: int = 0
@@ -170,7 +184,8 @@ def _step_started(s: SessionState, p: dict[str, Any]) -> None:
 
 
 def _context_built(s: SessionState, p: dict[str, Any]) -> None:
-    s.tokens_in += int(p.get("tokens_estimate", 0))
+    s.tokens_in += int(p.get("tokens_estimate", 0))  # legacy mixed counter (budget gate)
+    s.tokens_estimated_context += int(p.get("tokens_estimate", 0))
 
 
 def _context_compacted(s: SessionState, p: dict[str, Any]) -> None:
@@ -182,9 +197,18 @@ def _model_requested(s: SessionState, p: dict[str, Any]) -> None:
 
 
 def _model_attempt(s: SessionState, p: dict[str, Any]) -> None:
+    s.model_attempts += 1
     usage = p.get("usage") or {}
-    s.tokens_in += int(usage.get("prompt_tokens", 0))
-    s.tokens_out += int(usage.get("completion_tokens", 0))
+    prompt = int(usage.get("prompt_tokens", 0) or 0)
+    completion = int(usage.get("completion_tokens", 0) or 0)
+    if not usage:
+        s.tokens_usage_missing_calls += 1
+    else:
+        s.tokens_in_actual += prompt
+        s.tokens_out_actual += completion
+    # legacy mixed counters (budget gate)
+    s.tokens_in += prompt
+    s.tokens_out += completion
     if p.get("error_code"):
         s.last_error = {"code": p["error_code"], "message": p.get("error_message", "")}
 

@@ -1,0 +1,42 @@
+{
+  "tokens_out_actual": 5591,
+  "tokens_in_actual": 52408,
+  "started_at": "2026-11-05T05:10:49Z",
+  "human_interventions": 0,
+  "ledger_task": true,
+  "wall_seconds": 104.4,
+  "status": "completed",
+  "conflicts": 0,
+  "usage_complete": true,
+  "strategy": "planner",
+  "error_summary": "attempt 1 completed",
+  "verification_evidence": {
+    "status": "not_run",
+    "passed": false,
+    "required_levels": [],
+    "executed_levels": [],
+    "failed_levels": [],
+    "skipped_levels": [],
+    "notes": [
+      "[0] L3 not applicable: no test command in this project",
+      "[0] no-changes deliverable: L0, L1 not applicable",
+      "[0] no verification records at all — nothing was verified",
+      "[1] no subtask delivered changes; integration verification not applicable"
+    ],
+    "components": 2
+  },
+  "tokens_out": 5591,
+  "changed_files": [],
+  "verification_passed": false,
+  "subtask_integration": [],
+  "task_id": "analyze-demo",
+  "model_attempts": 10,
+  "verification_status": "not_run",
+  "tokens_total_actual": null,
+  "tokens_in": 65085,
+  "tool_calls": 10,
+  "tokens_usage_missing_calls": 0,
+  "tokens_estimated_context": 12677,
+  "model_calls": 10,
+  "replans": 0
+}
