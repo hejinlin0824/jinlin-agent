@@ -1,0 +1,24 @@
+=== R4 clean-checkout FINAL verification ===
+HEAD: 6869c473794587af09f6fde7189ee80c47a7fc5f
+start: 2026-11-05T17:38:05+08:00
+--- pytest (-W error) ---
+exit=0
+tests= 407 failures= 0 errors= 0 skipped= 3
+0
+0 warning mentions
+--- targeted suites (-W error) ---
+exit=0
+..........................                                               [100%]
+--- eval ---
+exit=0
+
+22/22 probes passed
+--- dry-run ---
+exit=0
+[run] analyze-demo x planner ...
+      -> status=completed verification_status=not_applicable (3.5s, tokens_actual=None+None, usage_complete=False)
+[run] analyze-demo x multi ...
+      -> status=completed verification_status=not_applicable (7.5s, tokens_actual=None+None, usage_complete=False)
+
+records: 3 -> reports\round4-dryrun-final
+end: 2026-11-05T17:46:38+08:00

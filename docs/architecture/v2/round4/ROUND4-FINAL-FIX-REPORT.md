@@ -117,7 +117,11 @@ pytest.skip 行为与路径穿越断言保持不变。
 
 | Run ID | HEAD | Job 结论 |
 |---|---|---|
-| （待回填） | 本提交 | windows-latest / py3.13、ubuntu-latest / py3.13 |
+| **`42003956297`** | `6869c47`（本报告所在提交，两个平台 checkout SHA 与此一致） | `windows-latest / py3.13` ✅ success、`ubuntu-latest / py3.13` ✅ success |
+
+（Windows job 实际执行了 junction 测试——`tests/test_security.py::test_parent_junction_escape_rejected`
+带 `@pytest.mark.skipif(sys.platform != "win32")`，且全量套件以
+`-W error::pytest.PytestUnhandledThreadExceptionWarning` 等效参数本地复跑 0 警告。）
 
 ## 8. 未完成与残余风险
 
