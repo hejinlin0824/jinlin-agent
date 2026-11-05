@@ -1,0 +1,24 @@
+PASS  P1   adaptive agent loop (T1): adaptive loop with observation feedback
+PASS  P2   tool interface changes the environment (T2): tool interface really changed the external environment
+PASS  P3   content-aware context + compaction (T3): content-aware budgeting, compaction and recorded decisions
+PASS  P3b  no silent truncation (T3): long output -> artifact + transparent truncation
+PASS  P4a  false success rejected (T4): false success rejected by the completion gate
+PASS  P4b  path escape blocked (T4): path escape blocked before any side effect
+PASS  P4c  loop detection (T4): loop detection fires and injects a correction
+PASS  P4d  fail-closed approval (T4): fail-closed approval for high-risk commands
+PASS  P5   crash recovery (T4): resume flags uncertain side effects instead of guessing
+PASS  P6   claims require evidence (T4): claims must reference real evidence
+PASS  E1   read-only analysis: read-only analysis completes without writing
+PASS  E2   small bug fix: verified fix end to end
+PASS  E3   cross-file change: multi-file atomic patch verified by tests
+PASS  E4   new file + test: new file created and verified
+PASS  E5   crash recovery: resume flags uncertain side effects instead of guessing
+PASS  E6   permission control: path escape blocked before any side effect
+PASS  E7   false-success protection: false success rejected by the completion gate
+PASS  E8   loop control: loop detection fires and injects a correction
+PASS  P7   parallel workers overlap (v2): parallel workers on distinct workspaces overlap and complete
+PASS  P8   DAG runs in dependency order (v2): planned DAG completed strictly in dependency order
+PASS  P9   capability escape denied in code (v2): capability escape denied before any side effect
+PASS  P10  budget exhaustion never retries (v2): budget exhaustion stops the task without retrying
+
+22/22 probes passed

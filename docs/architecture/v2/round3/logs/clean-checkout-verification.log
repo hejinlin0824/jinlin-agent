@@ -1,0 +1,24 @@
+=== R3 clean-checkout verification ===
+HEAD: 77af42cda1d3010862afa5cea5efa90de6ad12c8
+branch: feature/v2-benchmark-integrity-fixes
+python: Python 3.13.15
+os: MINGW64_NT-10.0-26200
+start: 2026-11-05T16:22:13+08:00
+git status: 0 dirty
+Python 3.13.15
+--- pytest ---
+pytest exit=0
+tests= 396 failures= 0 errors= 0 skipped= 3
+--- eval ---
+eval exit=0
+
+22/22 probes passed
+--- dry-run ---
+dryrun exit=0
+[run] analyze-demo x planner ...
+      -> status=completed verification_status=not_applicable (2.9s, tokens_actual=0+0, usage_complete=False)
+[run] analyze-demo x multi ...
+      -> status=completed verification_status=not_applicable (6.5s, tokens_actual=0+0, usage_complete=False)
+
+records: 3 -> C:\Users\jinlin.he\AppData\Local\Temp\r3-dryrun
+end: 2026-11-05T16:28:53+08:00

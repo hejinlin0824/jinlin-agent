@@ -100,37 +100,45 @@ python scripts/benchmark_matrix.py \
 4. **一次未复现的 flake**：连续三次全量回归中，第二次出现 1 个失败（未及捕获用例名即清理了
    junit），第一/三次及最终以 junitxml 计数的一次均为 0 失败。判定：负载相关偶发，CI 为准（§5）。
 
-## 4b. 真实模型评测（所有者提供凭证后执行，2026-11-05）
+## 4b. 真实模型评测（所有者提供凭证后执行，2026-11-05；第三轮整改 WP-C1/C2 后数字已重算更正）
+
+> **更正声明（2026-11-05，WP-C1/C2）**：本节最初报告的"6/6 verification_passed=True 与混合
+> token 数字"不可采信（第三轮评审证实）：旧代码对空验证记录用 `any()` 求值、并把本地估算与
+> provider usage 混入同一字段。本节数字已由 `scripts/recompute_benchmark.py` 从**原始事件流**
+> 重新计算（`benchmark/recomputed/`：冻结 manifest、逐 run 重算记录、机器生成的
+> CHANGES.md 新旧对照表；原始事件流未做任何修改）。**重算结论：5/6 通过（带明确验证证据），
+> 1/6（analyze × planner）为 not_run——该会话没有任何验证记录，旧报告将其误报为通过。**
 
 **Provider**：Volcano Ark OpenAI 兼容端点（`ark.cn-beijing.volces.com/api/coding/v3`，模型
-`deepseek-v4-flash`，key 经 `DEEPSEEK_API_KEY` 环境变量注入，**不落盘、不入库**）。
+`deepseek-v4-flash`，key 经 `DEEPSEEK_API_KEY` 环境变量注入，**不落盘、不入库**；第三轮密钥
+扫描确认全部提交内容 0 命中）。
 **任务集**（`benchmark/real/tasks.json`，fixture 已入库、每轮运行前 `git reset` 复位到同一初始状态）：
 - `analyze-demo`（只读分析，fixtures/demo）
 - `fix-add`（单文件修复 + 测试验收，fixtures/bench-calc：`add()` 有 `a - b` 缺陷，`test_add` 失败）
 
-**结果（6/6 完成，6/6 verification_passed=True，逐 run JSON + 全部会话/任务事件流入库 `benchmark/real/`）：**
+**重算后的结果（逐 run 见 `benchmark/real/*.json`，重算记录与对照表见 `benchmark/recomputed/`）：**
 
-| 指标（analyze-demo / fix-add） | single | planner | multi |
-|---|---|---|---|
-| status / verification_passed | completed / True | completed / True | completed / True |
-| wall_seconds | 100.3 / 342.9 | 104.4 / 52.3 | 417.1 / 412.6 |
-| tokens 实际 usage（in+out 合计） | 93,887 / 168,550 | 70,676 / 53,823 | 95,962 / 72,297 |
-| model_calls | 13 / 17 | 10 / 8 | 13 / 9 |
-| tool_calls | 16 / 21 | 10 / 11 | 16 / 13 |
-| human_interventions | 3 / 0 | 0 / 0 | 0 / 0 |
+| 运行 | status | verification_status / passed | 必需→已执行等级 | tokens 实际 (in+out) | tokens 估算 | attempts | human_interventions |
+|---|---|---|---|---|---|---|---|
+| analyze × single | completed | **passed / True** | [L0,L1]→[L0,L1,L2] | 71,266 + 5,482 | 17,139 | 13 | 3 |
+| analyze × planner | completed | **not_run / False** | []→[]（无验证记录） | 52,408 + 5,591 | 12,677 | 10 | 0 |
+| analyze × multi | completed | **passed / True** | [L0,L1]→[L0,L1,L2] | 71,082 + 7,789 | 17,091 | 13 | 0 |
+| fix-add × single | completed | **passed / True** | [L0,L1,L3]→[L0,L1,L2,L3,L5] | 120,964 + 24,683 | 22,903 | 17 | 0 |
+| fix-add × planner | completed | **passed / True** | [L0,L1,L3]→[L0,L1,L2,L3,L5] | 41,651 + 2,016 | 10,156 | 8 | 0 |
+| fix-add × multi | completed | **passed / True** | [L0,L1,L3]→[L0,L1,L2,L3,L5] | 53,182 + 6,636 | 12,479 | 9 | 0 |
 
-（汇总聚合见 `benchmark/real/summary.json`：三策略 2 任务 success_rate=1.0、
-verification_pass_rate=1.0。）
+（analyze 组的 L3 因项目无测试命令记为 not applicable——原因保留在证据 notes 中；
+`usage_complete` 全部为 True，估算列与实际列完全分离。数字自洽性例证：旧混合值
+88,173 = 实际 71,082 + 估算 17,091，与重算严格一致。）
 
 **核验（独立于 benchmark 自报）：** `fix-add` 三策略均真实修复 `add()`（工作区 `a + b`），
-`python -m pytest -q` 2/2 通过；`analyze-demo` 三策略工作区净变更均为零。
+`python -m pytest -q` 2/2 通过。
 
 **如实发现（不夸大、不外推）：**
 1. **复杂度评估器把两个任务都判为 direct**（简单任务永不规划——设计行为）：planner/multi 与
    single 的差异落在"评估 + 任务账本 + 策略选择"，而非"多 Worker 并行"。**带真实规划的
    plan/multi 路径需要真正复杂的任务集**（见 §6）。
-2. **n=2 且任务简单：不构成任何策略优劣结论。** 本表唯一支持的事实陈述是：三条路径在真实
-   provider 上全部端到端可用且全部通过独立验证。事实上 multi 在这两个简单任务上更慢
+2. **n=2 且任务简单：不构成任何策略优劣结论。** 事实上 multi 在这两个简单任务上更慢
    （均值 414.9s vs planner 78.3s）——直接反证了"多 Agent 必然更好"。
 3. **审批语义差异（真实观察）**：single（v1 会话路径）出现 3 次 approval 等待；受监督路径的
    execute 类请求被任务层策略直接拒绝（不等待）。两者都是 fail-closed，但行为不同，已如实记录。
