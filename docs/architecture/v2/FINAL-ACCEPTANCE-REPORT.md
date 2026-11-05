@@ -13,7 +13,7 @@
 |---|---|
 | 本轮基线（任务书下发时 HEAD） | `3d4c0e4`（test(workbench): poll the task row） |
 | 收尾轮最终代码 Commit（CI run 41969534706 所在提交） | `caf7e8c` |
-| 真实评测轮提交 | 本提交（fixtures + 真实评测证据 + benchmark_matrix.py direct 模式聚合修复 + 本报告更新；其 CI Run ID 在提交后回填于 §5） |
+| 真实评测轮 Commit（CI run 41975113585 所在提交） | `7ec9c69`（fixtures + 真实评测证据 + benchmark_matrix.py direct 模式聚合修复） |
 | 分支 | `feature/v2-integration-remediation`（main 未改动，遵守任务书禁令） |
 
 ## 2. 修改文件与 Commit 列表（`3d4c0e4` 起）
@@ -37,10 +37,10 @@
 
 **`ba4ebaf` docs: 验收报告** — `docs/architecture/v2/FINAL-ACCEPTANCE-REPORT.md`（新增）+ `AGENT.md`（状态数字更新）。
 
-**真实评测轮（本提交）** — `fixtures/demo`、`fixtures/bench-calc`（评测任务的工作区状态，含故意缺陷）；
-`docs/architecture/v2/benchmark/real/`（tasks.json、6 个逐 run JSON、records/summary、home/ 全部
-任务与 Worker 事件流 2.9MB）；`scripts/benchmark_matrix.py`（direct 模式指标聚合修复：worker 也可挂在根任务上）；
-本报告 §1/§2/§4b/§5/§6 更新。
+**真实评测轮 `7ec9c69`** — `fixtures/demo`、`fixtures/bench-calc`（评测任务的工作区状态，含故意缺陷；
+运行前需各自 `git init` 为独立仓库，见 §7）；`docs/architecture/v2/benchmark/real/`（tasks.json、6 个逐
+run JSON、records/summary、home/ 全部任务与 Worker 事件流 2.9MB）；`scripts/benchmark_matrix.py`
+（direct 模式指标聚合修复：worker 也可挂在根任务上）；本报告 §1/§2/§4b/§5/§6 更新。
 
 ## 3. 三策略真实执行路径（WP-F1：代码层不同，非名称不同）
 
@@ -152,11 +152,11 @@ verification_pass_rate=1.0。）
 
 | Run ID | HEAD | 结果 |
 |---|---|---|
+| `41975113585` | `7ec9c69`（真实评测轮：fixtures + 证据 + 聚合修复） | **成功（双平台绿）** |
 | `41969534706` | `caf7e8c`（收尾轮最终代码提交） | **成功（双平台绿）**：`ubuntu-latest / py3.13` ✅、`windows-latest / py3.13` ✅ |
 | `41773135089` | `3d4c0e4`（本轮基线，前轮收尾） | 成功（历史参照） |
-| 真实评测轮 | 本提交（含 benchmark_matrix.py 聚合修复与 fixtures） | ⏳ 推送后执行；Run ID 在其随后的文档提交中回填 |
 
-（收尾轮 CI 在 `caf7e8c` 上执行；真实评测轮 CI 在其自身提交上执行，结果由后续文档提交回填。）
+（收尾轮 CI 在 `caf7e8c` 上执行；真实评测轮 CI 在 `7ec9c69` 上执行，双平台均绿。）
 
 ## 6. 尚未完成的工作（如实清单，不虚构）
 
@@ -191,6 +191,16 @@ python -m jinlin_agent eval --suite all
 python scripts/benchmark_matrix.py ^
   --tasks docs/architecture/v2/benchmark/dryrun/tasks.json ^
   --out %TEMP%\benchmark-dryrun --strategies single,planner,multi --dry-run
+
+# 3b) 真实模型评测（需要所有者提供 key 并设置环境变量；fixtures 先各自 init 为独立仓库）
+set DEEPSEEK_API_KEY=<owner-provided-key>
+set JINLIN_BASE_URL=https://ark.cn-beijing.volces.com/api/coding/v3
+set JINLIN_MODEL=deepseek-v4-flash
+for %d in (fixtures\demo fixtures\bench-calc) do (cd /d %~dp0%d && git init -q && git add -A && git commit -qm "fixture state" && cd /d %~dp0)
+python scripts/benchmark_matrix.py ^
+  --tasks docs/architecture/v2/benchmark/real/tasks.json ^
+  --out %TEMP%\benchmark-real --strategies single,planner,multi
+# 注意：fix-add 会真实修改 fixtures\bench-calc；策略间比较前需 git -C fixtures\bench-calc reset --hard 复位
 
 # 4) 三策略代码层差异检查（7 个回归测试）
 python -m pytest tests/test_benchmark_matrix.py -v
